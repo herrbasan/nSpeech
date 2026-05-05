@@ -34,9 +34,9 @@ class ChatterboxAdapter:
         """
         exaggeration = kwargs.get("exaggeration", 0.5)
         
-        # Basic sentence splitting regex (handles punctuation followed by space)
+        # Basic sentence splitting regex (handles punctuation followed by whitespace/newlines)
         # In a production scenario, you might use a more robust NLP tokenizer if no dependencies wasn't a maxim.
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?]) +(?=[A-Z])', text) if s.strip()]
+        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
         if not sentences:
             sentences = [text]
             
