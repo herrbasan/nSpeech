@@ -18,10 +18,7 @@ models/
 
 # User Voice Data
 # (Ignores generated cache files and raw uploads, but you can force-add default voices later if needed)
-voices/*.pt
-voices/*.wav
-voices/**/*.pt
-voices/**/*.wav
+voices/
 
 # OS generated files
 .DS_Store
