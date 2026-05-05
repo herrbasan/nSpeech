@@ -54,12 +54,10 @@ _engine_last_used: Dict[str, float] = {}
 def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
     """
     Lazy load an engine by name (falling back to config.NSPEECH_ENGINE).
-    Evicts idle engines if necessary (LRU logic).
     """
     if engine_name is None:
         engine_name = config.NSPEECH_ENGINE
         
-    # Note: Proper LRU eviction based on memory or timeout params can go here.
     if engine_name in _engine_cache:
         _engine_last_used[engine_name] = time.time()
         return _engine_cache[engine_name]
@@ -88,3 +86,44 @@ def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
     _engine_last_used[engine_name] = time.time()
     
     return adapter_instance
+
+
+def mark_engine_used(engine_name: str = None):
+    """Update the last_used timestamp to keep the engine resident."""
+    if engine_name is None:
+        engine_name = config.NSPEECH_ENGINE
+    if engine_name in _engine_last_used:
+        _engine_last_used[engine_name] = time.time()
+
+
+def evict_idle_engines():
+    """
+    Checks all cached engines and clears VRAM if they've exceeded the idle timeout.
+    Usually called by a background worker loop in the API.
+    """
+    timeout = config.NSPEECH_MODEL_IDLE_TIMEOUT_SEC
+    if timeout <= 0:
+        return
+        
+    current_time = time.time()
+    evicted = []
+    
+    # Needs to list(keys()) to mutate dict during iteration
+    for eng_name, last_used in list(_engine_last_used.items()):
+        if current_time - last_used > timeout:
+            evicted.append(eng_name)
+            
+    for eng_name in evicted:
+        print(f"[{eng_name}] Idle timeout exceeded (> {timeout}s). Evicting from VRAM...")
+        # Free references
+        del _engine_cache[eng_name]
+        del _engine_last_used[eng_name]
+        
+    if evicted:
+        # Force Python GC to reclaim the adapter classes
+        import gc
+        gc.collect()
+        # Force PyTorch CUDA allocator to actually return blocks to the OS
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            print(f"[Memory] VRAM cleared. Cuda memory allocated: {torch.cuda.memory_allocated() / 1024 / 1024:.1f}MB")

@@ -102,9 +102,23 @@ class OpenAITTSRequest(BaseModel):
 # Routes
 # ---------------------------------------------------------
 
+import asyncio
+from nspeech.tts import evict_idle_engines, mark_engine_used
+
+async def memory_janitor():
+    """Background task to periodically check for idle models and evict them."""
+    while True:
+        await asyncio.sleep(5)  # Check every 5 seconds
+        evict_idle_engines()
+
 @app.on_event("startup")
 def on_startup():
     """Startup initialization."""
+    # Start the memory manager
+    if config.NSPEECH_MODEL_IDLE_TIMEOUT_SEC > 0:
+        print(f"[Startup] VRAM Janitor active. Models will be evicted after {config.NSPEECH_MODEL_IDLE_TIMEOUT_SEC}s of idle time.")
+        asyncio.create_task(memory_janitor())
+
     if config.NSPEECH_PRELOAD_MODEL:
         print(f"[Startup] NSPEECH_PRELOAD_MODEL is enabled. Preloading {config.NSPEECH_ENGINE}...")
         try:
@@ -336,6 +350,7 @@ def tts_endpoint(req: TTSRequest):
             # Stream raw PCM without headers
             if req.output_format == "pcm":
                 for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration):
+                    mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
                 return
@@ -344,6 +359,7 @@ def tts_endpoint(req: TTSRequest):
             if req.output_format == "wav":
                 yield generate_streaming_wav_header(req.transcode_sample_rate)
                 for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration):
+                    mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
                 return
@@ -370,6 +386,7 @@ def tts_endpoint(req: TTSRequest):
             last_pos = 0
             chunk_idx = 0
             for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration):
+                mark_engine_used(req.engine)
                 engine_time = time.time()
                 print(f"[Backend] [Chunk {chunk_idx}] Engine logic finished at {engine_time - start_time:.3f}s")
                 audio_np = chunk_tensor.squeeze().cpu().numpy()
