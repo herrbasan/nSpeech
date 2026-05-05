@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, Response, JSONResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -164,6 +164,12 @@ def serve_test_ui():
                     <select id="voice-select" style="flex: 1; padding: 8px; background: #1e1e1e; color: white; border: 1px solid #555; border-radius: 4px;">
                         <option value="default">Default</option>
                     </select>
+                    
+                    <label for="protocol-select" style="font-weight: bold; margin-left: 10px;">Protocol:</label>
+                    <select id="protocol-select" style="padding: 8px; background: #1e1e1e; color: white; border: 1px solid #555; border-radius: 4px;">
+                        <option value="rest">REST (HTTP Fetch)</option>
+                        <option value="ws">WebSocket (/ws/tts)</option>
+                    </select>
                 </div>
                 
                 <div style="display: flex; gap: 10px; align-items: center;">
@@ -184,6 +190,7 @@ def serve_test_ui():
         <script>
             let mediaSource;
             let abortController = null;
+            let wsConnection = null;
             
             async function loadVoices() {
                 try {
@@ -246,6 +253,10 @@ def serve_test_ui():
                     abortController.abort();
                     abortController = null;
                 }
+                if (wsConnection) {
+                    wsConnection.close();
+                    wsConnection = null;
+                }
                 const audio = document.getElementById('audio-player');
                 audio.pause();
                 audio.removeAttribute('src');
@@ -259,12 +270,14 @@ def serve_test_ui():
             async function playStream() {
                 const text = document.getElementById('text-input').value;
                 const voice = document.getElementById('voice-select').value;
+                const protocol = document.getElementById('protocol-select').value;
                 if (!text) return;
                 
                 stopStream(); // Reset any existing active streams before starting
                 
                 abortController = new AbortController();
-                logStatus(`[App] playStream called at ${performance.now().toFixed(2)}ms`);
+                const startTime = performance.now();
+                logStatus(`[App] playStream (${protocol.toUpperCase()}) called at ${startTime.toFixed(2)}ms`);
                 
                 const audio = document.getElementById('audio-player');
                 audio.style.display = "block";
@@ -272,36 +285,114 @@ def serve_test_ui():
                 mediaSource = new MediaSource();
                 audio.src = URL.createObjectURL(mediaSource);
                 audio.play().catch(e => logStatus(`Play failed: ${e}`));
+                
+                let firstChunkReceived = false;
 
                 mediaSource.addEventListener("sourceopen", async () => {
                     logStatus(`[App] Requesting mp3 output format...`);
                     try {
                         const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
                         
-                        const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voice)}`, {
-                            signal: abortController.signal
-                        });
-                        
-                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                        
-                        const reader = response.body.getReader();
-
-                        while (true) {
-                            const { done, value } = await reader.read();
-                            if (done) {
-                                logStatus(`[App] Network stream complete.`);
-                                break;
-                            }
-                            
-                            // Await the buffer append to complete before adding the next chunk
-                            await new Promise((resolve, reject) => {
-                                sourceBuffer.appendBuffer(value);
-                                sourceBuffer.onupdateend = resolve;
-                                sourceBuffer.onerror = reject;
+                        if (protocol === "rest") {
+                            const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voice)}`, {
+                                signal: abortController.signal
                             });
-                        }
-                        if (mediaSource.readyState === "open") {
-                            mediaSource.endOfStream();
+                            
+                            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                            const reader = response.body.getReader();
+
+                            while (true) {
+                                const { done, value } = await reader.read();
+                                if (done) {
+                                    logStatus(`[App] Network stream complete.`);
+                                    break;
+                                }
+                                
+                                if (!firstChunkReceived && value && value.length > 0) {
+                                    firstChunkReceived = true;
+                                    logStatus(`[App] REST TTFB: ${(performance.now() - startTime).toFixed(0)} ms`);
+                                }
+                                
+                                // Await the buffer append to complete before adding the next chunk
+                                await new Promise((resolve, reject) => {
+                                    sourceBuffer.appendBuffer(value);
+                                    sourceBuffer.onupdateend = resolve;
+                                    sourceBuffer.onerror = reject;
+                                });
+                            }
+                            if (mediaSource.readyState === "open") {
+                                mediaSource.endOfStream();
+                            }
+                        } else if (protocol === "ws") {
+                            const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                            const wsUrl = `${wsProtocol}//${window.location.host}/ws/tts`;
+                            wsConnection = new WebSocket(wsUrl);
+                            wsConnection.binaryType = "arraybuffer";
+                            
+                            let bufferQueue = [];
+                            let isAppending = false;
+
+                            async function processQueue() {
+                                if (isAppending || bufferQueue.length === 0 || mediaSource.readyState !== "open") return;
+                                isAppending = true;
+                                const chunk = bufferQueue.shift();
+                                try {
+                                    await new Promise((resolve, reject) => {
+                                        sourceBuffer.appendBuffer(chunk);
+                                        sourceBuffer.onupdateend = resolve;
+                                        sourceBuffer.onerror = reject;
+                                    });
+                                } catch (e) {
+                                    console.error("Buffer append error:", e);
+                                }
+                                isAppending = false;
+                                processQueue();
+                            }
+
+                            wsConnection.onopen = () => {
+                                logStatus(`[App] WS Connected. Sending request...`);
+                                wsConnection.send(JSON.stringify({
+                                    type: "tts_stream",
+                                    text: text,
+                                    voice_name: voice,
+                                    output_format: "mp3"
+                                }));
+                            };
+
+                            wsConnection.onmessage = async (event) => {
+                                if (event.data instanceof ArrayBuffer) {
+                                    if (!firstChunkReceived) {
+                                        firstChunkReceived = true;
+                                        logStatus(`[App] WS TTFB: ${(performance.now() - startTime).toFixed(0)} ms`);
+                                    }
+                                    bufferQueue.push(event.data);
+                                    processQueue();
+                                } else {
+                                    try {
+                                        const msg = JSON.parse(event.data);
+                                        if (msg.is_final) {
+                                            logStatus(`[App] WS stream complete message received.`);
+                                        }
+                                    } catch(e) {}
+                                }
+                            };
+
+                            wsConnection.onclose = () => {
+                                logStatus(`[App] WS Connection Closed.`);
+                                // Let the queue drain before ending stream
+                                const checkQueue = setInterval(() => {
+                                    if (bufferQueue.length === 0 && !isAppending) {
+                                        clearInterval(checkQueue);
+                                        if (mediaSource && mediaSource.readyState === "open") {
+                                            mediaSource.endOfStream();
+                                        }
+                                    }
+                                }, 50);
+                            };
+                            
+                            wsConnection.onerror = (err) => {
+                                logStatus(`[Error] WebSocket error.`);
+                            };
                         }
                     } catch (err) {
                         if (err.name === 'AbortError') {
@@ -328,6 +419,134 @@ def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[st
 def list_voices():
     """Lists all available voices and their compiled engine caches."""
     return {"voices": get_all_voices()}
+
+@app.websocket("/ws/tts")
+async def websocket_tts_endpoint(websocket: WebSocket):
+    """Streaming synthesis over WebSocket. Exchanges JSON requests for Binary frames."""
+    await websocket.accept()
+    try:
+        data = await websocket.receive_json()
+        text = data.get("text")
+        if not text:
+            await websocket.close(code=1003, reason="No text provided")
+            return
+            
+        voice_name = data.get("voice_name", "default")
+        engine_name = data.get("engine", None)
+        output_format = data.get("output_format", "mp3")
+        exaggeration = float(data.get("exaggeration", 0.5))
+        transcode_sample_rate = int(data.get("transcode_sample_rate", 24000))
+        transcode_bitrate = data.get("transcode_bitrate", "128k")
+
+        # Load engine
+        try:
+            import asyncio
+            engine = await asyncio.to_thread(get_engine, engine_name)
+            if voice_name and voice_name != "default":
+                await asyncio.to_thread(engine.load_voice, voice_name)
+        except Exception as e:
+            await websocket.send_json({"error": str(e)})
+            await websocket.close()
+            return
+            
+        print(f"[Backend] Starting WS request for text length {len(text)}")
+        start_time = time.time()
+        
+        # Start generator
+        generator = engine.generate(text, exaggeration=exaggeration)
+        
+        # Raw PCM streaming
+        if output_format == "pcm":
+            while True:
+                try:
+                    chunk_tensor, is_final = await asyncio.to_thread(next, generator)
+                    mark_engine_used(engine_name)
+                    audio_np = chunk_tensor.squeeze().cpu().numpy()
+                    pcm_bytes = (audio_np * 32767.0).astype("int16").tobytes()
+                    await websocket.send_bytes(pcm_bytes)
+                    if is_final:
+                        break
+                except StopIteration:
+                    break
+            
+            await websocket.send_json({"is_final": True})
+            print(f"[Backend] WS Stream finished at {time.time() - start_time:.3f}s")
+            return
+            
+        # Transcoding via PyAV
+        import av
+        output_io = io.BytesIO()
+        container = av.open(output_io, mode='w', format=output_format)
+        
+        if output_format == "mp3":
+            codec = "libmp3lame"
+        elif output_format in ("ogg", "webm"):
+            codec = "libopus"
+        else:
+            codec = "aac"
+
+        try:
+            stream = container.add_stream(codec, rate=transcode_sample_rate)
+            stream.bit_rate = int(transcode_bitrate.replace('k', '000').replace('m', '000000'))
+        except Exception:
+            stream = container.add_stream('mp3', rate=transcode_sample_rate)
+
+        last_pos = 0
+        chunk_idx = 0
+        
+        while True:
+            try:
+                # Use to_thread to prevent blocking the async event loop during PyTorch inference
+                chunk_tensor, is_final = await asyncio.to_thread(next, generator)
+                mark_engine_used(engine_name)
+                
+                audio_np = chunk_tensor.squeeze().cpu().numpy()
+                audio_int16 = (audio_np * 32767.0).astype("int16")
+                
+                frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format='s16', layout='mono')
+                frame.sample_rate = transcode_sample_rate
+                
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+                    
+                current_pos = output_io.tell()
+                output_io.seek(last_pos)
+                data = output_io.read()
+                output_io.seek(current_pos)
+                last_pos = current_pos
+                
+                if data:
+                    await websocket.send_bytes(data)
+                
+                chunk_idx += 1
+                
+                if is_final:
+                    break
+            except StopIteration:
+                break
+                
+        # Flush
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        
+        output_io.seek(last_pos)
+        data = output_io.read()
+        if data:
+            await websocket.send_bytes(data)
+            
+        await websocket.send_json({"is_final": True})
+        print(f"[Backend] WS Stream finished at {time.time() - start_time:.3f}s")
+        
+    except WebSocketDisconnect:
+        print("[Backend] 🛑 Client disconnected! TTS WebSocket loop gracefully halted.")
+        return
+    except Exception as e:
+        print(f"[Backend] WS Error: {e}")
+        try:
+            await websocket.close()
+        except:
+            pass
 
 
 @app.post("/tts")
