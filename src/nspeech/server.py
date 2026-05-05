@@ -260,11 +260,11 @@ def serve_test_ui():
                 audio.play().catch(e => logStatus(`Play failed: ${e}`));
 
                 mediaSource.addEventListener("sourceopen", async () => {
-                    logStatus(`[App] Requesting webm output format...`);
+                    logStatus(`[App] Requesting mp3 output format...`);
                     try {
-                        const sourceBuffer = mediaSource.addSourceBuffer('audio/webm; codecs="opus"');
+                        const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
                         
-                        const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=webm&voice_name=${encodeURIComponent(voice)}`, {
+                        const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voice)}`, {
                             signal: abortController.signal
                         });
                         
