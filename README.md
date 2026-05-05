@@ -115,6 +115,8 @@ Receive PCM chunks as they are generated:
 
 ## Project Structure
 
+For full API documentation including WebSocket, REST, and OpenAI API compatible endpoints, please refer to [API_REFERENCE.md](docs/API_REFERENCE.md).
+
 ```
 nSpeech/
 ├── install.py              # Installer: install/update/verify/models
