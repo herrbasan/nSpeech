@@ -168,7 +168,7 @@ def serve_test_ui():
             <audio id="audio-player" controls autoplay style="display: none;"></audio>
         </div>
         <script>
-            let audioCtx;
+            let mediaSource;
             let abortController = null;
             
             async function loadVoices() {
@@ -232,10 +232,13 @@ def serve_test_ui():
                     abortController.abort();
                     abortController = null;
                 }
-                if (audioCtx) {
-                    audioCtx.close();
-                    audioCtx = null;
+                const audio = document.getElementById('audio-player');
+                audio.pause();
+                audio.removeAttribute('src');
+                if (mediaSource && mediaSource.readyState === "open") {
+                    mediaSource.endOfStream();
                 }
+                mediaSource = null;
                 logStatus('[App] Synthesis and playback stopped.');
             }
 
@@ -249,70 +252,51 @@ def serve_test_ui():
                 abortController = new AbortController();
                 logStatus(`[App] playStream called at ${performance.now().toFixed(2)}ms`);
                 
-                // Initialize Web Audio API on click
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 24000});
-
-                logStatus(`[App] Requesting raw PCM data (0-buffering)...`);
+                const audio = document.getElementById('audio-player');
+                audio.style.display = "block";
                 
-                try {
-                    // Fetch the raw PCM floats/ints directly via JS!
-                    const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=pcm&voice_name=${encodeURIComponent(voice)}`, {
-                        signal: abortController.signal
-                    });
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    
-                    const reader = response.body.getReader();
-                    let nextStartTime = audioCtx.currentTime + 0.1; // 100ms jitter buffer
-                    let leftover = new Uint8Array(0);
+                mediaSource = new MediaSource();
+                audio.src = URL.createObjectURL(mediaSource);
+                audio.play().catch(e => logStatus(`Play failed: ${e}`));
 
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) {
-                            logStatus(`[App] Network stream complete.`);
-                            break;
-                        }
-
-                        // Combine leftover bytes with new packet
-                        const chunkBytes = new Uint8Array(leftover.length + value.length);
-                        chunkBytes.set(leftover);
-                        chunkBytes.set(value, leftover.length);
-
-                        // Number of complete 16-bit integers
-                        const numSamples = Math.floor(chunkBytes.length / 2);
-                        leftover = chunkBytes.slice(numSamples * 2);
-
-                        if (numSamples === 0) continue;
-
-                        const int16Array = new Int16Array(chunkBytes.buffer, chunkBytes.byteOffset, numSamples);
-                        const float32Array = new Float32Array(numSamples);
-                        for (let i = 0; i < numSamples; i++) {
-                            float32Array[i] = int16Array[i] / 32768.0;
-                        }
-
-                        // Feed directly to audio hardware
-                        const buffer = audioCtx.createBuffer(1, numSamples, 24000);
-                        buffer.getChannelData(0).set(float32Array);
-
-                        const source = audioCtx.createBufferSource();
-                        source.buffer = buffer;
-                        source.connect(audioCtx.destination);
+                mediaSource.addEventListener("sourceopen", async () => {
+                    logStatus(`[App] Requesting webm output format...`);
+                    try {
+                        const sourceBuffer = mediaSource.addSourceBuffer('audio/webm; codecs="opus"');
                         
-                        // Push time forward to handle network gaps gracefully
-                        if (nextStartTime < audioCtx.currentTime) {
-                            nextStartTime = audioCtx.currentTime + 0.05;
-                        }
+                        const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=webm&voice_name=${encodeURIComponent(voice)}`, {
+                            signal: abortController.signal
+                        });
                         
-                        source.start(nextStartTime);
-                        nextStartTime += buffer.duration;
-                        logStatus(`[Audio] Audio hardware queued +${buffer.duration.toFixed(2)}s of audio`);
+                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                        
+                        const reader = response.body.getReader();
+
+                        while (true) {
+                            const { done, value } = await reader.read();
+                            if (done) {
+                                logStatus(`[App] Network stream complete.`);
+                                break;
+                            }
+                            
+                            // Await the buffer append to complete before adding the next chunk
+                            await new Promise((resolve, reject) => {
+                                sourceBuffer.appendBuffer(value);
+                                sourceBuffer.onupdateend = resolve;
+                                sourceBuffer.onerror = reject;
+                            });
+                        }
+                        if (mediaSource.readyState === "open") {
+                            mediaSource.endOfStream();
+                        }
+                    } catch (err) {
+                        if (err.name === 'AbortError') {
+                            logStatus(`[App] Stream aborted by user.`);
+                        } else {
+                            logStatus(`[Error] ${err}`);
+                        }
                     }
-                } catch (err) {
-                    if (err.name === 'AbortError') {
-                        logStatus(`[App] Stream aborted by user.`);
-                    } else {
-                        logStatus(`[Error] ${err}`);
-                    }
-                }
+                }, { once: true });
             }
         </script>
     </body>
@@ -371,7 +355,7 @@ def tts_endpoint(req: TTSRequest):
             
             if req.output_format == "mp3":
                 codec = "libmp3lame"
-            elif req.output_format == "ogg":
+            elif req.output_format in ("ogg", "webm"):
                 codec = "libopus"
             else:
                 codec = "aac"

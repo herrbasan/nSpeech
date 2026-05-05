@@ -79,36 +79,63 @@ def main():
     
     for i, text in enumerate(test_phrases):
         t0 = time.time()
-        generator = tts.generate(text)
         
-        # Get first chunk (Time To First Byte / Audio)
+        # 1. Test PCM TTFB (Raw Generator)
+        generator = tts.generate(text)
         try:
             first_chunk, is_final = next(generator)
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
-            ttfb_latency = (time.time() - t0) * 1000
+            ttfb_pcm = (time.time() - t0) * 1000
             
-            # Consume the rest
             chunks_count = 1
-            for chunk, is_final in generator:
+            for chunk, done in generator:
                 chunks_count += 1
-                
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
-            total_latency = (time.time() - t0) * 1000
+            total_pcm = (time.time() - t0) * 1000
+        except StopIteration:
+            ttfb_pcm = total_pcm = chunks_count = 0
+
+        # 2. Test Transcoding TTFB using PyAV (MP3)
+        import av
+        import io
+        t0 = time.time()
+        output_io = io.BytesIO()
+        container = av.open(output_io, mode='w', format='mp3')
+        stream = container.add_stream('libmp3lame', rate=24000)
+        generator_mp3 = tts.generate(text)
+        ttfb_mp3 = 0
+
+        try:
+            for c_idx, (chunk_tensor, is_final) in enumerate(generator_mp3):
+                audio_int16 = (chunk_tensor.squeeze().cpu().numpy() * 32767.0).astype("int16")
+                frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format='s16', layout='mono')
+                frame.sample_rate = 24000
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+                
+                if c_idx == 0:
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    ttfb_mp3 = (time.time() - t0) * 1000
+                    
+            for packet in stream.encode():
+                container.mux(packet)
+            container.close()
+            total_mp3 = (time.time() - t0) * 1000
             
         except StopIteration:
-            ttfb_latency = 0
-            total_latency = 0
-            chunks_count = 0
-
+            ttfb_mp3 = total_mp3 = 0
+            
         vram_after = get_vram_mb()
 
-        print(f"{i+1:>3} {ttfb_latency:>10.0f}ms {total_latency:>10.0f}ms {vram_after:>8.0f}MB {chunks_count:>8}")
-        ttfb_results.append(ttfb_latency)
-        total_results.append(total_latency)
-
-    print()
+        print(f"Phrase {i+1}:")
+        print(f"  PCM: {ttfb_pcm:>5.0f}ms (First Chunk) -> {total_pcm:>5.0f}ms (Total)")
+        print(f"  MP3: {ttfb_mp3:>5.0f}ms (First Chunk) -> {total_mp3:>5.0f}ms (Total)  (+{ttfb_mp3 - ttfb_pcm:>2.0f}ms added latency)")
+        
+        ttfb_results.append(ttfb_pcm)
+        total_results.append(total_pcm)
     print("=" * 70)
     print("SUMMARY")
     print("=" * 70)
