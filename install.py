@@ -27,11 +27,14 @@ import sys
 import venv
 from pathlib import Path
 
+# Need to insert src into sys.path for config import
+sys.path.insert(0, str(Path(__file__).parent.resolve() / "src"))
+
 # ── Configuration ────────────────────────────────────────────────────────────
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
 VENV_DIR = PROJECT_ROOT / "venv"
-REQUIREMENTS = PROJECT_ROOT / "requirements.txt"
+REQUIREMENTS_DIR = PROJECT_ROOT / "requirements"
 
 # PyTorch index URL for CUDA wheels
 # Adjust this for your CUDA version / GPU architecture
@@ -113,16 +116,21 @@ def install_pytorch(python):
     print("[+] PyTorch installed.")
 
 
-def install_requirements(python):
-    """Install packages from requirements.txt."""
-    if not REQUIREMENTS.exists():
-        print(f"[!] {REQUIREMENTS} not found, skipping.")
-        return
+def install_requirements(python, engine=None):
+    """Install core and engine-specific packages."""
+    print("[*] Installing core requirements ...")
+    core_req = REQUIREMENTS_DIR / "core.txt"
+    if core_req.exists():
+        run([str(python), "-m", "pip", "install", "-r", str(core_req)])
 
-    print(f"[*] Installing from {REQUIREMENTS} ...")
-    run([
-        str(python), "-m", "pip", "install", "-r", str(REQUIREMENTS)
-    ])
+    if engine:
+        print(f"[*] Installing {engine} requirements ...")
+        engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
+        if engine_req.exists():
+            run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
+        else:
+            print(f"    [!] No specific requirements file found for engine: {engine}")
+    
     print("[+] Requirements installed.")
 
 
@@ -225,8 +233,14 @@ def update(python):
     run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
 
     # Update requirements
-    if REQUIREMENTS.exists():
-        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(REQUIREMENTS)])
+    core_req = REQUIREMENTS_DIR / "core.txt"
+    if core_req.exists():
+        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(core_req)])
+        
+    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
+    engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
+    if engine_req.exists():
+        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(engine_req)])
 
     # Re-apply patches in case chatterbox was updated
     patch_chatterbox(python)
@@ -246,11 +260,15 @@ def cmd_install(args):
     print()
 
     create_env_file()
+    
+    import nspeech.config
+    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
+
     create_venv()
     python = get_python()
 
     install_pytorch(python)
-    install_requirements(python)
+    install_requirements(python, engine=engine)
     install_pytorch(python)  # Re-install to override chatterbox's CPU torch pin
     patch_chatterbox(python)
 

@@ -245,6 +245,7 @@ Content-Type: application/json
 {
   "text": "Turning on the lights.",
   "voice_name": "default",
+  "engine": "qwen3",          // Optional: overrides the default NSPEECH_ENGINE for this request
   "exaggeration": 0.5,
   "output_format": "wav",
   "transcode_bitrate": "128k",
@@ -255,6 +256,29 @@ Content-Type: application/json
 **Response:**
 ```http
 Content-Type: audio/wav
+<binary audio data>
+```
+
+#### `POST /v1/audio/speech` (OpenAI Compatible)
+Drop-in replacement for the OpenAI TTS API. Useful for integrating `nSpeech` with external tools, agents, and libraries that expect the OpenAI schema.
+
+**Request:**
+```http
+POST /v1/audio/speech
+Content-Type: application/json
+
+{
+  "model": "qwen3",           // Maps to `engine` parameter to dynamically select backend
+  "input": "Turning on the lights.", // Maps to `text`
+  "voice": "default",         // Maps to `voice_name`
+  "response_format": "mp3",   // Maps to `output_format` (mp3, opus, aac, flac, wav, pcm)
+  "speed": 1.0                // Maps to `exaggeration` equivalent
+}
+```
+
+**Response:**
+```http
+Content-Type: audio/mpeg
 <binary audio data>
 ```
 
@@ -291,7 +315,7 @@ const reader = response.body.getReader();
 ```
 
 #### `POST /voices/clone`
-Accepts a reference audio clip, saves it directly into the directory specified by `NSPEECH_VOICE_DIR`, and then triggers the active TTS backend to compute its embedding (cache object). Because the original `.wav` is stored in the voice directory, switching to a different backend engine in the future will automatically re-compute embeddings cleanly from the source audio when requested.
+Accepts a reference audio clip and saves it directly into the directory specified by `NSPEECH_VOICE_DIR`. It then triggers the specified (or default) TTS backend to compute its embedding (cache object). Caches are saved with an engine-specific extension (e.g., `voices/my_voice.chatterbox.pt`). Because the original `.wav` is stored, switching to a different backend engine in the future will automatically re-compute embeddings cleanly from the source audio when requested.
 
 **Request:**
 ```http
@@ -300,6 +324,7 @@ Content-Type: multipart/form-data
 
 file: <reference audio (.wav)>
 name: "my_voice"
+engine: "qwen3"
 exaggeration: 0.5
 ```
 
@@ -307,7 +332,8 @@ exaggeration: 0.5
 ```json
 {
   "voice_name": "my_voice",
-  "cache_file": "voices/my_voice.pt",
+  "engine": "qwen3",
+  "cache_file": "voices/my_voice.qwen3.pt",
   "source_file": "voices/my_voice.wav",
   "file_size_bytes": 101127,
   "clone_time_ms": 1250
@@ -315,15 +341,28 @@ exaggeration: 0.5
 ```
 
 #### `GET /voices`
-Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is recognized as an available cloneable reference. The `cached` boolean indicates whether the *currently active engine* has already compiled its specific embedding for the voice.
+Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is recognized as an available cloneable reference. It aggregates the compilation state of each engine by checking for `.engine.pt` files, helping clients choose which engine to route to.
 
 **Response:**
 ```json
 {
   "voices": [
-    {"name": "default", "type": "builtin", "cached": true},
-    {"name": "my_voice", "type": "cloned", "cached": true, "source": "my_voice.wav"},
-    {"name": "uncompiled_voice", "type": "cloned", "cached": false, "source": "uncompiled.wav"}
+    {
+      "name": "default", 
+      "source_file": "default.wav",
+      "engines": [
+        {"name": "chatterbox", "cached": true, "latency_tier": "standard"},
+        {"name": "qwen3", "cached": true, "latency_tier": "low"}
+      ]
+    },
+    {
+      "name": "my_voice", 
+      "source_file": "my_voice.wav",
+      "engines": [
+        {"name": "chatterbox", "cached": true, "latency_tier": "standard"},
+        {"name": "qwen3", "cached": false, "latency_tier": "low"}
+      ]
+    }
   ]
 }
 ```
@@ -351,6 +390,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
   "type": "tts_stream",
   "text": "Turning on the lights.",
   "voice_name": "default",
+  "engine": "qwen3",
   "exaggeration": 0.5,
   "output_format": "pcm"
 }
@@ -361,6 +401,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
   "type": "clone_voice",
   "audio_data": "<base64-encoded-wav>",
   "voice_name": "user_voice_1",
+  "engine": "qwen3",
   "exaggeration": 0.5
 }
 ```
@@ -387,7 +428,8 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
 {
   "type": "voice_cloned",
   "voice_name": "my_voice",
-  "cache_file": "voices/my_voice.pt",
+  "engine": "qwen3",
+  "cache_file": "voices/my_voice.qwen3.pt",
   "clone_time_ms": 1250
 }
 ```
@@ -551,7 +593,7 @@ nSpeech/
 - [x] Voice cloning + caching
 - [x] Installer + benchmark
 - [ ] Adapter interface (`generate()`, `clone()`, `load_voice()`)
-- [ ] FastAPI HTTP endpoints (`/tts`, `/voices/clone`, `/voices`, `/health`)
+- [ ] FastAPI HTTP endpoints (`/tts`, `/v1/audio/speech`, `/voices/clone`, `/voices`, `/health`)
 - [ ] WebSocket streaming endpoint (`/ws/tts`)
 
 ### Phase 2: Streaming

@@ -1,0 +1,5 @@
+# Core Server & Audio Dependencies
+fastapi>=0.110.0
+uvicorn>=0.29.0
+soundfile>=0.12.1
+numpy>=2.0.0
