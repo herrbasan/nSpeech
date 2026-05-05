@@ -23,8 +23,22 @@ behavior stay the same regardless of backend.
 
 ## Quick Start
 
+### Starting the Server
+We provide a helper script to automatically configure paths and launch the FastAPI server.
+
+```bash
+# Start the server
+python run.py
+```
+*The UI dashboard will be available at `http://127.0.0.1:8000/`.*
+
+### Stopping the Server
+To stop the server and free up your GPU VRAM, go to the terminal where `python run.py` is running and press `Ctrl+C`.
+
+### Other Commands
 ```bash
 # Install
+
 python install.py install --models
 
 # Verify
