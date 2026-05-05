@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+venv/
+env/
+ENV/
+
+# Environment Variables
+.env
+
+# Application Models & Cache
+models/
+.cache/
+
+# User Voice Data
+# (Ignores generated cache files and raw uploads, but you can force-add default voices later if needed)
+voices/*.pt
+voices/*.wav
+voices/**/*.pt
+voices/**/*.wav
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
