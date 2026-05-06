@@ -61,7 +61,7 @@ streaming, and API surface stay the same across adapters.
 │            ┌───────────┴───────────┐                        │
 │            ▼                       ▼                        │
 │  ┌─────────────────┐   ┌─────────────────┐                 │
-│  │ Chatterbox      │   │ Qwen3_TTS       │                 │
+│  │ Chatterbox      │   │ Kokoro       │                 │
 │  │ (default)       │   │ (planned)       │                 │
 │  │ ~3.8 GB VRAM    │   │ lower latency   │                 │
 │  │ zero-shot clone │   │ higher quality  │                 │
@@ -85,7 +85,7 @@ streaming, and API surface stay the same across adapters.
 | **API** | FastAPI + uvicorn | HTTP / WebSocket endpoints, request routing |
 | **Adapter** | Python interface | Chunking, streaming, voice cache management |
 | **TTS Engine** | Chatterbox (default) | Synthesize speech, clone voices |
-| **TTS Engine** | Qwen3_TTS (planned) | Higher quality, lower latency alternative |
+| **TTS Engine** | Kokoro (planned/eval) | Ultra-low latency, 82M params, expressive |
 | **Transcoder** | PyAV (optional) | PCM → WebM/Opus/MP3 on demand |
 
 ### 3.2 Concurrency & GPU Locking
@@ -102,7 +102,7 @@ The service relies entirely on explicit environment variables (or a minimal `con
 
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `NSPEECH_ENGINE` | The TTS adapter backend to use (e.g., `chatterbox`, `qwen3`) | Yes | - |
+| `NSPEECH_ENGINE` | The TTS adapter backend to use (e.g., `chatterbox`, `kokoro`) | Yes | - |
 | `NSPEECH_HOST` | The IP to bind the HTTP/WS socket (e.g., `127.0.0.1` or `0.0.0.0`) | No | `127.0.0.1` |
 | `NSPEECH_PORT` | The port for the service | No | `8000` |
 | `NSPEECH_VOICE_DIR` | Absolute or relative path to the directory storing reference audios and `.pt` voice caches | Yes | - |
@@ -228,7 +228,7 @@ Error responses always return JSON:
 ```json
 {
   "error": "MODEL_LOAD_FAILED",
-  "message": "Insufficient VRAM to load Qwen3_TTS model."
+  "message": "Insufficient VRAM to load Kokoro model."
 }
 ```
 
@@ -245,7 +245,7 @@ Content-Type: application/json
 {
   "text": "Turning on the lights.",
   "voice_name": "default",
-  "engine": "qwen3",          // Optional: overrides the default NSPEECH_ENGINE for this request
+  "engine": "kokoro",          // Optional: overrides the default NSPEECH_ENGINE for this request
   "exaggeration": 0.5,
   "output_format": "wav",
   "transcode_bitrate": "128k",
@@ -268,7 +268,7 @@ POST /v1/audio/speech
 Content-Type: application/json
 
 {
-  "model": "qwen3",           // Maps to `engine` parameter to dynamically select backend
+  "model": "kokoro",           // Maps to `engine` parameter to dynamically select backend
   "input": "Turning on the lights.", // Maps to `text`
   "voice": "default",         // Maps to `voice_name`
   "response_format": "mp3",   // Maps to `output_format` (mp3, opus, aac, flac, wav, pcm)
@@ -324,7 +324,7 @@ Content-Type: multipart/form-data
 
 file: <reference audio (.wav)>
 name: "my_voice"
-engine: "qwen3"
+engine: "kokoro"
 exaggeration: 0.5
 ```
 
@@ -332,8 +332,8 @@ exaggeration: 0.5
 ```json
 {
   "voice_name": "my_voice",
-  "engine": "qwen3",
-  "cache_file": "voices/my_voice.qwen3.pt",
+  "engine": "kokoro",
+  "cache_file": "voices/my_voice.kokoro.pt",
   "source_file": "voices/my_voice.wav",
   "file_size_bytes": 101127,
   "clone_time_ms": 1250
@@ -352,7 +352,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
       "source_file": "default.wav",
       "engines": [
         {"name": "chatterbox", "cached": true, "latency_tier": "standard"},
-        {"name": "qwen3", "cached": true, "latency_tier": "low"}
+        {"name": "kokoro", "cached": true, "latency_tier": "low"}
       ]
     },
     {
@@ -360,7 +360,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
       "source_file": "my_voice.wav",
       "engines": [
         {"name": "chatterbox", "cached": true, "latency_tier": "standard"},
-        {"name": "qwen3", "cached": false, "latency_tier": "low"}
+        {"name": "kokoro", "cached": false, "latency_tier": "low"}
       ]
     }
   ]
@@ -390,7 +390,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
   "type": "tts_stream",
   "text": "Turning on the lights.",
   "voice_name": "default",
-  "engine": "qwen3",
+  "engine": "kokoro",
   "exaggeration": 0.5,
   "output_format": "pcm"
 }
@@ -401,7 +401,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
   "type": "clone_voice",
   "audio_data": "<base64-encoded-wav>",
   "voice_name": "user_voice_1",
-  "engine": "qwen3",
+  "engine": "kokoro",
   "exaggeration": 0.5
 }
 ```
@@ -428,8 +428,8 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
 {
   "type": "voice_cloned",
   "voice_name": "my_voice",
-  "engine": "qwen3",
-  "cache_file": "voices/my_voice.qwen3.pt",
+  "engine": "kokoro",
+  "cache_file": "voices/my_voice.kokoro.pt",
   "clone_time_ms": 1250
 }
 ```
@@ -471,7 +471,7 @@ Lists all available voices by scanning `NSPEECH_VOICE_DIR`. Any `.wav` file is r
 
 ## 9. VRAM
 
-| GPU | Chatterbox | Qwen3_TTS (planned) |
+| GPU | Chatterbox | Kokoro (planned) |
 |-----|-----------|---------------------|
 | RTX 4090 (24 GB) | ~3.8 GB | TBD |
 | RTX 5090 (32 GB) | ~3.8 GB | TBD |
@@ -538,7 +538,7 @@ class BaseTTSAdapter:
 | PyTorch | CUDA nightly | 2.12.0+cu128 | RTX 5090 sm_120 support |
 | TTS Adapter | Python interface | — | Chunking, streaming, cache |
 | TTS Engine | chatterbox-tts | 0.1.7 | Default adapter |
-| TTS Engine | Qwen3_TTS | — | Planned adapter |
+| TTS Engine | Kokoro | — | Planned adapter |
 | Transcoding | PyAV | latest | Optional, on-demand |
 | Server | FastAPI + uvicorn | latest | |
 | Audio I/O | soundfile | 0.13+ | WAV read/write |
@@ -576,7 +576,7 @@ nSpeech/
 │       ├── engines/
 │       │   ├── __init__.py
 │       │   ├── chatterbox.py   # Chatterbox adapter
-│       │   └── qwen3.py        # Qwen3_TTS adapter (planned)
+│       │   └── kokoro.py        # Kokoro adapter (planned)
 │       ├── tts.py          # Chatterbox wrapper (legacy)
 │       └── server.py       # FastAPI server
 └── voices/                 # Voice samples & caches
@@ -601,10 +601,10 @@ nSpeech/
 - [ ] Stream PCM chunks as generated
 - [ ] Multi-client support
 
-### Phase 3: Qwen3_TTS Adapter
-- [ ] Qwen3_TTS engine adapter
+### Phase 3: Kokoro Adapter
+- [ ] Kokoro engine adapter
 - [ ] Engine selection via config or request param
-- [ ] Benchmark comparison (Chatterbox vs Qwen3_TTS)
+- [ ] Benchmark comparison (Chatterbox vs Kokoro)
 
 ### Phase 4: Transcoding
 - [ ] PyAV integration for on-the-fly encoding

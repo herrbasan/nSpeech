@@ -73,6 +73,19 @@ def get_all_voices() -> List[Dict[str, Any]]:
             "engines": engines_info
         })
         
+    # Inject Kokoro built-in voices since they don't have .wav files locally
+    try:
+        if config.NSPEECH_ENGINE == "kokoro" or config.NSPEECH_PRELOAD_MODEL:
+            k_eng = get_engine("kokoro")
+            for builtin in k_eng.pipeline.get_voices():
+                voices.append({
+                    "name": builtin,
+                    "source_file": "builtin",
+                    "engines": [{"name": "kokoro", "cached": True, "latency_tier": "fast"}]
+                })
+    except Exception:
+        pass
+        
     return voices
 
 
@@ -159,9 +172,16 @@ def serve_test_ui():
             
             <!-- Voice Management Section -->
             <div style="background: #2d2d2d; padding: 15px; border-radius: 4px; margin-bottom: 15px; border: 1px solid #444;">
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px; flex-wrap: wrap;">
+                    <label for="engine-select" style="font-weight: bold; width: 100px;">Engine:</label>
+                    <select id="engine-select" style="flex: 1; padding: 8px; background: #1e1e1e; color: white; border: 1px solid #555; border-radius: 4px; min-width: 120px;">
+                        <option value="">Auto (Default)</option>
+                        <option value="chatterbox">Chatterbox</option>
+                        <option value="kokoro">Kokoro</option>
+                    </select>
+
                     <label for="voice-select" style="font-weight: bold; width: 100px;">Using Voice:</label>
-                    <select id="voice-select" style="flex: 1; padding: 8px; background: #1e1e1e; color: white; border: 1px solid #555; border-radius: 4px;">
+                    <select id="voice-select" style="flex: 1; padding: 8px; background: #1e1e1e; color: white; border: 1px solid #555; border-radius: 4px; min-width: 150px;">
                         <option value="default">Default</option>
                     </select>
                     
@@ -271,6 +291,7 @@ def serve_test_ui():
                 const text = document.getElementById('text-input').value;
                 const voice = document.getElementById('voice-select').value;
                 const protocol = document.getElementById('protocol-select').value;
+                const engine = document.getElementById('engine-select').value;
                 if (!text) return;
                 
                 stopStream(); // Reset any existing active streams before starting
@@ -294,7 +315,9 @@ def serve_test_ui():
                         const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
                         
                         if (protocol === "rest") {
-                            const response = await fetch(`/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voice)}`, {
+                            let fetchUrl = `/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voice)}`;
+                            if (engine) fetchUrl += `&engine=${encodeURIComponent(engine)}`;
+                            const response = await fetch(fetchUrl, {
                                 signal: abortController.signal
                             });
                             
@@ -351,12 +374,14 @@ def serve_test_ui():
 
                             wsConnection.onopen = () => {
                                 logStatus(`[App] WS Connected. Sending request...`);
-                                wsConnection.send(JSON.stringify({
+                                const reqPayload = {
                                     type: "tts_stream",
                                     text: text,
                                     voice_name: voice,
                                     output_format: "mp3"
-                                }));
+                                };
+                                if (engine) reqPayload.engine = engine;
+                                wsConnection.send(JSON.stringify(reqPayload));
                             };
 
                             wsConnection.onmessage = async (event) => {
@@ -556,8 +581,23 @@ def tts_endpoint(req: TTSRequest):
         # Load immediately to fail-fast if voice or engine is invalid
         engine = get_engine(req.engine)
         if req.voice_name and req.voice_name != "default":
-            engine.load_voice(req.voice_name)
+            try:
+                engine.load_voice(req.voice_name)
+            except FileNotFoundError:
+                # Attempt to auto-compile embeddings if a .wav exists
+                from pathlib import Path
+                voice_dir = Path(config.NSPEECH_VOICE_DIR)
+                wav_path = voice_dir / f"{req.voice_name}.wav"
+                if wav_path.exists():
+                    print(f"[{req.engine}] Compiling implicit voice cache for {req.voice_name}...")
+                    engine.clone(str(wav_path), req.voice_name)
+                    engine.load_voice(req.voice_name)
+                else:
+                    # The engine might have a fallback mechanism for native voices, defer to it
+                    pass
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
         
     def stream_audio():

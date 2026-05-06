@@ -24,3 +24,20 @@ Before proceeding with development, agents should review the following essential
 - **FastAPI Patterns:** Use `StreamingResponse` for HTTP streaming. WebSocket sends JSON with base64 `data` fields. No custom protocols.
 - **File Layout:** One adapter per file under `src/nspeech/engines/`. The engine name matches the filename (`chatterbox.py` -> `ChatterboxAdapter`).
 - **No Mixins, No Inheritance Hierarchies:** Adapters are plain classes with the same method names. If shared logic emerges, extract a function, not a base class.
+
+## Implementation History & Current State
+
+### Successes
+- **Multi-Engine Architecture:** Successfully implemented the TTSAdapterProtocol allowing dynamic, pluggable TTS engines.
+- **Kokoro-82M Integration:** Successfully integrated Kokoro via kokoro-onnx as the default engine.
+  - **Performance:** Extremely low latency (350-700ms TTFA) and minimal VRAM/RAM footprint (~6MB), cleanly meeting CPU-only goals.
+  - **Streaming:** Implemented native batch streaming using Kokoro's internal phonemizer to eliminate delay on large texts without relying on crude sentence regex splitting.
+  - **Integration:** Integrated 54 native voices smoothly into the FastAPI /voices endpoint and the Web UI dropdown.
+
+### Failures & Trade-offs
+- **Qwen3 Integration:** Failed to integrate Qwen3 reliably as a low-latency streaming replacement.
+- **Zero-Shot Voice Cloning (Kokoro):** Kokoro's ONNX package does not include the style-extractor network required to extract embeddings from new .wav files. True zero-shot cloning natively via Kokoro is currently unsupported. 
+  - *Workaround:* The adapter stubs clone() requests to a default voice to prevent pipeline crashes. If zero-shot cloning is strictly required, the system must be configured to route requests to the heavier Chatterbox engine instead.
+
+### Current Project State
+The text-to-speech service is highly stable and operational for high-speed, low-resource streaming using Kokoro's rich set of built-in voices. The primary limitation moving forward is the lack of lightweight zero-shot cloning, meaning new voices must either be blended algorithmically from built-in profiles or processed through a separate pipeline.

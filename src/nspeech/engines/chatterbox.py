@@ -16,7 +16,8 @@ class ChatterboxAdapter:
     def __init__(self):
         try:
             from chatterbox.tts import ChatterboxTTS
-        except ImportError:
+        except ImportError as e:
+            print("REAL ERROR:", e)
             raise ImportError("Chatterbox is not installed. Run `pip install -r requirements/chatterbox.txt`.")
             
         self.device = "cuda" if torch.cuda.is_available() else "cpu"

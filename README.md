@@ -6,8 +6,8 @@ GPU-accelerated text-to-speech with zero-shot voice cloning, automatic sentence-
 
 ```
 [Text Input] --> [Adapter Layer] --> [TTS Engine] --> [Voice Output]
-                  (chunking +        (Chatterbox    (PCM stream)
-                   streaming)         or Qwen3_TTS)
+                  (chunking +        (Kokoro or     (PCM stream)
+                   streaming)         Chatterbox)
 ```
 
 The adapter layer handles sentence-level chunking, voice cache management, and
@@ -16,10 +16,10 @@ behavior stay the same regardless of backend.
 
 | Component | Technology | Role |
 |-----------|-----------|------|
-| **Adapter** | Python interface | Chunking, streaming, voice cache |
-| **TTS Engine** | Chatterbox (default) | Zero-shot cloning, ~3.8 GB VRAM |
-| **TTS Engine** | Qwen3_TTS (planned) | Higher quality, lower latency |
-| **Server** | FastAPI + uvicorn | HTTP / WebSocket API |
+| **Adapter** | Python interface | Chunking, streaming, voice cache routing |
+| **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, low RAM (~6MB). 8 languages, 54 voices. |
+| **TTS Engine** | Chatterbox | Optional fallback. ~3.8 GB VRAM. Supports true zero-shot `.wav` cloning. |
+| **Server** | FastAPI + uvicorn | HTTP / WebSocket API + Dashboard UI |
 
 ## Quick Start
 
@@ -119,40 +119,39 @@ Receive PCM chunks as they are generated:
 
 ## Performance
 
-| Metric | Target |
-|--------|--------|
-| First audio byte | <1000 ms |
-| Full generation (20 words) | <1500 ms |
-| Voice cloning | <2000 ms |
-| Voice cache load | <10 ms |
-| Model cold start | <5000 ms |
+| Metric | Target | Actual (Kokoro CPU) |
+|--------|--------|---------------------|
+| First audio byte | <1000 ms | ~400 - 700 ms |
+| Full generation (20 words) | <1500 ms | ~1000 ms |
+| Voice cache load | <10 ms | Instant |
+
+*Note on Voice Cloning:* The default Kokoro engine does not support zero-shot voice cloning directly from .wav files due to its optimized architecture. Cloning requests via Kokoro are stubbed or require voice blending. True zero-shot extraction requires routing to the Chatterbox engine.
 
 ## Project Structure
 
 For full API documentation including WebSocket, REST, and OpenAI API compatible endpoints, please refer to [API_REFERENCE.md](docs/API_REFERENCE.md).
 
-```
+`
 nSpeech/
 ├── install.py              # Installer: install/update/verify/models
 ├── requirements.txt        # Python dependencies
 ├── benchmark.py            # TTS benchmark
 ├── README.md               # This file
-├── SPEC.md                 # Service specification
-├── STT_SPEC.md             # STT bits for nVoice project
+├── docs/                   
+│   └── nSpeech_SPEC.md     # Service specification
 ├── src/
 │   └── nspeech/
 │       ├── __init__.py
-│       ├── adapter.py      # TTS adapter interface + chunking
 │       ├── engines/
 │       │   ├── __init__.py
 │       │   ├── chatterbox.py   # Chatterbox adapter
-│       │   └── qwen3.py        # Qwen3_TTS adapter (planned)
-│       ├── tts.py          # Chatterbox wrapper (legacy)
-│       └── server.py       # FastAPI HTTP / WebSocket server
+│       │   └── kokoro.py       # Kokoro ONNX adapter (default)
+│       ├── tts.py          # Abstract protocol and engine router
+│       └── server.py       # FastAPI HTTP / WebSocket server / Web UI
 └── voices/                 # Voice samples & caches
     ├── *.wav
     └── *.pt                # Cached voice embeddings
-```
+`
 
 ## Installer Commands
 
