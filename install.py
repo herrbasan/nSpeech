@@ -102,26 +102,17 @@ def create_venv():
 
 
 def install_pytorch(python):
-    """Install PyTorch with CUDA support."""
-    print(f"[*] Installing PyTorch (CUDA) from {TORCH_INDEX_URL} ...")
-    run([
-        str(python), "-m", "pip", "install", "--upgrade", "pip"
-    ])
-    run([
-        str(python), "-m", "pip", "install",
-        "torch==2.8.0", "torchaudio==2.8.0",
-        "--index-url", TORCH_INDEX_URL,
-    ])
-    print("[+] PyTorch installed.")
-
-
-def install_requirements(python, engine=None):
-    """Install core and engine-specific packages."""
-    print("[*] Installing core requirements ...")
+    """Install core requirements including PyTorch with CUDA support."""
+    print("[*] Installing core requirements (includes PyTorch CUDA) ...")
+    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
     core_req = REQUIREMENTS_DIR / "core.txt"
     if core_req.exists():
         run([str(python), "-m", "pip", "install", "-r", str(core_req)])
+    print("[+] Core requirements + PyTorch installed.")
 
+
+def install_requirements(python, engine=None):
+    """Install engine-specific packages, then restore PyTorch version."""
     if engine:
         print(f"[*] Installing {engine} requirements ...")
         engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
@@ -129,7 +120,13 @@ def install_requirements(python, engine=None):
             run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
         else:
             print(f"    [!] No specific requirements file found for engine: {engine}")
-    
+
+    # Re-install core to restore torch==2.8.0 if chatterbox downgraded it
+    core_req = REQUIREMENTS_DIR / "core.txt"
+    if core_req.exists():
+        print("[*] Restoring PyTorch 2.8 (chatterbox may have downgraded it) ...")
+        run([str(python), "-m", "pip", "install", "-r", str(core_req)])
+
     print("[+] Requirements installed.")
 
 
