@@ -38,7 +38,7 @@ REQUIREMENTS_DIR = PROJECT_ROOT / "requirements"
 
 # PyTorch index URL for CUDA wheels
 # Adjust this for your CUDA version / GPU architecture
-TORCH_INDEX_URL = "https://download.pytorch.org/whl/nightly/cu128"
+TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu128"
 
 # Models to pre-download (HuggingFace repo IDs)
 CHATTERBOX_REPO = "ResembleAI/chatterbox"
@@ -109,9 +109,8 @@ def install_pytorch(python):
     ])
     run([
         str(python), "-m", "pip", "install",
-        "torch", "torchaudio",
+        "torch==2.8.0", "torchaudio==2.8.0",
         "--index-url", TORCH_INDEX_URL,
-        "--force-reinstall", "--no-deps"
     ])
     print("[+] PyTorch installed.")
 
@@ -135,16 +134,71 @@ def install_requirements(python, engine=None):
 
 
 def patch_chatterbox(python):
-    """Apply known compatibility patches to chatterbox-tts."""
-    print("[*] Applying chatterbox compatibility patches ...")
+    """Apply known compatibility patches to chatterbox-tts and resemble-perth."""
+    patches_applied = 0
 
-    # Find the installed chatterbox package
+    # ── Patch perth: disable broken PerthImplicitWatermarker import ──
+    result = run(
+        [str(python), "-c", "import perth; print(perth.__file__)"],
+        capture=True, check=False
+    )
+    if result.returncode == 0:
+        perth_init = Path(result.stdout.strip()).resolve()
+        perth_dir = perth_init.parent
+
+        content = perth_init.read_text(encoding="utf-8")
+        if "from .perth_net" in content:
+            lines_to_keep = []
+            skip = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("try:") and "perth_net" not in stripped:
+                    lines_to_keep.append(line)
+                    continue
+                if "from .perth_net" in stripped:
+                    lines_to_keep.append("PerthImplicitWatermarker = None")
+                    skip = True
+                    continue
+                if skip and stripped in ("except ImportError:", "except Exception:"):
+                    skip = True
+                    continue
+                if skip and stripped.startswith("PerthImplicitWatermarker = None"):
+                    skip = False
+                    continue
+                if skip and stripped == "":
+                    skip = False
+                    lines_to_keep.append(line)
+                    continue
+                if skip:
+                    continue
+                lines_to_keep.append(line)
+            content = "\n".join(lines_to_keep) + "\n"
+            perth_init.write_text(content, encoding="utf-8")
+            patches_applied += 1
+            print("    [+] Patched perth __init__ (disabled PerthImplicitWatermarker)")
+
+        perth_net_init = perth_dir / "perth_net" / "__init__.py"
+        if perth_net_init.exists():
+            net_content = perth_net_init.read_text(encoding="utf-8")
+            if "from .perth_net_implicit" in net_content:
+                net_content = net_content.replace(
+                    "from .perth_net_implicit.perth_watermarker import PerthImplicitWatermarker",
+                    "# PerthImplicitWatermarker import disabled (deadlocks on Windows/Python 3.13)"
+                )
+                perth_net_init.write_text(net_content, encoding="utf-8")
+                patches_applied += 1
+                print("    [+] Patched perth_net __init__ (disabled implicit import)")
+    else:
+        print("[!] perth not installed yet, skipping patches.")
+
+    # ── Patch chatterbox: use DummyWatermarker instead ──
     result = run(
         [str(python), "-c", "import chatterbox; print(chatterbox.__file__)"],
         capture=True, check=False
     )
     if result.returncode != 0:
         print("[!] chatterbox not installed yet, skipping patches.")
+        print(f"[+] {patches_applied} patch(es) applied.")
         return
 
     tts_path = Path(result.stdout.strip())
@@ -152,30 +206,20 @@ def patch_chatterbox(python):
 
     if not tts_py.exists():
         print(f"[!] Could not find {tts_py}")
+        print(f"[+] {patches_applied} patch(es) applied.")
         return
 
-    content = tts_py.read_text(encoding='utf-8')
-    patches_applied = 0
+    content = tts_py.read_text(encoding="utf-8")
 
-    # Patch 1: Handle missing PerthImplicitWatermarker
     if "perth.PerthImplicitWatermarker()" in content:
         content = content.replace(
             "self.watermarker = perth.PerthImplicitWatermarker()",
-            "self.watermarker = perth.PerthImplicitWatermarker() if perth.PerthImplicitWatermarker is not None else None"
+            "self.watermarker = perth.DummyWatermarker()"
         )
         patches_applied += 1
-        print("    [+] Patched watermarker init")
+        print("    [+] Patched chatterbox watermarker -> DummyWatermarker")
 
-    # Patch 2: Skip watermarking if None
-    if "watermarked_wav = self.watermarker.apply_watermark" in content:
-        content = content.replace(
-            "            watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)\n        return torch.from_numpy(watermarked_wav).unsqueeze(0)",
-            "            if self.watermarker is not None:\n                wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)\n        return torch.from_numpy(wav).unsqueeze(0)"
-        )
-        patches_applied += 1
-        print("    [+] Patched watermark application")
-
-    tts_py.write_text(content, encoding='utf-8')
+    tts_py.write_text(content, encoding="utf-8")
     print(f"[+] {patches_applied} patch(es) applied.")
 
 
@@ -204,6 +248,7 @@ def verify_installation(python):
 
     checks = [
         ("PyTorch + CUDA", "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__}, CUDA OK')"),
+        ("Kokoro ONNX", "import kokoro_onnx; print('kokoro OK')"),
         ("Chatterbox", "import chatterbox; print('chatterbox OK')"),
         ("soundfile", "import soundfile; print('soundfile OK')"),
     ]
@@ -269,7 +314,6 @@ def cmd_install(args):
 
     install_pytorch(python)
     install_requirements(python, engine=engine)
-    install_pytorch(python)  # Re-install to override chatterbox's CPU torch pin
     patch_chatterbox(python)
 
     if args.models:
@@ -282,15 +326,8 @@ def cmd_install(args):
     print("Installation complete!")
     print("=" * 60)
     print()
-    print("To activate the environment:")
-    if platform.system() == "Windows":
-        print(f"    {VENV_DIR}\\Scripts\\activate")
-    else:
-        print(f"    source {VENV_DIR}/bin/activate")
-    print()
-    print("To run benchmarks:")
-    print("    cd chatterbox")
-    print("    python benchmark_voice_pipeline_v3.py")
+    print("To start the server:")
+    print("    python run.py")
 
 
 def cmd_update(args):

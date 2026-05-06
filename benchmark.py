@@ -8,8 +8,24 @@ Measures both TTFB (Time to First Byte/Chunk) and Total Synthesis Time.
 import subprocess
 import sys
 import time
+import platform
+from pathlib import Path
 
-sys.path.insert(0, "src")
+
+def _resolve_python():
+    script = Path(__file__).resolve()
+    if platform.system() == "Windows":
+        venv_python = script.parent / "venv" / "Scripts" / "python.exe"
+    else:
+        venv_python = script.parent / "venv" / "bin" / "python"
+    if venv_python.exists() and Path(sys.executable).resolve() != venv_python:
+        raise SystemExit(subprocess.call([str(venv_python), str(script)] + sys.argv[1:]))
+
+
+if __name__ == "__main__":
+    _resolve_python()
+
+sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 import torch
 from nspeech import config

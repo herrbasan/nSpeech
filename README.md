@@ -23,58 +23,36 @@ behavior stay the same regardless of backend.
 
 ## Quick Start
 
-### Starting the Server
-We provide a helper script to automatically configure paths and launch the FastAPI server.
+### 1. Install
 
 ```bash
-# Start the server
+python install.py install --models
+```
+
+This creates a self-contained `venv/`, installs PyTorch 2.8 (CUDA 12.8), Kokoro, Chatterbox, applies compatibility patches, and pre-downloads model weights.
+
+### 2. Run
+
+```bash
 python run.py
 ```
-*The UI dashboard will be available at `http://127.0.0.1:8000/`.*
 
-### Stopping the Server
-To stop the server and free up your GPU VRAM, go to the terminal where `python run.py` is running and press `Ctrl+C`.
+All scripts (`run.py`, `benchmark.py`, `install.py`) auto-detect and use the venv — no manual activation needed. The dashboard is at `http://127.0.0.1:8000/`.
+
+### 3. Stop
+
+Press `Ctrl+C` in the terminal running the server.
 
 ### Other Commands
+
 ```bash
-# Install
-
-python install.py install --models
-
-# Verify
-python install.py verify
-
-# Update packages
-python install.py update
-
-# Benchmark
-python benchmark.py
+python install.py verify        # Check installation health
+python install.py update        # Update packages + re-patch
+python install.py models        # Download model weights only
+python benchmark.py             # Run TTS benchmarks
 ```
 
 ## Usage
-
-### Direct (Python API)
-
-```python
-from nspeech.tts import TTSEngine
-
-# Initialize engine
-tts = TTSEngine(device="cuda")
-
-# Clone a voice (one-time)
-tts.clone_voice("reference_voice.wav")
-tts.save_voice_cache("my_voice")
-
-# Load cached voice (instant)
-tts.load_voice_cache("my_voice")
-
-# Generate speech
-audio = tts.generate("Hello, this is my cloned voice speaking.")
-
-# Save output
-import soundfile as sf
-sf.write("output.wav", audio.cpu().squeeze().numpy(), tts.sr)
-```
 
 ### HTTP API
 
@@ -131,19 +109,21 @@ Receive PCM chunks as they are generated:
 
 For full API documentation including WebSocket, REST, and OpenAI API compatible endpoints, please refer to [API_REFERENCE.md](docs/API_REFERENCE.md).
 
-`
+```
 nSpeech/
 ├── install.py              # Installer: install/update/verify/models
-├── requirements.txt        # Python dependencies
-├── benchmark.py            # TTS benchmark
-├── README.md               # This file
-├── docs/                   
+├── run.py                  # Server launcher (auto-detects venv)
+├── benchmark.py            # TTS benchmark (auto-detects venv)
+├── requirements/           # Per-engine dependency lists
+│   ├── core.txt            # FastAPI, soundfile, numpy, etc.
+│   ├── kokoro.txt          # kokoro-onnx
+│   └── chatterbox.txt      # chatterbox-tts + deps
+├── docs/
 │   └── nSpeech_SPEC.md     # Service specification
 ├── src/
 │   └── nspeech/
 │       ├── __init__.py
 │       ├── engines/
-│       │   ├── __init__.py
 │       │   ├── chatterbox.py   # Chatterbox adapter
 │       │   └── kokoro.py       # Kokoro ONNX adapter (default)
 │       ├── tts.py          # Abstract protocol and engine router
@@ -151,21 +131,12 @@ nSpeech/
 └── voices/                 # Voice samples & caches
     ├── *.wav
     └── *.pt                # Cached voice embeddings
-`
-
-## Installer Commands
-
-```bash
-python install.py install       # Fresh install
-python install.py install --models  # + pre-download weights
-python install.py update        # Update all packages
-python install.py verify        # Check installation health
-python install.py models        # Download model weights only
 ```
 
 ## Notes
 
-- **PyTorch CUDA**: The installer handles the `chatterbox-tts` → `torch==2.6.0` (CPU) dependency conflict by reinstalling the CUDA-enabled PyTorch after requirements.
-- **Patches**: The installer automatically patches Chatterbox's watermarking module for Windows/CUDA 13 compatibility.
+- **Venv**: All scripts auto-detect and re-launch inside `venv/` if needed. No manual activation required.
+- **PyTorch CUDA**: The installer pins `torch==2.8.0+cu128` and reinstalls it after Chatterbox's `torch==2.6.0` dependency.
+- **Patches**: The installer patches Chatterbox's watermarking module (`resemble-perth` deadlocks on Windows/Python 3.13) to use a no-op dummy watermarker.
 - **Model weights**: First run downloads ~2 GB from HuggingFace. Use `--models` to pre-download during install.
-- **Engine selection**: The default engine is Chatterbox. Qwen3_TTS adapter is planned for higher quality / lower latency.
+- **Engine selection**: The default engine is Kokoro. Chatterbox is available as a fallback for voice cloning.
