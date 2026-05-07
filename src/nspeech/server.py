@@ -75,7 +75,7 @@ def get_all_voices() -> List[Dict[str, Any]]:
         
     # Inject Kokoro built-in voices since they don't have .wav files locally
     try:
-        if config.NSPEECH_ENGINE == "kokoro" or config.NSPEECH_PRELOAD_MODEL:
+        if getattr(config, "NSPEECH_ENGINE", "kokoro") == "kokoro" or getattr(config, "NSPEECH_PRELOAD_MODEL", False):
             k_eng = get_engine("kokoro")
             for builtin in k_eng.pipeline.get_voices():
                 voices.append({
@@ -83,7 +83,8 @@ def get_all_voices() -> List[Dict[str, Any]]:
                     "source_file": "builtin",
                     "engines": [{"name": "kokoro", "cached": True, "latency_tier": "fast"}]
                 })
-    except Exception:
+    except Exception as e:
+        print(f"Failed to fetch kokoro voices: {e}")
         pass
         
     return voices

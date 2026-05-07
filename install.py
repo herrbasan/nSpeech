@@ -111,21 +111,17 @@ def install_pytorch(python):
     print("[+] Core requirements + PyTorch installed.")
 
 
-def install_requirements(python, engine=None):
-    """Install engine-specific packages, then restore PyTorch version."""
-    if engine:
-        print(f"[*] Installing {engine} requirements ...")
-        engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
-        if engine_req.exists():
-            run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
-        else:
-            print(f"    [!] No specific requirements file found for engine: {engine}")
-
-    # Re-install core to restore torch==2.8.0 if chatterbox downgraded it
-    core_req = REQUIREMENTS_DIR / "core.txt"
-    if core_req.exists():
-        print("[*] Restoring PyTorch 2.8 (chatterbox may have downgraded it) ...")
-        run([str(python), "-m", "pip", "install", "-r", str(core_req)])
+def install_requirements(python):
+    """Install engine-specific packages."""
+    # We install kokoro tools by default since it is the default engine, or others defined by ENV
+    engine = os.environ.get("NSPEECH_ENGINE", "kokoro")
+    
+    print(f"[*] Installing {engine} requirements ...")
+    engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
+    if engine_req.exists():
+        run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
+    else:
+        print(f"    [!] No specific requirements file found for engine: {engine}")
 
     print("[+] Requirements installed.")
 
@@ -220,21 +216,50 @@ def patch_chatterbox(python):
     print(f"[+] {patches_applied} patch(es) applied.")
 
 
-def download_models(python):
+def download_models(python, engine=None):
     """Pre-download model weights so first run is fast."""
     print("[*] Pre-downloading model weights ...")
 
-    # We import config to ensure HF_HOME is set before chatterbox loads
-    print("    Downloading Chatterbox weights ...")
-    
-    # Must add src to sys.path to import nspeech without installing it
-    run([
-        str(python), "-c",
-        f"import sys; sys.path.insert(0, 'src'); "
-        f"import nspeech.config; "
-        f"from chatterbox.tts import ChatterboxTTS; "
-        f"ChatterboxTTS.from_pretrained(device='cpu')"
-    ], cwd=str(PROJECT_ROOT))
+    if engine == "chatterbox":
+        print("    Downloading Chatterbox weights ...")
+        
+        # Must add src to sys.path to import nspeech without installing it
+        run([
+            str(python), "-c",
+            f"import sys; sys.path.insert(0, 'src'); "
+            f"import nspeech.config; "
+            f"from chatterbox.tts import ChatterboxTTS; "
+            f"ChatterboxTTS.from_pretrained(device='cpu')"
+        ], cwd=str(PROJECT_ROOT))
+    elif engine == "kokoro":
+        print("    Downloading Kokoro weights ...")
+        
+        # We can implement a clean downloader right here in Python
+        model_dir = PROJECT_ROOT / "models"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        
+        urls = [
+            ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx", model_dir / "kokoro-v1.0.onnx"),
+            ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", model_dir / "voices-v1.0.bin")
+        ]
+        
+        import urllib.request
+        for url, dest in urls:
+            if dest.exists() and dest.stat().st_size > 0:
+                print(f"    [+] {dest.name} already exists.")
+                continue
+            
+            print(f"    [*] Downloading {dest.name} ...")
+            try:
+                # Use a proper block copying with error handling so we avoid partial files
+                with urllib.request.urlopen(url) as response, open(dest, 'wb') as out_file:
+                    shutil.copyfileobj(response, out_file)
+                print(f"    [+] Successfully downloaded {dest.name}")
+            except Exception as e:
+                print(f"    [-] Failed to download {dest.name}: {e}")
+                if dest.exists():
+                    dest.unlink()
+                sys.exit(1)
     
     print("[+] Models downloaded.")
 
@@ -243,12 +268,17 @@ def verify_installation(python):
     """Verify that everything works."""
     print("[*] Verifying installation ...")
 
-    checks = [
-        ("PyTorch + CUDA", "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__}, CUDA OK')"),
-        ("Kokoro ONNX", "import kokoro_onnx; print('kokoro OK')"),
-        ("Chatterbox", "import chatterbox; print('chatterbox OK')"),
-        ("soundfile", "import soundfile; print('soundfile OK')"),
-    ]
+    checks = []
+    import os
+    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
+    if engine == "chatterbox":
+        checks.append(("PyTorch + CUDA", "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__}, CUDA OK')"))
+        checks.append(("Chatterbox", "import chatterbox; print('chatterbox OK')"))
+    else:
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__} OK')"))
+        checks.append(("Kokoro ONNX", "import kokoro_onnx; print('kokoro OK')"))
+        
+    checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
 
     all_ok = True
     for name, code in checks:
@@ -282,7 +312,7 @@ def update(python):
     engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
     engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
     if engine_req.exists():
-        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(engine_req)])
+        run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
 
     # Re-apply patches in case chatterbox was updated
     patch_chatterbox(python)
@@ -294,6 +324,19 @@ def update(python):
 # ── Commands ─────────────────────────────────────────────────────────────────
 
 
+def load_env():
+    """Load basic key-value pairs from .env to os.environ so the installer respects config."""
+    env_path = PROJECT_ROOT / ".env"
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ[k.strip()] = v.strip()
+
 def cmd_install(args):
     """Fresh install."""
     print("=" * 60)
@@ -302,19 +345,22 @@ def cmd_install(args):
     print()
 
     create_env_file()
+    load_env()
     
-    import nspeech.config
-    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
+    engine = os.environ.get("NSPEECH_ENGINE", "kokoro")
 
     create_venv()
     python = get_python()
 
     install_pytorch(python)
-    install_requirements(python, engine=engine)
-    patch_chatterbox(python)
+    install_requirements(python)
+
+    # We skip patch_chatterbox if not installing chatterbox
+    if engine == "chatterbox":
+        patch_chatterbox(python)
 
     if args.models:
-        download_models(python)
+        download_models(python, engine=engine)
 
     verify_installation(python)
 
@@ -349,12 +395,15 @@ def cmd_verify(args):
 
 def cmd_models(args):
     """Download model weights only."""
+    import nspeech.config
+    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
+    
     if not VENV_DIR.exists():
         print("[!] No installation found. Run 'install' first.")
         sys.exit(1)
 
     python = get_python()
-    download_models(python)
+    download_models(python, engine=engine)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────

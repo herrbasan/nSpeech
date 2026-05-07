@@ -26,14 +26,16 @@ if __name__ == "__main__":
 
     os.environ["PYTHONPATH"] = src_dir + os.pathsep + os.environ.get("PYTHONPATH", "")
 
-    print("=========================================")
-    print("      Starting nSpeech API Server        ")
-    print("=========================================")
-    print("• Dashboard: http://127.0.0.1:8000/")
-    print("• Stop Server: Press Ctrl+C")
-    print("=========================================\n")
-
     try:
-        uvicorn.run("nspeech.server:app", host="127.0.0.1", port=8000, reload=False)
+        from nspeech.config import NSPEECH_HOST, NSPEECH_PORT
+        print("=========================================")
+        print("      Starting nSpeech API Server        ")
+        print("=========================================")
+        dashboard_url = f"http://{NSPEECH_HOST}:{NSPEECH_PORT}/"
+        print(f"• Dashboard: {dashboard_url}")
+        print("• Stop Server: Press Ctrl+C")
+        print("=========================================\n")
+
+        uvicorn.run("nspeech.server:app", host=NSPEECH_HOST, port=NSPEECH_PORT, reload=False)
     except KeyboardInterrupt:
         print("\nShutting down nSpeech gracefully...")
