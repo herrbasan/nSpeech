@@ -63,3 +63,49 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 
 ### Current Project State
 The text-to-speech service is highly stable and operational for high-speed, low-resource streaming using Kokoro's rich set of built-in voices. The primary limitation moving forward is the lack of lightweight zero-shot cloning, meaning new voices must either be blended algorithmically from built-in profiles or processed through a separate pipeline.
+
+## Multi-Host Deployment Architecture
+
+### Design Decision: Separate Venvs Per Host
+Each TTS technology runs in its own venv on dedicated hardware. No shared dependencies between engines — eliminates transformer version conflicts (CosyVoice needs 4.51.3, Chatterbox/Kokoro need 5.x).
+
+### Deployment Plan
+
+| Host | Engine | Purpose | Notes |
+|------|--------|---------|-------|
+| FATTEN | Kokoro | Base voice service | Intel GPU, English only, fast & reliable |
+| BADKID | CosyVoice3 | Multilingual, quality | Shares VRAM with Qwen3.6 (80k ctx), RTX 4090 |
+| — | Chatterbox | Archived | Works well but English-only, not deployed |
+
+### Venv Creation Notes
+
+**Kokoro (FATTEN):**
+- `python -m venv venv-kokoro`
+- `pip install -r requirements/kokoro.txt`
+- `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu` (CPU-only)
+
+**CosyVoice (BADKID):**
+- `python -m venv venv-cosyvoice`
+- `pip install transformers==4.51.3 tokenizers==0.21.0 huggingface-hub==0.30.0`
+- Full deps in `requirements/cosyvoice.txt`
+- Set `NUMBA_DISABLE_JIT=1` environment variable
+- Add Matcha-TTS to Python path in run.py
+
+### Key CosyVoice Lessons (2026-05-07)
+- `inference_instruct2` with `zero_shot_spk_id` WORKS; `inference_cross_lingual` FAILS; `inference_zero_shot` with spk_id produces ~0.12s audio
+- All text must include `<|endofprompt|>` token
+- Max cloning audio: 30 seconds
+- Voice cache load: `torch.load(path, weights_only=False, map_location='cpu')`
+- Full notes in `cosyvoice_notes.md`
+
+### Running Multiple Instances
+Each host runs independently:
+```
+# On FATTEN (port 8000)
+venv-kokoro\Scripts\python run.py
+
+# On BADKID (port 8000) 
+venv-cosyvoice\Scripts\python run.py
+```
+
+Client connects to specific host:port based on needed capability.
