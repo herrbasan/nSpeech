@@ -133,7 +133,42 @@ Caller POST /tts
 850 ms  Response: audio/wav
 ```
 
-### 4.2 Streaming (HTTP — Browser Fetch)
+### 5.2 Narration Mode (HTTP — Non-Streaming)
+
+For higher-quality, expressive output (audiobook narration, acting, long-form content), the
+service offers a non-streaming generation mode. Text is still automatically chunked at the
+sentence level internally, but the entire audio is assembled server-side before returning a
+single complete audio file.
+
+```
+Caller POST /tts
+  {
+    "text": "Long narration text...",
+    "voice_name": "default",
+    "mode": "narration",
+    "output_format": "wav"
+  }
+
+   0 ms  Receive request
+  50 ms  Load voice cache
+ 800 ms  Sentence 1 generated
+1500 ms  Sentence 2 generated
+2200 ms  Sentence 3 generated
+   ...   Continue until all sentences done
+2400 ms  Concatenate all chunks into single audio
+2450 ms  Transcode to requested format
+2500 ms  Response: complete audio/wav
+```
+
+**When to use narration mode:**
+- Audiobook or podcast-style generation where consistency across sentences matters
+- Higher-quality engine backends that don't support incremental streaming
+- Offline batch processing where latency is not a concern
+
+**When to use streaming mode (default):**
+- Real-time conversational TTS
+- Live narration where first-byte latency matters
+- Interactive voice assistants
 
 ```
 Browser: fetch("/tts/stream?text=...&voice=default&format=opus")
@@ -235,7 +270,7 @@ Error responses always return JSON:
 ### 7.2 HTTP Endpoints
 
 #### `POST /tts`
-Single-shot synthesis. Returns complete audio file.
+Synthesis endpoint. By default streams audio chunks as they are generated. Set `mode` to `"narration"` to receive a single complete audio file instead — intended for high-quality, long-form generation where first-byte latency is not a concern (audiobooks, acting, batch processing).
 
 **Request:**
 ```http
@@ -246,6 +281,7 @@ Content-Type: application/json
   "text": "Turning on the lights.",
   "voice_name": "default",
   "engine": "kokoro",          // Optional: overrides the default NSPEECH_ENGINE for this request
+  "mode": "streaming",         // Optional: "streaming" (default) or "narration" (non-streaming, higher quality)
   "exaggeration": 0.5,
   "output_format": "wav",
   "transcode_bitrate": "128k",
