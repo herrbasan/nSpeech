@@ -25,7 +25,7 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 
 - **Adapter Contract:** Every TTS engine adapter implements `generate(text)`, `clone(audio_path)`, `load_voice(name)`. `generate()` is a generator that yields `(pcm_tensor, is_final)` tuples. Return raw PCM `torch.Tensor` (no file I/O in adapters).
 - **Audio Standard:** PCM 24kHz mono float32. The adapter layer normalizes; engines may emit differently.
-- **Voice Cache:** `.pt` files in `voices/`. Format is engine-specific; the adapter serializes whatever the engine gives it.
+- **Voice Cache:** `.pt` files in `venv/<engine>/voices/`. Format is engine-specific; the adapter serializes whatever the engine gives it.
 - **Chunking:** Sentence-level. No engine does its own chunking -- the adapter splits text and calls `generate()` per sentence.
 - **Streaming:** Adapter yields `(pcm_tensor, is_final)` tuples. Server base64-encodes each chunk. Caller starts playback immediately.
 - **Engine Loading:** Lazy, on first request. Keep resident with LRU eviction (unload after N minutes idle). No preload at startup.
@@ -80,14 +80,13 @@ Each TTS technology runs in its own venv on dedicated hardware. No shared depend
 ### Venv Creation Notes
 
 **Kokoro (FATTEN):**
-- `python -m venv venv-kokoro`
-- `pip install -r requirements/kokoro.txt`
-- `pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu` (CPU-only)
+- `python install.py install --engine kokoro`
+- Creates `venv/kokoro/env/` (Python) and `venv/kokoro/models/` (weights)
+- Set `NSPEECH_MODEL_DIR=venv/kokoro/models` in `.env`
 
 **CosyVoice (BADKID):**
-- `python -m venv venv-cosyvoice`
-- `pip install transformers==4.51.3 tokenizers==0.21.0 huggingface-hub==0.30.0`
-- Full deps in `requirements/cosyvoice.txt`
+- `python install.py install --engine cosyvoice`
+- Creates `venv/cosyvoice/env/` and `venv/cosyvoice/models/`
 - Set `NUMBA_DISABLE_JIT=1` environment variable
 - Add Matcha-TTS to Python path in run.py
 
@@ -102,10 +101,13 @@ Each TTS technology runs in its own venv on dedicated hardware. No shared depend
 Each host runs independently:
 ```
 # On FATTEN (port 8000)
-venv-kokoro\Scripts\python run.py
+venv\kokoro\env\Scripts\python run.py
 
-# On BADKID (port 8000) 
-venv-cosyvoice\Scripts\python run.py
+# On BADKID (port 8000)
+venv\cosyvoice\env\Scripts\python run.py
 ```
+
+Or simply `python run.py` — it auto-detects `NSPEECH_ENGINE` from `.env` and
+re-launches with the correct venv Python.
 
 Client connects to specific host:port based on needed capability.

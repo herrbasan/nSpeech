@@ -4,22 +4,19 @@ __pycache__/
 *$py.class
 *.so
 
-# Virtual Environments
+# Virtual Environments, Engine Models & Voices
 venv/
-env/
-ENV/
+
+# Legacy locations (pre-multi-venv layout)
+models/
+voices/
+voices_samples/
 
 # Environment Variables
 .env
 
-# Application Models & Cache
-models/
+# Application Cache
 .cache/
-
-# User Voice Data
-# (Ignores generated cache files and raw uploads, but you can force-add default voices later if needed)
-voices/
-voices_samples/
 
 # OS generated files
 .DS_Store
@@ -30,3 +27,4 @@ voices_samples/
 ehthumbs.db
 Thumbs.db
 desktop.ini
+.kilo/

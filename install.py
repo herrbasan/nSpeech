@@ -2,22 +2,29 @@
 """
 nSpeech Service Installer
 =========================
-Installs the text-to-speech service (Chatterbox TTS) into a
-self-contained virtual environment. Supports install, update, and verify.
+Installs the text-to-speech service with per-engine isolation.
+Supports: kokoro, cosyvoice, chatterbox, or all engines.
+
+Layout:
+    venv/
+      kokoro/
+        env/          # Python virtual environment
+        models/       # ONNX weights, voice bins
+      cosyvoice/
+        env/
+        models/       # CosyVoice repo clone, weights
+      chatterbox/
+        env/
+        models/
 
 Usage:
-    python install.py install     # Fresh install
-    python install.py update      # Update packages
-    python install.py verify      # Check installation health
-    python install.py models      # Pre-download model weights
-
-The installer handles:
-- Creating a Python venv
-- Installing PyTorch with CUDA support
-- Installing chatterbox-tts
-- Patching known compatibility issues
-- Pre-downloading model weights (optional)
+    python install.py install --engine kokoro
+    python install.py install --engine cosyvoice --models
+    python install.py install --engine all
+    python install.py update --engine kokoro
+    python install.py verify --engine kokoro
 """
+
 import argparse
 import os
 import platform
@@ -27,27 +34,49 @@ import sys
 import venv
 from pathlib import Path
 
-# Need to insert src into sys.path for config import
-sys.path.insert(0, str(Path(__file__).parent.resolve() / "src"))
-
-# ── Configuration ────────────────────────────────────────────────────────────
-
 PROJECT_ROOT = Path(__file__).parent.resolve()
-VENV_DIR = PROJECT_ROOT / "venv"
 REQUIREMENTS_DIR = PROJECT_ROOT / "requirements"
+VENV_BASE = PROJECT_ROOT / "venv"
 
-# PyTorch index URL for CUDA wheels
-# Adjust this for your CUDA version / GPU architecture
-TORCH_INDEX_URL = "https://download.pytorch.org/whl/cu128"
+ENGINES = ["kokoro", "cosyvoice", "chatterbox", "all"]
 
-# Models to pre-download (HuggingFace repo IDs)
-CHATTERBOX_REPO = "ResembleAI/chatterbox"
+ENGINE_PATCHES = {
+    "chatterbox": ["patch_chatterbox"],
+    "cosyvoice": [],
+    "kokoro": [],
+}
+
+
+def _env_dir(engine):
+    return VENV_BASE / engine / "env"
+
+
+def _models_dir(engine):
+    return VENV_BASE / engine / "models"
+
+
+def _voices_dir(engine):
+    return VENV_BASE / engine / "voices"
+
+
+def _python(engine):
+    d = _env_dir(engine)
+    if platform.system() == "Windows":
+        return d / "Scripts" / "python.exe"
+    return d / "bin" / "python"
+
+
+def _pip(engine):
+    d = _env_dir(engine)
+    if platform.system() == "Windows":
+        return d / "Scripts" / "pip.exe"
+    return d / "bin" / "pip"
+
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def run(cmd, cwd=None, check=True, capture=False):
-    """Run a shell command, streaming output by default."""
     print(f"  $ {' '.join(str(c) for c in cmd)}")
     kwargs = {"cwd": cwd, "check": check}
     if capture:
@@ -57,7 +86,6 @@ def run(cmd, cwd=None, check=True, capture=False):
 
 
 def create_env_file():
-    """Create a default .env file if it doesn't exist."""
     env_path = PROJECT_ROOT / ".env"
     example_path = PROJECT_ROOT / ".env.example"
     if not env_path.exists() and example_path.exists():
@@ -65,267 +93,7 @@ def create_env_file():
         shutil.copy(example_path, env_path)
 
 
-def get_python():
-    """Return the path to the venv Python executable."""
-    if platform.system() == "Windows":
-        return VENV_DIR / "Scripts" / "python.exe"
-    return VENV_DIR / "bin" / "python"
-
-
-def get_pip():
-    """Return the path to the venv pip executable."""
-    if platform.system() == "Windows":
-        return VENV_DIR / "Scripts" / "pip.exe"
-    return VENV_DIR / "bin" / "pip"
-
-
-def in_venv():
-    """Check if we're already inside the target venv."""
-    return sys.prefix == str(VENV_DIR)
-
-
-def create_venv():
-    """Create the virtual environment."""
-    if VENV_DIR.exists():
-        print(f"[!] venv already exists at {VENV_DIR}")
-        response = input("    Delete and recreate? [y/N]: ").strip().lower()
-        if response == "y":
-            shutil.rmtree(VENV_DIR)
-            print("    Deleted existing venv.")
-        else:
-            print("    Keeping existing venv.")
-            return
-
-    print(f"[*] Creating venv at {VENV_DIR} ...")
-    venv.create(VENV_DIR, with_pip=True)
-    print("[+] venv created.")
-
-
-def install_pytorch(python):
-    """Install core requirements including PyTorch with CUDA support."""
-    print("[*] Installing core requirements (includes PyTorch CUDA) ...")
-    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
-    core_req = REQUIREMENTS_DIR / "core.txt"
-    if core_req.exists():
-        run([str(python), "-m", "pip", "install", "-r", str(core_req)])
-    print("[+] Core requirements + PyTorch installed.")
-
-
-def install_requirements(python):
-    """Install engine-specific packages."""
-    # We install kokoro tools by default since it is the default engine, or others defined by ENV
-    engine = os.environ.get("NSPEECH_ENGINE", "kokoro")
-    
-    print(f"[*] Installing {engine} requirements ...")
-    engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
-    if engine_req.exists():
-        run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
-    else:
-        print(f"    [!] No specific requirements file found for engine: {engine}")
-
-    print("[+] Requirements installed.")
-
-
-def patch_chatterbox(python):
-    """Apply known compatibility patches to chatterbox-tts and resemble-perth."""
-    patches_applied = 0
-
-    # ── Patch perth: disable broken PerthImplicitWatermarker import ──
-    result = run(
-        [str(python), "-c", "import perth; print(perth.__file__)"],
-        capture=True, check=False
-    )
-    if result.returncode == 0:
-        perth_init = Path(result.stdout.strip()).resolve()
-        perth_dir = perth_init.parent
-
-        content = perth_init.read_text(encoding="utf-8")
-        if "from .perth_net" in content:
-            lines_to_keep = []
-            skip = False
-            for line in content.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("try:") and "perth_net" not in stripped:
-                    lines_to_keep.append(line)
-                    continue
-                if "from .perth_net" in stripped:
-                    lines_to_keep.append("PerthImplicitWatermarker = None")
-                    skip = True
-                    continue
-                if skip and stripped in ("except ImportError:", "except Exception:"):
-                    skip = True
-                    continue
-                if skip and stripped.startswith("PerthImplicitWatermarker = None"):
-                    skip = False
-                    continue
-                if skip and stripped == "":
-                    skip = False
-                    lines_to_keep.append(line)
-                    continue
-                if skip:
-                    continue
-                lines_to_keep.append(line)
-            content = "\n".join(lines_to_keep) + "\n"
-            perth_init.write_text(content, encoding="utf-8")
-            patches_applied += 1
-            print("    [+] Patched perth __init__ (disabled PerthImplicitWatermarker)")
-
-        perth_net_init = perth_dir / "perth_net" / "__init__.py"
-        if perth_net_init.exists():
-            net_content = perth_net_init.read_text(encoding="utf-8")
-            if "from .perth_net_implicit" in net_content:
-                net_content = net_content.replace(
-                    "from .perth_net_implicit.perth_watermarker import PerthImplicitWatermarker",
-                    "# PerthImplicitWatermarker import disabled (deadlocks on Windows/Python 3.13)"
-                )
-                perth_net_init.write_text(net_content, encoding="utf-8")
-                patches_applied += 1
-                print("    [+] Patched perth_net __init__ (disabled implicit import)")
-    else:
-        print("[!] perth not installed yet, skipping patches.")
-
-    # ── Patch chatterbox: use DummyWatermarker instead ──
-    result = run(
-        [str(python), "-c", "import chatterbox; print(chatterbox.__file__)"],
-        capture=True, check=False
-    )
-    if result.returncode != 0:
-        print("[!] chatterbox not installed yet, skipping patches.")
-        print(f"[+] {patches_applied} patch(es) applied.")
-        return
-
-    tts_path = Path(result.stdout.strip())
-    tts_py = tts_path.parent / "tts.py"
-
-    if not tts_py.exists():
-        print(f"[!] Could not find {tts_py}")
-        print(f"[+] {patches_applied} patch(es) applied.")
-        return
-
-    content = tts_py.read_text(encoding="utf-8")
-
-    if "perth.PerthImplicitWatermarker()" in content:
-        content = content.replace(
-            "self.watermarker = perth.PerthImplicitWatermarker()",
-            "self.watermarker = perth.DummyWatermarker()"
-        )
-        patches_applied += 1
-        print("    [+] Patched chatterbox watermarker -> DummyWatermarker")
-
-    tts_py.write_text(content, encoding="utf-8")
-    print(f"[+] {patches_applied} patch(es) applied.")
-
-
-def download_models(python, engine=None):
-    """Pre-download model weights so first run is fast."""
-    print("[*] Pre-downloading model weights ...")
-
-    if engine == "chatterbox":
-        print("    Downloading Chatterbox weights ...")
-        
-        # Must add src to sys.path to import nspeech without installing it
-        run([
-            str(python), "-c",
-            f"import sys; sys.path.insert(0, 'src'); "
-            f"import nspeech.config; "
-            f"from chatterbox.tts import ChatterboxTTS; "
-            f"ChatterboxTTS.from_pretrained(device='cpu')"
-        ], cwd=str(PROJECT_ROOT))
-    elif engine == "kokoro":
-        print("    Downloading Kokoro weights ...")
-        
-        # We can implement a clean downloader right here in Python
-        model_dir = PROJECT_ROOT / "models"
-        model_dir.mkdir(parents=True, exist_ok=True)
-        
-        urls = [
-            ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx", model_dir / "kokoro-v1.0.onnx"),
-            ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin", model_dir / "voices-v1.0.bin")
-        ]
-        
-        import urllib.request
-        for url, dest in urls:
-            if dest.exists() and dest.stat().st_size > 0:
-                print(f"    [+] {dest.name} already exists.")
-                continue
-            
-            print(f"    [*] Downloading {dest.name} ...")
-            try:
-                # Use a proper block copying with error handling so we avoid partial files
-                with urllib.request.urlopen(url) as response, open(dest, 'wb') as out_file:
-                    shutil.copyfileobj(response, out_file)
-                print(f"    [+] Successfully downloaded {dest.name}")
-            except Exception as e:
-                print(f"    [-] Failed to download {dest.name}: {e}")
-                if dest.exists():
-                    dest.unlink()
-                sys.exit(1)
-    
-    print("[+] Models downloaded.")
-
-
-def verify_installation(python):
-    """Verify that everything works."""
-    print("[*] Verifying installation ...")
-
-    checks = []
-    import os
-    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
-    if engine == "chatterbox":
-        checks.append(("PyTorch + CUDA", "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__}, CUDA OK')"))
-        checks.append(("Chatterbox", "import chatterbox; print('chatterbox OK')"))
-    else:
-        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__} OK')"))
-        checks.append(("Kokoro ONNX", "import kokoro_onnx; print('kokoro OK')"))
-        
-    checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
-
-    all_ok = True
-    for name, code in checks:
-        result = run([str(python), "-c", code], capture=True, check=False)
-        if result.returncode == 0:
-            print(f"    [+] {name}: {result.stdout.strip()}")
-        else:
-            print(f"    [-] {name}: FAILED")
-            print(f"        {result.stderr.strip()}")
-            all_ok = False
-
-    if all_ok:
-        print("[+] All checks passed.")
-    else:
-        print("[-] Some checks failed.")
-        sys.exit(1)
-
-
-def update(python):
-    """Update all packages to latest compatible versions."""
-    print("[*] Updating packages ...")
-
-    # Update pip
-    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
-
-    # Update requirements
-    core_req = REQUIREMENTS_DIR / "core.txt"
-    if core_req.exists():
-        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(core_req)])
-        
-    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
-    engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
-    if engine_req.exists():
-        run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
-
-    # Re-apply patches in case chatterbox was updated
-    patch_chatterbox(python)
-
-    print("[+] Update complete.")
-    verify_installation(python)
-
-
-# ── Commands ─────────────────────────────────────────────────────────────────
-
-
 def load_env():
-    """Load basic key-value pairs from .env to os.environ so the installer respects config."""
     env_path = PROJECT_ROOT / ".env"
     if env_path.exists():
         with open(env_path, "r", encoding="utf-8") as f:
@@ -337,8 +105,263 @@ def load_env():
                     k, v = line.split("=", 1)
                     os.environ[k.strip()] = v.strip()
 
+
+# ── Venv Management ──────────────────────────────────────────────────────────
+
+
+def create_venv(engine):
+    env_path = _env_dir(engine)
+
+    if env_path.exists():
+        print(f"[!] venv already exists at {env_path}")
+        response = input("    Delete and recreate? [y/N]: ").strip().lower()
+        if response == "y":
+            shutil.rmtree(env_path)
+            print("    Deleted existing env.")
+        else:
+            print("    Keeping existing env.")
+            return False
+
+    VENV_BASE.mkdir(parents=True, exist_ok=True)
+    (VENV_BASE / engine).mkdir(parents=True, exist_ok=True)
+    print(f"[*] Creating venv at {env_path} ...")
+    venv.create(env_path, with_pip=True)
+    print(f"[+] venv created: venv/{engine}/env/")
+    return True
+
+
+def ensure_models_dir(engine):
+    d = _models_dir(engine)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+# ── Install Steps ────────────────────────────────────────────────────────────
+
+
+def install_core(python):
+    print("[*] Installing core requirements ...")
+    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+
+    core_req = REQUIREMENTS_DIR / "core.txt"
+    if core_req.exists():
+        run([str(python), "-m", "pip", "install", "-r", str(core_req)])
+
+    print("[+] Core requirements installed.")
+
+
+def install_engine_deps(python, engine):
+    print(f"[*] Installing {engine} requirements ...")
+
+    engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
+    if engine_req.exists():
+        run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
+    else:
+        print(f"    [!] No requirements file found: {engine_req}")
+
+    if engine == "kokoro":
+        print("[*] Installing PyTorch CPU for Kokoro ...")
+        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/cpu"])
+
+    elif engine == "cosyvoice":
+        print("[*] Installing CosyVoice pinned dependencies ...")
+        run([str(python), "-m", "pip", "install",
+             "transformers==4.51.3", "tokenizers==0.21.0", "huggingface-hub==0.30.0"])
+
+    print("[+] Engine requirements installed.")
+
+
+def patch_chatterbox(python):
+    patches_applied = 0
+
+    result = run(
+        [str(python), "-c", "import perth; print(perth.__file__)"],
+        capture=True, check=False
+    )
+    if result.returncode != 0:
+        print("[!] perth not installed yet, skipping patches.")
+        return 0
+
+    perth_init = Path(result.stdout.strip()).resolve()
+    perth_dir = perth_init.parent
+
+    content = perth_init.read_text(encoding="utf-8")
+    if "from .perth_net" in content:
+        lines_to_keep = []
+        skip = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("try:") and "perth_net" not in stripped:
+                lines_to_keep.append(line)
+                continue
+            if "from .perth_net" in stripped:
+                lines_to_keep.append("PerthImplicitWatermarker = None")
+                skip = True
+                continue
+            if skip and stripped in ("except ImportError:", "except Exception:"):
+                skip = True
+                continue
+            if skip and stripped.startswith("PerthImplicitWatermarker = None"):
+                skip = False
+                continue
+            if skip and stripped == "":
+                skip = False
+                lines_to_keep.append(line)
+                continue
+            if skip:
+                continue
+            lines_to_keep.append(line)
+        content = "\n".join(lines_to_keep) + "\n"
+        perth_init.write_text(content, encoding="utf-8")
+        patches_applied += 1
+        print("    [+] Patched perth __init__ (disabled PerthImplicitWatermarker)")
+
+    perth_net_init = perth_dir / "perth_net" / "__init__.py"
+    if perth_net_init.exists():
+        net_content = perth_net_init.read_text(encoding="utf-8")
+        if "from .perth_net_implicit" in net_content:
+            net_content = net_content.replace(
+                "from .perth_net_implicit.perth_watermarker import PerthImplicitWatermarker",
+                "# PerthImplicitWatermarker import disabled (deadlocks on Windows/Python 3.13)"
+            )
+            perth_net_init.write_text(net_content, encoding="utf-8")
+            patches_applied += 1
+            print("    [+] Patched perth_net __init__ (disabled implicit import)")
+
+    result = run(
+        [str(python), "-c", "import chatterbox; print(chatterbox.__file__)"],
+        capture=True, check=False
+    )
+    if result.returncode != 0:
+        print("[!] chatterbox not installed yet, skipping patches.")
+        return patches_applied
+
+    tts_path = Path(result.stdout.strip())
+    tts_py = tts_path.parent / "tts.py"
+
+    if not tts_py.exists():
+        return patches_applied
+
+    content = tts_py.read_text(encoding="utf-8")
+    if "perth.PerthImplicitWatermarker()" in content:
+        content = content.replace(
+            "self.watermarker = perth.PerthImplicitWatermarker()",
+            "self.watermarker = perth.DummyWatermarker()"
+        )
+        patches_applied += 1
+        print("    [+] Patched chatterbox watermarker -> DummyWatermarker")
+
+    tts_py.write_text(content, encoding="utf-8")
+    print(f"[+] {patches_applied} patch(es) applied.")
+    return patches_applied
+
+
+def download_models(python, engine):
+    print(f"[*] Downloading {engine} models ...")
+    model_dir = ensure_models_dir(engine)
+
+    if engine == "chatterbox":
+        print("    Downloading Chatterbox weights ...")
+        run([
+            str(python), "-c",
+            f"import sys; sys.path.insert(0, 'src'); "
+            f"import os; os.environ['NSPEECH_MODEL_DIR'] = r'{model_dir}'; "
+            f"from chatterbox.tts import ChatterboxTTS; "
+            f"ChatterboxTTS.from_pretrained(device='cpu')"
+        ], cwd=str(PROJECT_ROOT))
+
+    elif engine == "kokoro":
+        urls = [
+            ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx",
+             model_dir / "kokoro-v1.0.onnx"),
+            ("https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+             model_dir / "voices-v1.0.bin")
+        ]
+
+        import urllib.request
+        for url, dest in urls:
+            if dest.exists() and dest.stat().st_size > 0:
+                print(f"    [+] {dest.name} already exists.")
+                continue
+
+            print(f"    [*] Downloading {dest.name} ...")
+            try:
+                with urllib.request.urlopen(url) as response, open(dest, 'wb') as out_file:
+                    shutil.copyfileobj(response, out_file)
+                print(f"    [+] Downloaded {dest.name}")
+            except Exception as e:
+                print(f"    [-] Failed to download {dest.name}: {e}")
+                if dest.exists():
+                    dest.unlink()
+                sys.exit(1)
+
+    elif engine == "cosyvoice":
+        print("    [*] CosyVoice models should be cloned separately:")
+        print(f"        git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git {model_dir / 'CosyVoice'}")
+
+    print("[+] Models ready.")
+
+
+def verify_engine(python, engine):
+    print(f"[*] Verifying {engine} installation ...")
+
+    checks = []
+    if engine == "chatterbox":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("Chatterbox", "import chatterbox; print('chatterbox OK')"))
+    elif engine == "kokoro":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("Kokoro ONNX", "import kokoro_onnx; print('kokoro OK')"))
+    elif engine == "cosyvoice":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("Transformers", "import transformers; print(f'transformers {transformers.__version__}')"))
+
+    checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
+
+    all_ok = True
+    for name, code in checks:
+        result = run([str(python), "-c", code], capture=True, check=False)
+        if result.returncode == 0:
+            print(f"    [+] {name}: {result.stdout.strip()}")
+        else:
+            print(f"    [-] {name}: FAILED")
+            all_ok = False
+
+    return all_ok
+
+
+# ── Full Install Pipeline ────────────────────────────────────────────────────
+
+
+def install_engine_full(engine, args):
+    create_venv(engine)
+    _voices_dir(engine).mkdir(parents=True, exist_ok=True)
+    python = _python(engine)
+
+    if not python.exists():
+        print(f"[-] Python not found at {python}")
+        return False
+
+    install_core(python)
+    install_engine_deps(python, engine)
+
+    for patch_func in ENGINE_PATCHES.get(engine, []):
+        if patch_func == "patch_chatterbox":
+            patch_chatterbox(python)
+
+    if args.models:
+        download_models(python, engine)
+
+    all_ok = verify_engine(python, engine)
+    print(f"[+] {engine} installation {'PASSED' if all_ok else 'FAILED'}")
+    return all_ok
+
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+
 def cmd_install(args):
-    """Fresh install."""
     print("=" * 60)
     print("nSpeech Service Installer")
     print("=" * 60)
@@ -346,81 +369,142 @@ def cmd_install(args):
 
     create_env_file()
     load_env()
-    
-    engine = os.environ.get("NSPEECH_ENGINE", "kokoro")
 
-    create_venv()
-    python = get_python()
+    engine = args.engine
+    print(f"[*] Engine: {engine}")
+    print()
 
-    install_pytorch(python)
-    install_requirements(python)
+    if engine == "all":
+        engines_to_install = ["kokoro", "cosyvoice", "chatterbox"]
+    else:
+        engines_to_install = [engine]
 
-    # We skip patch_chatterbox if not installing chatterbox
-    if engine == "chatterbox":
-        patch_chatterbox(python)
-
-    if args.models:
-        download_models(python, engine=engine)
-
-    verify_installation(python)
+    results = {}
+    for eng in engines_to_install:
+        print()
+        print("=" * 40)
+        print(f"Installing: {eng}")
+        print("=" * 40)
+        try:
+            results[eng] = install_engine_full(eng, args)
+        except Exception as e:
+            print(f"[-] {eng} installation failed: {e}")
+            results[eng] = False
 
     print()
     print("=" * 60)
-    print("Installation complete!")
+    print("Installation Summary")
     print("=" * 60)
+    for eng, success in results.items():
+        status = "PASSED" if success else "FAILED"
+        print(f"  {eng:12} venv/{eng}/env/  [{status}]")
+
     print()
-    print("To start the server:")
-    print("    python run.py")
+    print("To start an engine:")
+    for eng in engines_to_install:
+        if results.get(eng, False):
+            print(f"  venv\\{eng}\\env\\Scripts\\python run.py")
+
+    print()
+    print("Make sure .env points to the correct engine directories:")
+    print("  NSPEECH_ENGINE=<engine>")
+    print("  NSPEECH_MODEL_DIR=venv/<engine>/models")
+    print("  NSPEECH_VOICE_DIR=venv/<engine>/voices")
+
+    if all(results.values()):
+        print()
+        print("Installation complete!")
+    else:
+        print()
+        print("Some installations failed. Check errors above.")
+        sys.exit(1)
 
 
 def cmd_update(args):
-    """Update existing installation."""
-    if not VENV_DIR.exists():
-        print("[!] No existing installation found. Run 'install' first.")
+    engine = args.engine
+    env_path = _env_dir(engine)
+
+    if not env_path.exists():
+        print(f"[!] No installation found for {engine}. Run 'install --engine {engine}' first.")
         sys.exit(1)
 
-    python = get_python()
-    update(python)
+    python = _python(engine)
+
+    print(f"[*] Updating {engine} ...")
+    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+
+    core_req = REQUIREMENTS_DIR / "core.txt"
+    if core_req.exists():
+        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(core_req)])
+
+    engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
+    if engine_req.exists():
+        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(engine_req)])
+
+    for patch_func in ENGINE_PATCHES.get(engine, []):
+        if patch_func == "patch_chatterbox":
+            patch_chatterbox(python)
+
+    verify_engine(python, engine)
+    print("[+] Update complete.")
 
 
 def cmd_verify(args):
-    """Verify existing installation."""
-    if not VENV_DIR.exists():
-        print("[!] No installation found. Run 'install' first.")
+    engine = args.engine
+    env_path = _env_dir(engine)
+
+    if not env_path.exists():
+        print(f"[!] No installation found for {engine}. Run 'install --engine {engine}' first.")
         sys.exit(1)
 
-    python = get_python()
-    verify_installation(python)
+    python = _python(engine)
+    all_ok = verify_engine(python, engine)
+
+    if all_ok:
+        print(f"[+] {engine} verification PASSED")
+    else:
+        print(f"[-] {engine} verification FAILED")
+        sys.exit(1)
 
 
 def cmd_models(args):
-    """Download model weights only."""
-    import nspeech.config
-    engine = os.environ.get("NSPEECH_ENGINE", "chatterbox")
-    
-    if not VENV_DIR.exists():
-        print("[!] No installation found. Run 'install' first.")
+    engine = args.engine
+    env_path = _env_dir(engine)
+
+    if not env_path.exists():
+        print(f"[!] No installation found for {engine}. Run 'install --engine {engine}' first.")
         sys.exit(1)
 
-    python = get_python()
-    download_models(python, engine=engine)
+    python = _python(engine)
+    download_models(python, engine)
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Install/update the nSpeech TTS service"
-    )
+    parser = argparse.ArgumentParser(description="Install/update nSpeech TTS service")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_install = subparsers.add_parser("install", help="Fresh install")
+    p_install.add_argument("--engine", "-e", required=True,
+                           choices=ENGINES, help="Engine to install")
     p_install.add_argument("--models", action="store_true", help="Pre-download model weights")
 
-    subparsers.add_parser("update", help="Update packages")
-    subparsers.add_parser("verify", help="Verify installation")
-    subparsers.add_parser("models", help="Download model weights")
+    p_update = subparsers.add_parser("update", help="Update packages")
+    p_update.add_argument("--engine", "-e", required=True,
+                          choices=["kokoro", "cosyvoice", "chatterbox"],
+                          help="Engine to update")
+
+    p_verify = subparsers.add_parser("verify", help="Verify installation")
+    p_verify.add_argument("--engine", "-e", required=True,
+                         choices=["kokoro", "cosyvoice", "chatterbox"],
+                         help="Engine to verify")
+
+    p_models = subparsers.add_parser("models", help="Download model weights")
+    p_models.add_argument("--engine", "-e", required=True,
+                          choices=["kokoro", "cosyvoice", "chatterbox"],
+                          help="Engine to download models for")
 
     args = parser.parse_args()
 
