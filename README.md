@@ -1,13 +1,15 @@
 # nSpeech - Text-to-Speech Service
 
-GPU-accelerated text-to-speech with zero-shot voice cloning, automatic sentence-level chunking, and streaming audio output. Engine-agnostic architecture — swap TTS backends via adapters without changing the API.
+Pluggable text-to-speech with automatic sentence-level chunking, streaming audio output,
+and per-engine virtual environment isolation. Swap TTS backends via adapters without
+changing the API.
 
 ## Architecture
 
 ```
 [Text Input] --> [Adapter Layer] --> [TTS Engine] --> [Voice Output]
-                  (chunking +        (Kokoro or     (PCM stream)
-                   streaming)         Chatterbox)
+                   (chunking +        (Kokoro or     (PCM stream)
+                    streaming)         Chatterbox)
 ```
 
 The adapter layer handles sentence-level chunking, voice cache management, and
@@ -16,40 +18,55 @@ behavior stay the same regardless of backend.
 
 | Component | Technology | Role |
 |-----------|-----------|------|
-| **Adapter** | Python interface | Chunking, streaming, voice cache routing |
-| **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, low RAM (~6MB). 8 languages, 54 voices. |
-| **TTS Engine** | Chatterbox | Optional fallback. ~3.8 GB VRAM. Supports true zero-shot `.wav` cloning. |
+| **Adapter** | Duck-typed Python | Chunking, streaming, voice cache routing |
+| **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, ~6MB RAM. 54 built-in voices. |
+| **TTS Engine** | Chatterbox | Archived. ~3.8 GB VRAM. Supports true zero-shot `.wav` cloning. |
+| **TTS Engine** | CosyVoice | Evaluation in progress. Multilingual support. |
 | **Server** | FastAPI + uvicorn | HTTP / WebSocket API + Dashboard UI |
+| **Dashboard** | NUI (Web Components) | Browser UI — engine-centric navigation |
 
 ## Quick Start
 
-### 1. Install
+### 1. Configure
+
+Copy `.env.example` to `.env` and set your engine:
 
 ```bash
-python install.py install --models
+NSPEECH_ENGINE=kokoro
+NSPEECH_VOICE_DIR=venv/kokoro/voices
+NSPEECH_MODEL_DIR=venv/kokoro/models
 ```
 
-This creates a self-contained `venv/`, installs PyTorch 2.8 (CUDA 12.8), Kokoro, Chatterbox, applies compatibility patches, and pre-downloads model weights.
+### 2. Install
 
-### 2. Run
+Per-engine installation:
+
+```bash
+python install.py install --engine kokoro --models
+```
+
+This creates `venv/kokoro/env/`, installs dependencies, and downloads model weights.
+
+### 3. Run
 
 ```bash
 python run.py
 ```
 
-All scripts (`run.py`, `benchmark.py`, `install.py`) auto-detect and use the venv — no manual activation needed. The dashboard is at `http://127.0.0.1:8000/`.
+All scripts (`run.py`, `benchmark.py`, `install.py`) auto-detect and use the correct
+venv — no manual activation needed. The dashboard is at `http://127.0.0.1:8000/`.
 
-### 3. Stop
+### 4. Stop
 
 Press `Ctrl+C` in the terminal running the server.
 
 ### Other Commands
 
 ```bash
-python install.py verify        # Check installation health
-python install.py update        # Update packages + re-patch
-python install.py models        # Download model weights only
-python benchmark.py             # Run TTS benchmarks
+python install.py verify --engine kokoro     # Check installation health
+python install.py update --engine kokoro     # Update packages
+python install.py models --engine kokoro     # Download model weights only
+python benchmark.py                           # Run TTS benchmarks
 ```
 
 ## Usage
@@ -57,16 +74,28 @@ python benchmark.py             # Run TTS benchmarks
 ### HTTP API
 
 ```bash
-# Single-shot TTS
+# Single-shot TTS (streaming)
 curl -X POST http://localhost:8000/tts \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "voice_name": "default"}' \
-  --output response.wav
+  -d '{"text": "Hello world", "voice_name": "af_heart", "output_format": "mp3"}' \
+  --output response.mp3
 
-# Clone a voice
+# OpenAI compatible endpoint
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model": "kokoro", "input": "Hello world", "voice": "af_heart", "response_format": "mp3"}' \
+  --output response.mp3
+
+# Clone a voice (Chatterbox engine)
 curl -X POST http://localhost:8000/voices/clone \
   -F "file=@reference.wav" \
-  -F "name=my_voice"
+  -F "name=my_voice" \
+  -F "engine=chatterbox"
+
+# Mix two Kokoro voices
+curl -X POST http://localhost:8000/voices/mix \
+  -H "Content-Type: application/json" \
+  -d '{"name": "blend", "voice_a": "af_heart", "voice_b": "am_michael", "ratio": 0.5}'
 
 # List voices
 curl http://localhost:8000/voices
@@ -80,63 +109,97 @@ Connect to `ws://localhost:8000/ws/tts` and send:
 {
   "type": "tts_stream",
   "text": "Here are today's headlines. First, the weather...",
-  "voice_name": "default"
+  "voice_name": "af_heart",
+  "output_format": "mp3"
 }
 ```
 
-Receive PCM chunks as they are generated:
+Receive encoded audio chunks as binary frames, followed by:
 
 ```json
-{
-  "type": "tts_chunk",
-  "data": "<base64-encoded-pcm-24khz>",
-  "sample_rate": 24000,
-  "is_final": false
-}
+{"is_final": true}
 ```
 
 ## Performance
 
 | Metric | Target | Actual (Kokoro CPU) |
 |--------|--------|---------------------|
-| First audio byte | <1000 ms | ~400 - 700 ms |
+| First audio byte | <1000 ms | ~400-700 ms |
 | Full generation (20 words) | <1500 ms | ~1000 ms |
 | Voice cache load | <10 ms | Instant |
-
-*Note on Voice Cloning:* The default Kokoro engine does not support zero-shot voice cloning directly from .wav files due to its optimized architecture. Cloning requests via Kokoro are stubbed or require voice blending. True zero-shot extraction requires routing to the Chatterbox engine.
+| Model cold start | <5000 ms | <1 s |
 
 ## Project Structure
 
-For full API documentation including WebSocket, REST, and OpenAI API compatible endpoints, please refer to [API_REFERENCE.md](docs/API_REFERENCE.md).
-
 ```
 nSpeech/
-├── install.py              # Installer: install/update/verify/models
+├── install.py              # Per-engine installer
 ├── run.py                  # Server launcher (auto-detects venv)
 ├── benchmark.py            # TTS benchmark (auto-detects venv)
 ├── requirements/           # Per-engine dependency lists
 │   ├── core.txt            # FastAPI, soundfile, numpy, etc.
 │   ├── kokoro.txt          # kokoro-onnx
-│   └── chatterbox.txt      # chatterbox-tts + deps
+│   ├── chatterbox.txt      # chatterbox-tts + deps
+│   └── cosyvoice.txt       # CosyVoice deps
 ├── docs/
-│   └── nSpeech_SPEC.md     # Service specification
+│   ├── nSpeech_SPEC.md     # Full service specification
+│   ├── API_REFERENCE.md    # API usage examples
+│   ├── cosyvoice_notes.md  # CosyVoice integration notes
+│   └── nSpeech_DEV_PLAN.md # Development roadmap
 ├── src/
 │   └── nspeech/
-│       ├── __init__.py
-│       ├── engines/
-│       │   ├── chatterbox.py   # Chatterbox adapter
-│       │   └── kokoro.py       # Kokoro ONNX adapter (default)
-│       ├── tts.py          # Abstract protocol and engine router
-│       └── server.py       # FastAPI HTTP / WebSocket server / Web UI
-└── voices/                 # Voice samples & caches
-    ├── *.wav
-    └── *.pt                # Cached voice embeddings
+│       ├── config.py       # Environment config (fail-fast)
+│       ├── tts.py          # Adapter protocol + engine router
+│       ├── server.py       # FastAPI HTTP / WebSocket server
+│       └── engines/
+│           ├── kokoro.py       # Kokoro ONNX adapter (default)
+│           └── chatterbox.py   # Chatterbox adapter (archived)
+├── web/                    # NUI dashboard
+│   ├── index.html
+│   ├── css/main.css
+│   ├── js/app.js
+│   └── pages/
+│       ├── home.html
+│       ├── kokoro-generate.html
+│       └── kokoro-voices.html
+├── lib/
+│   └── nui_wc2/            # Git submodule — NUI library
+├── venv/                   # Per-engine virtual environments
+│   ├── kokoro/
+│   ├── chatterbox/
+│   └── cosyvoice/
+└── voices_samples/         # Reference audio samples
 ```
+
+For full API documentation including WebSocket, REST, and OpenAI API compatible
+endpoints, please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
+
+## Engine Differences
+
+| Feature | Kokoro | Chatterbox | CosyVoice |
+|---------|--------|------------|-----------|
+| Hardware | CPU | GPU (CUDA) | GPU (CUDA) |
+| RAM/VRAM | ~6 MB | ~3.8 GB | TBD |
+| Built-in voices | 54 | 0 | 0 |
+| Voice cloning | Stubbed (fallback) | True zero-shot | TBD |
+| Voice mixing | Yes | No | TBD |
+| Languages | English (+ partial multilingual) | English | Multilingual |
+| Latency | Very low | Medium | TBD |
+
+**Note on Voice Cloning:** Kokoro's ONNX package does not include the style-extractor
+network required for true zero-shot cloning from `.wav` files. Clone requests via Kokoro
+are stubbed to a default voice. True zero-shot extraction requires routing to the
+Chatterbox engine.
 
 ## Notes
 
-- **Venv**: All scripts auto-detect and re-launch inside `venv/` if needed. No manual activation required.
-- **PyTorch CUDA**: The installer pins `torch==2.8.0+cu128` and reinstalls it after Chatterbox's `torch==2.6.0` dependency.
-- **Patches**: The installer patches Chatterbox's watermarking module (`resemble-perth` deadlocks on Windows/Python 3.13) to use a no-op dummy watermarker.
-- **Model weights**: First run downloads ~2 GB from HuggingFace. Use `--models` to pre-download during install.
-- **Engine selection**: The default engine is Kokoro. Chatterbox is available as a fallback for voice cloning.
+- **Venvs**: All scripts auto-detect and re-launch inside the correct `venv/<engine>/env/`
+  if needed. No manual activation required.
+- **Per-engine isolation**: Each engine has its own venv to prevent dependency conflicts
+  (e.g., CosyVoice needs transformers 4.51.3, others need 5.x).
+- **Model weights**: First run downloads ~2 GB from HuggingFace. Use `--models` to
+  pre-download during install.
+- **Engine selection**: The default engine is Kokoro. Set `NSPEECH_ENGINE` in `.env`
+  to switch. Individual requests can override via the `engine` parameter.
+- **Patches**: The installer patches Chatterbox's watermarking module (`resemble-perth`
+  deadlocks on Windows/Python 3.13) to use a no-op dummy watermarker.

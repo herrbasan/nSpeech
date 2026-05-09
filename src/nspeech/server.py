@@ -466,7 +466,7 @@ async def clone_voice_endpoint(
     exaggeration: float = Form(0.5)
 ):
     """Clone a voice and generate an engine embedding."""
-    engine_name = engine or config.NSPECH_ENGINE
+    engine_name = engine or config.NSPEECH_ENGINE
 
     try:
         tts_engine = get_engine(engine_name)

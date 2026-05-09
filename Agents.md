@@ -27,7 +27,7 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 - **Audio Standard:** PCM 24kHz mono float32. The adapter layer normalizes; engines may emit differently.
 - **Voice Cache:** `.pt` files in `venv/<engine>/voices/`. Format is engine-specific; the adapter serializes whatever the engine gives it.
 - **Chunking:** Sentence-level. No engine does its own chunking -- the adapter splits text and calls `generate()` per sentence.
-- **Streaming:** Adapter yields `(pcm_tensor, is_final)` tuples. Server base64-encodes each chunk. Caller starts playback immediately.
+- **Streaming:** Adapter yields `(pcm_tensor, is_final)` tuples. HTTP streams raw binary chunks via `StreamingResponse`. WebSocket sends binary frames (encoded audio) or raw PCM bytes. Caller starts playback immediately.
 - **Engine Loading:** Lazy, on first request. Keep resident with LRU eviction (unload after N minutes idle). No preload at startup.
 - **Configuration:** Environment variables or a single `config.py` module. Missing required config raises at import time -- never silently default.
 - **Benchmarking:** Every new engine adapter gets a benchmark run against the same phrase set. Numbers go in the adapter docstring.
@@ -55,7 +55,7 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 ### Candidates to Evaluate
 - **LuxTTS:** TBD
 - **IndexTTS 2:** TBD
-- **CosyVoice 2:** TBD
+- **CosyVoice:** In evaluation. Install script and venv support exist. Key integration lessons documented in `docs/cosyvoice_notes.md`. Adapter not yet complete.
 
 ### Open Requirements
 - **Emotional Cues:** No current engine supports expressive/emotional control (e.g., sad, excited, whispering). A future engine must support SSML or prompt-driven emotion markers.
@@ -95,7 +95,7 @@ Each TTS technology runs in its own venv on dedicated hardware. No shared depend
 - All text must include `<|endofprompt|>` token
 - Max cloning audio: 30 seconds
 - Voice cache load: `torch.load(path, weights_only=False, map_location='cpu')`
-- Full notes in `cosyvoice_notes.md`
+- Full notes in `docs/cosyvoice_notes.md`
 
 ### Running Multiple Instances
 Each host runs independently:
@@ -124,6 +124,7 @@ web/
   css/main.css            # App-specific styles
   js/app.js               # Router setup, nav data, global actions
   pages/
+    home.html             # Dashboard home
     kokoro-generate.html  # Kokoro: text input, voice select, generate/stop
     kokoro-voices.html    # Kokoro: voice browser, mix voices
     # Future engines get their own pages when adapters are created:
@@ -134,6 +135,7 @@ lib/
     NUI/css/nui-theme.css # Design tokens and component styles
     NUI/assets/           # Icon sprite, patterns
     documentation/        # Component docs, guides, components.json
+voices_samples/           # Reference audio samples for testing
 ```
 
 ### How It's Served
@@ -158,13 +160,10 @@ Engines are only added to navigation when their adapter actually exists and is i
 
 ### Current State (2026-05-08)
 - NUI submodule added and serving correctly
-- Basic page structure created but needs restructuring:
-  - Navigation should be engine-centric (not "Engines", "Voices" as global sections)
-  - Each engine gets its own Generate and Voices pages
-  - Kokoro: generate page + mix voices page (no cloning)
-  - CosyVoice, etc.: added when adapters are ready
+- Navigation is engine-centric: Kokoro group with Generate and Voices pages
+- Pages exist: `home.html`, `kokoro-generate.html`, `kokoro-voices.html`
 - Server verified working — dashboard loads, NUI components render, API calls succeed
-- Layout issues to fix: page content sizing, sidebar navigation structure
+- Remaining: page content sizing refinements, add CosyVoice pages when adapter is ready
 
 ### NUI Reference for Agents
 - **Source of truth:** `lib/nui_wc2/documentation/components.json`
