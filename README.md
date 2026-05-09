@@ -8,10 +8,9 @@ changing the API.
 
 ```
 [Text Input] --> [Adapter Layer] --> [TTS Engine] --> [Voice Output]
-                   (chunking +        (Kokoro or     (PCM stream)
-                    streaming)         Chatterbox)
-```
+                   (chunking +        (Kokoro,         (PCM 24kHz)
 
+                    streaming)         CosyVoice,       mono float32)
 The adapter layer handles sentence-level chunking, voice cache management, and
 PCM streaming. The underlying TTS engine is pluggable — the API and streaming
 behavior stay the same regardless of backend.
@@ -19,9 +18,11 @@ behavior stay the same regardless of backend.
 | Component | Technology | Role |
 |-----------|-----------|------|
 | **Adapter** | Duck-typed Python | Chunking, streaming, voice cache routing |
-| **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, ~6MB RAM. 54 built-in voices. |
-| **TTS Engine** | Chatterbox | Archived. ~3.8 GB VRAM. Supports true zero-shot `.wav` cloning. |
-| **TTS Engine** | CosyVoice | Evaluation in progress. Multilingual support. |
+| **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, ~6MB RAM. 54 built-in voices. Consistent pacing. |
+
+| **TTS Engine** | CosyVoice3-0.5B (GPU) | GPU required (~3.5 GB VRAM). Multilingual (9 languages), zero-shot voice cloning. Known prosody jitter on short phrases. |
+
+| **TTS Engine** | Chatterbox | Archived. ~3.8 GB VRAM. Works well, English-only. Not deployed. |
 | **Server** | FastAPI + uvicorn | HTTP / WebSocket API + Dashboard UI |
 | **Dashboard** | NUI (Web Components) | Browser UI — engine-centric navigation |
 
@@ -153,6 +154,7 @@ nSpeech/
 │       ├── server.py       # FastAPI HTTP / WebSocket server
 │       └── engines/
 │           ├── kokoro.py       # Kokoro ONNX adapter (default)
+│           ├── cosyvoice.py    # CosyVoice3 adapter
 │           └── chatterbox.py   # Chatterbox adapter (archived)
 ├── web/                    # NUI dashboard
 │   ├── index.html
@@ -176,20 +178,20 @@ endpoints, please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 
 ## Engine Differences
 
-| Feature | Kokoro | Chatterbox | CosyVoice |
-|---------|--------|------------|-----------|
-| Hardware | CPU | GPU (CUDA) | GPU (CUDA) |
-| RAM/VRAM | ~6 MB | ~3.8 GB | TBD |
-| Built-in voices | 54 | 0 | 0 |
-| Voice cloning | Stubbed (fallback) | True zero-shot | TBD |
-| Voice mixing | Yes | No | TBD |
-| Languages | English (+ partial multilingual) | English | Multilingual |
-| Latency | Very low | Medium | TBD |
+| Feature | Kokoro | CosyVoice3-0.5B | Chatterbox |
+|---------|--------|------------------|------------|
+| Hardware | CPU | GPU (CUDA, ~3.5 GB VRAM) | GPU (CUDA, ~3.8 GB) |
+| RAM/VRAM | ~6 MB | ~3.5 GB | ~3.8 GB |
+| Built-in voices | 54 | 0 (clone required) | 0 (clone required) |
+| Voice cloning | Stubbed (fallback) | True zero-shot | True zero-shot |
+| Voice mixing | Yes | No | No |
+| Languages | English (+ partial) | 9 languages | English |
+| Latency | Very low (~500ms) | Medium (~1.5s TTFA) | Medium |
+| Prosody | Consistent | Variable (0.5B limitation) | Good |
 
-**Note on Voice Cloning:** Kokoro's ONNX package does not include the style-extractor
-network required for true zero-shot cloning from `.wav` files. Clone requests via Kokoro
-are stubbed to a default voice. True zero-shot extraction requires routing to the
-Chatterbox engine.
+**Note on CosyVoice3 Prosody:** The 0.5B model has known pacing jitter — speaking rate varies
+per sentence, with odd pauses on short phrases. The 1.5B model (unreleased) is expected to fix
+this. Kokoro-82M remains the benchmark for consistent pacing.
 
 ## Notes
 

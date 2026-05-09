@@ -55,14 +55,22 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 ### Candidates to Evaluate
 - **LuxTTS:** TBD
 - **IndexTTS 2:** TBD
-- **CosyVoice:** In evaluation. Install script and venv support exist. Key integration lessons documented in `docs/cosyvoice_notes.md`. Adapter not yet complete.
+- **CosyVoice3:** Evaluated 2026-05-09. Operational with known prosody limitations on 0.5B model. 1.5B model not yet released. See CosyVoice3 Integration Lessons above.
 
 ### Open Requirements
-- **Emotional Cues:** No current engine supports expressive/emotional control (e.g., sad, excited, whispering). A future engine must support SSML or prompt-driven emotion markers.
-- **German Language:** No current engine produces acceptable German speech. Multilingual support (at minimum English + German) is a hard requirement for the next engine integration.
+- **Emotional Cues:** CosyVoice3 supports inline emotion tags (`<|sad|>`, `<|angry|>`, etc.) and non-verbal sounds (`[breath]`). Not yet exposed in the web UI.
+- **German Language:** Cross-lingual via `inference_instruct2` with language hint. Quality varies; untested with native German speakers.
+- **Reliable Prosody:** CosyVoice3-0.5B has significant pacing jitter — the 1.5B model (unreleased) is the expected fix. Kokoro-82M remains the benchmark for consistent pacing.
 
 ### Current Project State
-The text-to-speech service is highly stable and operational for high-speed, low-resource streaming using Kokoro's rich set of built-in voices. The primary limitation moving forward is the lack of lightweight zero-shot cloning, meaning new voices must either be blended algorithmically from built-in profiles or processed through a separate pipeline.
+The text-to-speech service supports two operational engines:
+- **Kokoro-82M** (CPU, FATTEN): Ultra-fast streaming, 54 built-in voices, English only. Consistently paced, proven reliability. The benchmark for prosody quality.
+- **CosyVoice3-0.5B** (GPU, BADKID): Multilingual (9 languages), zero-shot voice cloning. Operational but with known prosody limitations — variable speaking rate per sentence. 1.5B model expected to fix prosody but not yet released.
+- **Chatterbox** (GPU): Archived. Works well but English-only, not deployed.
+
+Voice management supports Preview → Save flow with streaming preview audio. In-memory previews appear under "Previews" tab, persisted voices under "Saved" tab. Per-engine voice caches stored as `.pt` files in `venv/<engine>/voices/`.
+
+Logging uses nLogger-compatible JSON Lines format, output to `logs/nspeech.log` (rolling 10MB). Thread crash capture via `threading.excepthook` ensures CosyVoice LLM thread errors are visible in logs.
 
 ## Multi-Host Deployment Architecture
 
@@ -85,17 +93,47 @@ Each TTS technology runs in its own venv on dedicated hardware. No shared depend
 - Set `NSPEECH_MODEL_DIR=venv/kokoro/models` in `.env`
 
 **CosyVoice (BADKID):**
-- `python install.py install --engine cosyvoice`
-- Creates `venv/cosyvoice/env/` and `venv/cosyvoice/models/`
-- Set `NUMBA_DISABLE_JIT=1` environment variable
-- Add Matcha-TTS to Python path in run.py
+- `python install.py install --engine cosyvoice --models`
+- Creates `venv/cosyvoice/env/`, `venv/cosyvoice/models/`, and `venv/cosyvoice/voices/`
+- Downloads CosyVoice3-0.5B model (~3.5 GB) from HuggingFace to `venv/cosyvoice/models/pretrained_models/`
+- Clones CosyVoice repo with Matcha-TTS submodule to `venv/cosyvoice/models/CosyVoice/`
+- GPU-only: install script reinstalls torch with CUDA and onnxruntime-gpu
+- RTX 5090 (Blackwell) requires PyTorch nightly (`cu128`) — install script installs `cu126` as stable fallback
 
-### Key CosyVoice Lessons (2026-05-07)
-- `inference_instruct2` with `zero_shot_spk_id` WORKS; `inference_cross_lingual` FAILS; `inference_zero_shot` with spk_id produces ~0.12s audio
-- All text must include `<|endofprompt|>` token
-- Max cloning audio: 30 seconds
-- Voice cache load: `torch.load(path, weights_only=False, map_location='cpu')`
-- Full notes in `docs/cosyvoice_notes.md`
+### CosyVoice3 Integration Lessons (2026-05-09)
+
+**What works:**
+- `inference_instruct2` with `zero_shot_spk_id` (cloned voices) — the only reliable inference path for English
+- Per-sentence chunking via regex split with `stream=False` — progressive delivery without hift boundary artifacts
+- `text_frontend=False` — bypasses CosyVoice's internal wetext normalization (avoids special character issues)
+- Voice preview + save flow via `/voices/preview` (in-memory clone) and `/voices/clone` (persistent)
+- Cross-lingual: cloned voice + language parameter uses `inference_instruct2` with language hint
+
+**What fails:**
+- `inference_zero_shot` with Chinese prompt wav → English text produces gibberish (Chinese phonetics)
+- `inference_cross_lingual` with per-sentence texts → assertion crash (`<|endofprompt|>` missing in segments)
+- CosyVoice's internal `stream=True` → hift STFT cache boundary artifacts cause garbled audio
+- `inference_instruct2` is a CosyVoice2 method — it works with V3 but the official V3 interface is different
+
+**Critical requirements:**
+- `<|endofprompt|>` token (ID 151646) MUST be in the LLM's prompt_text for every inference call
+- Qwen3 sliding window attention MUST be disabled on Blackwell/PyTorch nightly (`use_sliding_window=False`)
+- `text_frontend=False` to prevent CosyVoice from re-splitting already-chunked sentences
+- `torchaudio.load/save` monkey-patched with `soundfile` to bypass torchcodec DLL requirement
+- `setuptools<70` pinned for `pkg_resources` (needed by pyworld, openai-whisper)
+
+**Known limitations:**
+- 0.5B model has inconsistent prosody — variable speaking rate per sentence, odd pauses on short phrases
+- 1.5B model not yet released (would likely fix prosody)
+- `torch.cuda.amp.autocast` deprecation warning (CosyVoice3 uses old API, harmless with fp16=False)
+- ONNX Memcpy warnings (harmless, from campplus/speech_tokenizer ONNX models on GPU)
+- Voice pacing is consistent across cold starts (model-level, not runtime nondeterminism)
+
+**Dependencies (requirements/cosyvoice.txt):**
+- `gdown==5.1.0`, `pyarrow==18.1.0` — missing from original CosyVoice requirements
+- `openai-whisper>=20231117` — PyPI wheel broken on Python 3.13, override with `pip install git+https://github.com/openai/whisper.git`
+- `onnxruntime` replaced by `onnxruntime-gpu>=1.21.0` for GPU inference
+- `transformers==4.51.3`, `tokenizers==0.21.0`, `huggingface-hub==0.30.0` — pinned for CosyVoice3 compatibility
 
 ### Running Multiple Instances
 Each host runs independently:
@@ -122,13 +160,16 @@ The dashboard is built with **NUI** (`lib/nui_wc2/` — git submodule of https:/
 web/
   index.html              # App shell (<nui-app> boilerplate)
   css/main.css            # App-specific styles
-  js/app.js               # Router setup, nav data, global actions
+  js/app.js               # Router setup, dynamic engine-aware navigation
   pages/
-    home.html             # Dashboard home
-    kokoro-generate.html  # Kokoro: text input, voice select, generate/stop
-    kokoro-voices.html    # Kokoro: voice browser, mix voices
-    # Future engines get their own pages when adapters are created:
-    # cosyvoice-generate.html, cosyvoice-voices.html, etc.
+    home.html             # Dashboard home (shows active engine from /engine API)
+    kokoro/
+      generate.html       # Kokoro: text, voice select, generate/stop
+      voices.html         # Kokoro: voice browser, mix voices
+    cosyvoice/
+      generate.html       # CosyVoice: text, voice, instruct, language, speed
+      voices.html         # CosyVoice: clone, preview, save, delete
+    # Future engines follow the same {engine}/{page}.html pattern
 lib/
   nui_wc2/                # Git submodule — the NUI library itself
     NUI/nui.js            # Core module (import this)
@@ -136,6 +177,7 @@ lib/
     NUI/assets/           # Icon sprite, patterns
     documentation/        # Component docs, guides, components.json
 voices_samples/           # Reference audio samples for testing
+logs/                     # nLogger-compatible JSON Lines server logs
 ```
 
 ### How It's Served
@@ -145,11 +187,7 @@ FastAPI (`src/nspeech/server.py`) mounts static directories:
 - `GET /` returns `web/index.html` via FileResponse
 
 ### Navigation Structure
-The sidebar (`nui-link-list`) is organized **per engine**. Each engine gets two pages:
-1. **Generate** — Text input, voice selector (`nui-select`), generate/stop buttons, audio player
-2. **Voices** — Voice management. Capabilities vary by engine (Kokoro: mix voices; CosyVoice: clone from audio)
-
-Engines are only added to navigation when their adapter actually exists and is installed.
+The sidebar is generated dynamically from `GET /engine` — only the active engine's pages appear. Each engine gets two pages: **Generate** (text input, controls) and **Voices** (voice management). The navigation is data-driven via `buildNavigation(engine)` in `web/js/app.js`.
 
 ### Key NUI Patterns Used
 - **App shell:** `<nui-app>` with `<nui-app-header>`, `<nui-sidebar>`, `<nui-content>/<nui-main>`
