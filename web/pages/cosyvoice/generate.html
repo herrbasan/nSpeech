@@ -45,6 +45,13 @@
             </nui-select>
         </nui-input-group>
 
+        <nui-input-group>
+            <label for="cv-speed">Speed: <span id="cv-speed-val">1.0</span></label>
+            <nui-input>
+                <input type="range" id="cv-speed" min="0.5" max="2.0" step="0.1" value="1.0">
+            </nui-input>
+        </nui-input-group>
+
         <nui-button-container gap="medium">
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
@@ -69,6 +76,8 @@ function init(element, params, nui) {
     const textArea = element.querySelector('#cv-text');
     const instructEl = element.querySelector('#cv-instruct');
     const languageEl = element.querySelector('#cv-language');
+    const speedEl = element.querySelector('#cv-speed');
+    const speedValEl = element.querySelector('#cv-speed-val');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
     const audio = element.querySelector('#cv-audio');
@@ -136,6 +145,7 @@ function init(element, params, nui) {
             if (instruct) params.set('instruct_text', instruct);
             const lang = languageEl.value;
             if (lang) params.set('language', lang);
+            params.set('speed', speedEl.value);
 
             try {
                 const response = await fetch(`/tts?${params.toString()}`, { signal: abortController.signal });
@@ -172,6 +182,7 @@ function init(element, params, nui) {
     element.show = () => {
         selectEl.value = 'default';
         languageEl.value = 'en';
+        speedEl.addEventListener('input', () => speedValEl.textContent = speedEl.value);
         loadVoices();
     };
     element.hide = () => stop();

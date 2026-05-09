@@ -171,6 +171,7 @@ class TTSRequest(BaseModel):
     exaggeration: float = 0.5
     instruct_text: Optional[str] = None
     language: Optional[str] = None
+    speed: float = 1.0
     output_format: str = "wav"
     transcode_sample_rate: int = 24000
     transcode_bitrate: str = "128k"
@@ -215,10 +216,10 @@ def serve_dashboard():
 
 @app.get("/tts")
 def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[str] = None, output_format: str = "mp3",
-                     instruct_text: Optional[str] = None, language: Optional[str] = None):
+                     instruct_text: Optional[str] = None, language: Optional[str] = None, speed: float = 1.0):
     """Wrapper around POST /tts to allow native HTML <audio src="..."> streaming over GET."""
     req = TTSRequest(text=text, voice_name=voice_name, engine=engine, output_format=output_format,
-                     instruct_text=instruct_text, language=language)
+                     instruct_text=instruct_text, language=language, speed=speed)
     return tts_endpoint(req)
 
 
@@ -281,6 +282,7 @@ async def websocket_tts_endpoint(websocket: WebSocket):
         exaggeration = float(data.get("exaggeration", 0.5))
         instruct_text = data.get("instruct_text")
         language = data.get("language")
+        speed = float(data.get("speed", 1.0))
         transcode_sample_rate = int(data.get("transcode_sample_rate", 24000))
         transcode_bitrate = data.get("transcode_bitrate", "128k")
 
@@ -299,7 +301,7 @@ async def websocket_tts_endpoint(websocket: WebSocket):
         start_time = time.time()
 
         # Start generator
-        generator = engine.generate(text, exaggeration=exaggeration, instruct_text=instruct_text, language=language)
+        generator = engine.generate(text, exaggeration=exaggeration, instruct_text=instruct_text, language=language, speed=speed)
 
         # Raw PCM streaming
         if output_format == "pcm":
@@ -424,7 +426,7 @@ def tts_endpoint(req: TTSRequest):
 
         try:
             if req.output_format == "pcm":
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, instruct_text=req.instruct_text, language=req.language):
+                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language):
                     mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
@@ -432,7 +434,7 @@ def tts_endpoint(req: TTSRequest):
 
             if req.output_format == "wav":
                 yield generate_streaming_wav_header(req.transcode_sample_rate)
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, instruct_text=req.instruct_text, language=req.language):
+                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language):
                     mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
@@ -457,7 +459,7 @@ def tts_endpoint(req: TTSRequest):
 
             last_pos = 0
             chunk_idx = 0
-            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, instruct_text=req.instruct_text, language=req.language):
+            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language):
                 mark_engine_used(req.engine)
                 engine_time = _time.time()
                 print(f"[Backend] [Chunk {chunk_idx}] Engine logic finished at {engine_time - start_time:.3f}s")

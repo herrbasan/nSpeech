@@ -1,12 +1,18 @@
 """
 CosyVoice TTS Engine Adapter
 Implements zero-shot multilingual voice cloning via CosyVoice3.
-Uses instruct2 for emotions/languages, zero_shot for basic synthesis.
 
-Benchmarks (RTX 5090, CosyVoice3-0.5B):
-  Load: ~11s, TTFA: 1450-2000ms, RTF: 0.50-0.62, Clone: ~570ms
+Uses inference_instruct2 for all generation paths with per-sentence chunking.
+text_frontend=False bypasses wetext normalization. Sliding window disabled
+on Qwen3 backbone for stable attention (RTX 5090 pyTorch nightly).
+
+Adapter conventions:
+- generate(): yields (pcm_tensor, is_final) per sentence chunk
+- clone(): extracts speaker embedding, saves spk2info as .pt cache
+- load_voice(): restores spk2info from .pt cache to model memory
 """
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -22,6 +28,7 @@ import torchaudio  # noqa: E402
 
 torch.backends.cuda.enable_flash_sdp(False)
 torch.backends.cuda.enable_mem_efficient_sdp(False)
+torch.backends.cuda.enable_math_sdp(True)
 
 def _sf_load(uri, *args, **kwargs):
     data, sr = soundfile.read(uri)
@@ -61,6 +68,8 @@ class CosyvoiceAdapter:
 
         self.model = AutoModel(model_dir=str(_model_path))
         self.sample_rate = self.model.sample_rate
+
+        self.model.model.llm.llm.model.config.use_sliding_window = False
 
         self.cache_dir = Path(config.NSPEECH_VOICE_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -121,8 +130,11 @@ class CosyvoiceAdapter:
 
     def generate(self, text, voice_name=None, instruct_text=None, language=None, speed=None, exaggeration=None, **kwargs):
         _speed = speed if speed is not None else 1.0
-
         spk_id, prompt_wav = self._resolve_voice(voice_name)
+
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+        if not sentences:
+            sentences = [text]
 
         if instruct_text:
             _prompt = f"{instruct_text}<|endofprompt|>"
@@ -131,16 +143,32 @@ class CosyvoiceAdapter:
         else:
             _prompt = "You are a helpful assistant.<|endofprompt|>"
 
-        chunk_gen = self.model.inference_instruct2(
-            tts_text=text, instruct_text=_prompt, prompt_wav=prompt_wav,
-            zero_shot_spk_id=spk_id, stream=True, speed=_speed,
-        )
+        for sentence in sentences:
+            saved_prompt = None
+            saved_prompt_len = None
+            if spk_id and (instruct_text or (language and language != "en")):
+                spk = self.model.frontend.spk2info[spk_id]
+                saved_prompt = spk.get("prompt_text")
+                saved_prompt_len = spk.get("prompt_text_len")
+                prompt_token, prompt_token_len = self.model.frontend._extract_text_token(_prompt)
+                spk["prompt_text"] = prompt_token
+                spk["prompt_text_len"] = prompt_token_len
 
-        for chunk in chunk_gen:
-            pcm = chunk["tts_speech"].squeeze()
-            if pcm.numel() == 0:
-                continue
-            yield pcm.cpu(), False
+            try:
+                chunk_gen = self.model.inference_instruct2(
+                    tts_text=sentence, instruct_text=_prompt, prompt_wav=prompt_wav,
+                    zero_shot_spk_id=spk_id, stream=False, speed=_speed,
+                    text_frontend=False,
+                )
+                for chunk in chunk_gen:
+                    pcm = chunk["tts_speech"].squeeze()
+                    if pcm.numel() == 0:
+                        continue
+                    yield pcm.cpu(), False
+            finally:
+                if saved_prompt is not None:
+                    self.model.frontend.spk2info[spk_id]["prompt_text"] = saved_prompt
+                    self.model.frontend.spk2info[spk_id]["prompt_text_len"] = saved_prompt_len
 
     def _resolve_voice(self, voice_name):
         if voice_name and voice_name != "default":
