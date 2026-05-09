@@ -18,9 +18,40 @@ from pydantic import BaseModel
 
 import torch
 from nspeech import config
+from nspeech.logger import get as get_logger, info, error, debug
 from nspeech.tts import get_engine
 
 app = FastAPI(title="nSpeech", description="Pluggable Streaming TTS Service")
+
+
+@app.on_event("startup")
+async def startup():
+    import sys as _sys
+    def _thread_excepthook(args):
+        error("unhandled_thread_exception", {
+            "thread": args.thread.name if args.thread else "unknown",
+            "type": str(args.exc_type),
+            "msg": str(args.exc_value),
+        }, "server")
+        if args.exc_traceback:
+            import traceback
+            traceback.print_exception(args.exc_type, args.exc_value, args.exc_traceback)
+    _sys.excepthook = _thread_excepthook
+    import threading
+    threading.excepthook = _thread_excepthook
+    get_logger().info("server_start", extra={"meta": {"engine": config.NSPEECH_ENGINE, "host": config.NSPEECH_HOST, "port": config.NSPEECH_PORT}, "category": "server"})
+
+
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start = time.time()
+    response = await call_next(request)
+    ms = int((time.time() - start) * 1000)
+    get_logger().info(
+        f"{request.method} {request.url.path}",
+        extra={"meta": {"status": response.status_code, "ms": ms}, "category": "http"}
+    )
+    return response
 
 web_dir = Path(__file__).parent.parent.parent / "web"
 lib_dir = Path(__file__).parent.parent.parent / "lib"
@@ -93,9 +124,9 @@ def get_all_voices() -> List[Dict[str, Any]]:
             })
             existing_names.add(base_name)
 
-    # Inject Kokoro built-in voices
-    try:
-        if getattr(config, "NSPEECH_ENGINE", "kokoro") == "kokoro" or getattr(config, "NSPEECH_PRELOAD_MODEL", False):
+    # Inject Kokoro built-in voices (only for kokoro engine)
+    if getattr(config, "NSPEECH_ENGINE", "kokoro") == "kokoro":
+        try:
             k_eng = get_engine("kokoro")
             for builtin in k_eng.pipeline.get_voices():
                 voices.append({
@@ -104,9 +135,23 @@ def get_all_voices() -> List[Dict[str, Any]]:
                     "voice_type": "builtin",
                     "engines": [{"name": "kokoro", "cached": True, "latency_tier": "fast"}]
                 })
-    except Exception as e:
-        print(f"Failed to fetch kokoro voices: {e}")
-        pass
+        except Exception as e:
+            print(f"Failed to fetch kokoro voices: {e}")
+
+    # Inject in-memory preview voices (CosyVoice spk2info)
+    if getattr(config, "NSPEECH_ENGINE", "") == "cosyvoice":
+        try:
+            c_eng = get_engine("cosyvoice")
+            for key in c_eng.model.frontend.spk2info:
+                if key.startswith("__preview__"):
+                    voices.append({
+                        "name": key,
+                        "source_file": "in-memory",
+                        "voice_type": "preview",
+                        "engines": [{"name": "cosyvoice", "cached": True}]
+                    })
+        except Exception:
+            pass
 
     return voices
 
@@ -124,6 +169,8 @@ class TTSRequest(BaseModel):
     voice_name: str = "default"
     engine: Optional[str] = None
     exaggeration: float = 0.5
+    instruct_text: Optional[str] = None
+    language: Optional[str] = None
     output_format: str = "wav"
     transcode_sample_rate: int = 24000
     transcode_bitrate: str = "128k"
@@ -153,6 +200,11 @@ def health_endpoint():
     return {"status": "ok", "default_engine": config.NSPEECH_ENGINE}
 
 
+@app.get("/engine")
+def engine_info():
+    return {"engine": config.NSPEECH_ENGINE}
+
+
 @app.get("/", response_class=HTMLResponse)
 def serve_dashboard():
     index = web_dir / "index.html"
@@ -162,9 +214,11 @@ def serve_dashboard():
 
 
 @app.get("/tts")
-def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[str] = None, output_format: str = "mp3"):
+def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[str] = None, output_format: str = "mp3",
+                     instruct_text: Optional[str] = None, language: Optional[str] = None):
     """Wrapper around POST /tts to allow native HTML <audio src="..."> streaming over GET."""
-    req = TTSRequest(text=text, voice_name=voice_name, engine=engine, output_format=output_format)
+    req = TTSRequest(text=text, voice_name=voice_name, engine=engine, output_format=output_format,
+                     instruct_text=instruct_text, language=language)
     return tts_endpoint(req)
 
 
@@ -225,6 +279,8 @@ async def websocket_tts_endpoint(websocket: WebSocket):
         engine_name = data.get("engine", None)
         output_format = data.get("output_format", "mp3")
         exaggeration = float(data.get("exaggeration", 0.5))
+        instruct_text = data.get("instruct_text")
+        language = data.get("language")
         transcode_sample_rate = int(data.get("transcode_sample_rate", 24000))
         transcode_bitrate = data.get("transcode_bitrate", "128k")
 
@@ -243,7 +299,7 @@ async def websocket_tts_endpoint(websocket: WebSocket):
         start_time = time.time()
 
         # Start generator
-        generator = engine.generate(text, exaggeration=exaggeration)
+        generator = engine.generate(text, exaggeration=exaggeration, instruct_text=instruct_text, language=language)
 
         # Raw PCM streaming
         if output_format == "pcm":
@@ -368,7 +424,7 @@ def tts_endpoint(req: TTSRequest):
 
         try:
             if req.output_format == "pcm":
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration):
+                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, instruct_text=req.instruct_text, language=req.language):
                     mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
@@ -376,7 +432,7 @@ def tts_endpoint(req: TTSRequest):
 
             if req.output_format == "wav":
                 yield generate_streaming_wav_header(req.transcode_sample_rate)
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration):
+                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, instruct_text=req.instruct_text, language=req.language):
                     mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
@@ -401,7 +457,7 @@ def tts_endpoint(req: TTSRequest):
 
             last_pos = 0
             chunk_idx = 0
-            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration):
+            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, instruct_text=req.instruct_text, language=req.language):
                 mark_engine_used(req.engine)
                 engine_time = _time.time()
                 print(f"[Backend] [Chunk {chunk_idx}] Engine logic finished at {engine_time - start_time:.3f}s")
@@ -491,3 +547,91 @@ async def clone_voice_endpoint(
         return JSONResponse(content=metadata)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Clone failed: {e}")
+
+
+@app.post("/voices/preview")
+async def voice_preview_endpoint(
+    file: UploadFile = File(...),
+    prompt_text: str = Form(None),
+    test_phrase: str = Form(None),
+    engine: str = Form(None),
+):
+    """Upload a voice sample, clone temporarily, and stream a test phrase."""
+    engine_name = engine or config.NSPEECH_ENGINE
+
+    try:
+        tts_engine = get_engine(engine_name)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    import tempfile, os as _os
+    tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    try:
+        wav_bytes = await file.read()
+        tmp_wav.write(wav_bytes)
+        tmp_wav.close()
+
+        preview_name = f"__preview__{_os.urandom(4).hex()}"
+        tts_engine.clone(str(Path(tmp_wav.name)), preview_name)
+        tts_engine.load_voice(preview_name)
+    finally:
+        _os.unlink(tmp_wav.name)
+
+    phrase = test_phrase or "This is a preview of the cloned voice."
+    media_type = "audio/mp3"
+    generator = tts_engine.generate(phrase, voice_name=preview_name)
+
+    def stream_preview():
+        import av, io as _io
+        output_io = _io.BytesIO()
+        container = av.open(output_io, mode='w', format='mp3')
+        stream = container.add_stream('libmp3lame', rate=24000)
+        last_pos = 0
+        for chunk_tensor, is_final in generator:
+            audio_np = chunk_tensor.squeeze().cpu().numpy()
+            audio_int16 = (audio_np * 32767.0).astype("int16")
+            frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format='s16', layout='mono')
+            frame.sample_rate = 24000
+            for packet in stream.encode(frame):
+                container.mux(packet)
+            current_pos = output_io.tell()
+            output_io.seek(last_pos)
+            data = output_io.read()
+            output_io.seek(current_pos)
+            last_pos = current_pos
+            if data:
+                yield data
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        output_io.seek(last_pos)
+        data = output_io.read()
+        if data:
+            yield data
+
+    return StreamingResponse(stream_preview(), media_type=media_type)
+
+
+@app.delete("/voices/{name}")
+def delete_voice_endpoint(name: str, engine: Optional[str] = None):
+    """Delete a cloned or preview voice."""
+    voice_dir = _voice_dir()
+    deleted = []
+    for ext in (".wav", ".pt"):
+        p = voice_dir / f"{name}{ext}"
+        if p.exists():
+            p.unlink()
+            deleted.append(p.name)
+
+    # Also remove from in-memory spk2info (preview voices)
+    try:
+        eng = get_engine(engine or config.NSPEECH_ENGINE)
+        if name in eng.model.frontend.spk2info:
+            del eng.model.frontend.spk2info[name]
+            deleted.append(f"spk2info:{name}")
+    except Exception:
+        pass
+
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Voice '{name}' not found")
+    return {"deleted": deleted}

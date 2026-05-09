@@ -36,6 +36,9 @@ def _resolve_python():
 if __name__ == "__main__":
     _resolve_python()
 
+    import signal
+    signal.signal(signal.SIGINT, lambda sig, frame: os._exit(-1))
+
     import uvicorn
 
     src_dir = str(Path(__file__).parent / "src")
@@ -44,16 +47,15 @@ if __name__ == "__main__":
 
     os.environ["PYTHONPATH"] = src_dir + os.pathsep + os.environ.get("PYTHONPATH", "")
 
-    try:
-        from nspeech.config import NSPEECH_HOST, NSPEECH_PORT
-        print("=========================================")
-        print("      Starting nSpeech API Server        ")
-        print("=========================================")
-        dashboard_url = f"http://{NSPEECH_HOST}:{NSPEECH_PORT}/"
-        print(f"• Dashboard: {dashboard_url}")
-        print("• Stop Server: Press Ctrl+C")
-        print("=========================================\n")
+    from nspeech.config import NSPEECH_HOST, NSPEECH_PORT
+    print("=========================================")
+    print("      Starting nSpeech API Server        ")
+    print("=========================================")
+    dashboard_url = f"http://{NSPEECH_HOST}:{NSPEECH_PORT}/"
+    print(f"• Dashboard: {dashboard_url}")
+    print("• Stop Server: Press Ctrl+C")
+    print("=========================================\n")
 
-        uvicorn.run("nspeech.server:app", host=NSPEECH_HOST, port=NSPEECH_PORT, reload=False)
-    except KeyboardInterrupt:
-        print("\nShutting down nSpeech gracefully...")
+    config = uvicorn.Config("nspeech.server:app", host=NSPEECH_HOST, port=NSPEECH_PORT, reload=False, timeout_graceful_shutdown=0)
+    server = uvicorn.Server(config)
+    server.run()

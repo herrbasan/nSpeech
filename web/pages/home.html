@@ -7,7 +7,7 @@
     <section>
         <h2 style="margin-top: 0">Engine Status</h2>
         <nui-card>
-            <p>Engine: <strong>Kokoro-82M</strong></p>
+            <p>Engine: <strong id="engine-name">...</strong></p>
             <p>Status: <strong id="engine-status">Checking...</strong></p>
         </nui-card>
     </section>
@@ -15,9 +15,14 @@
 
 <script type="nui/page">
 function init(element, params, nui) {
+    const nameEl = element.querySelector('#engine-name');
     const statusEl = element.querySelector('#engine-status');
 
     element.show = () => {
+        fetch('/engine')
+            .then(r => r.json())
+            .then(d => { nameEl.textContent = d.engine || 'unknown'; });
+
         fetch('/voices')
             .then(r => r.json())
             .then(d => {

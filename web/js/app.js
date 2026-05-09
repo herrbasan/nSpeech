@@ -23,22 +23,64 @@ document.addEventListener('click', (e) => {
     }
 });
 
-const navigationData = [
-    { label: 'Home', href: '#page=home', icon: 'home' },
-    {
-        label: 'Kokoro',
-        icon: 'headphones',
-        items: [
-            { label: 'Generate', href: '#page=kokoro-generate' },
-            { label: 'Voices', href: '#page=kokoro-voices' }
-        ]
-    }
-];
+function buildNavigation(engine) {
+    const nav = [
+        { label: 'Home', href: '#page=home', icon: 'home' }
+    ];
 
-const sideNav = document.getElementById('main-navigation');
-if (sideNav && sideNav.loadData) {
-    sideNav.loadData(navigationData);
+    if (engine === 'kokoro') {
+        nav.push({
+            label: 'Kokoro',
+            icon: 'headphones',
+            items: [
+                { label: 'Generate', href: '#page=kokoro/generate' },
+                { label: 'Voices', href: '#page=kokoro/voices' }
+            ]
+        });
+    } else if (engine === 'cosyvoice') {
+        nav.push({
+            label: 'CosyVoice',
+            icon: 'headphones',
+            items: [
+                { label: 'Generate', href: '#page=cosyvoice/generate' },
+                { label: 'Voices', href: '#page=cosyvoice/voices' }
+            ]
+        });
+    } else if (engine === 'chatterbox') {
+        nav.push({
+            label: 'Chatterbox',
+            icon: 'headphones',
+            items: [
+                { label: 'Generate', href: '#page=chatterbox/generate' },
+                { label: 'Voices', href: '#page=chatterbox/voices' }
+            ]
+        });
+    }
+
+    return nav;
 }
+
+function initNav() {
+    fetch('/engine')
+        .then(r => r.json())
+        .then(d => {
+            const engine = d.engine || 'kokoro';
+            const nav = buildNavigation(engine);
+            const sideNav = document.getElementById('main-navigation');
+            if (sideNav?.loadData) {
+                sideNav.loadData(nav);
+            }
+        })
+        .catch(() => {
+            const nav = buildNavigation('kokoro');
+            const sideNav = document.getElementById('main-navigation');
+            if (sideNav?.loadData) {
+                sideNav.loadData(nav);
+            }
+        });
+}
+
+initNav();
 
 nui.setupRouter({
     container: 'nui-content nui-main',

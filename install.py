@@ -165,6 +165,12 @@ def install_engine_deps(python, engine):
              "--index-url", "https://download.pytorch.org/whl/cpu"])
 
     elif engine == "cosyvoice":
+        print("[*] Installing PyTorch with CUDA for CosyVoice ...")
+        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/cu126"])
+        run([str(python), "-m", "pip", "install", "onnxruntime-gpu>=1.21.0"])
+
         print("[*] Installing CosyVoice pinned dependencies ...")
         run([str(python), "-m", "pip", "install",
              "transformers==4.51.3", "tokenizers==0.21.0", "huggingface-hub==0.30.0"])
@@ -257,6 +263,38 @@ def patch_chatterbox(python):
     return patches_applied
 
 
+def _install_cosyvoice_models(python, model_dir):
+    repo_dir = model_dir / "CosyVoice"
+    repo_url = "https://github.com/FunAudioLLM/CosyVoice.git"
+
+    if not repo_dir.exists():
+        print(f"    [*] Cloning CosyVoice repo (with submodules) ...")
+        print(f"        This may take a few minutes (~500 MB).")
+        run(["git", "clone", "--recursive", repo_url, str(repo_dir)])
+        print(f"    [+] Repo cloned to {repo_dir}")
+    else:
+        print(f"    [+] CosyVoice repo already exists at {repo_dir}")
+        print(f"    [*] Updating submodules ...")
+        run(["git", "-C", str(repo_dir), "submodule", "update", "--init", "--recursive"])
+        print(f"    [+] Submodules updated.")
+
+    pretrained_dir = model_dir / "pretrained_models"
+    model_dest = pretrained_dir / "Fun-CosyVoice3-0.5B"
+    if model_dest.exists() and (model_dest / "cosyvoice3.yaml").exists():
+        print(f"    [+] CosyVoice3 model already downloaded at {model_dest}")
+        return
+
+    print(f"    [*] Downloading CosyVoice3-0.5B from HuggingFace ...")
+    print(f"        This may take a while (~2 GB).")
+    run([
+        str(python), "-c",
+        f"from huggingface_hub import snapshot_download; "
+        f"snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', "
+        f"local_dir=r'{model_dest}')"
+    ])
+    print(f"    [+] Model downloaded to {model_dest}")
+
+
 def download_models(python, engine):
     print(f"[*] Downloading {engine} models ...")
     model_dir = ensure_models_dir(engine)
@@ -297,8 +335,7 @@ def download_models(python, engine):
                 sys.exit(1)
 
     elif engine == "cosyvoice":
-        print("    [*] CosyVoice models should be cloned separately:")
-        print(f"        git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git {model_dir / 'CosyVoice'}")
+        _install_cosyvoice_models(python, model_dir)
 
     print("[+] Models ready.")
 
@@ -316,6 +353,13 @@ def verify_engine(python, engine):
     elif engine == "cosyvoice":
         checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
         checks.append(("Transformers", "import transformers; print(f'transformers {transformers.__version__}')"))
+        checks.append(("pyworld", "import pyworld; print('pyworld OK')"))
+        repo_dir = _models_dir(engine) / "CosyVoice"
+        if repo_dir.exists():
+            print(f"    [+] CosyVoice repo found at {repo_dir}")
+        else:
+            print(f"    [-] CosyVoice repo NOT found at {repo_dir}")
+            all_ok = False
 
     checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
 
