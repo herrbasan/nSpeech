@@ -1,0 +1,36 @@
+<div class="page-home">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>nSpeech</h1>
+        <p class="lead">High-speed streaming text-to-speech service.</p>
+    </header>
+
+    <section>
+        <h2 style="margin-top: 0">Engine Status</h2>
+        <nui-card>
+            <p>Engine: <strong>Kokoro-82M</strong></p>
+            <p>Status: <strong id="engine-status">Checking...</strong></p>
+        </nui-card>
+    </section>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    const statusEl = element.querySelector('#engine-status');
+
+    element.show = () => {
+        fetch('/voices')
+            .then(r => r.json())
+            .then(d => {
+                const count = d.voices ? d.voices.length : 0;
+                statusEl.textContent = `Online — ${count} voices loaded`;
+                statusEl.style.color = 'var(--color-success)';
+            })
+            .catch(() => {
+                statusEl.textContent = 'Offline';
+                statusEl.style.color = 'var(--color-danger)';
+            });
+    };
+
+    element.show();
+}
+</script>

@@ -56,12 +56,19 @@ class KokoroAdapter:
 
         cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.pt"
         if not cache_path.exists():
-            raise FileNotFoundError(f"Voice cache not found: {cache_path}")
+            cache_path = self.cache_dir / "cache" / f"{voice_name}.{self.engine_name}.pt"
+        if not cache_path.exists():
+            raise FileNotFoundError(f"Voice cache not found: {voice_name}")
             
         data = torch.load(cache_path, weights_only=False)
-        # Handle dummy tensor from older clone stub
-        if isinstance(data, torch.Tensor) and data.shape == (1, 256):
-            data = "af_heart"
+        if isinstance(data, str):
+            if data in self.pipeline.get_voices():
+                self.active_voices[voice_name] = data
+                self.current_voice = voice_name
+                return
+            data = self.pipeline.get_voice_style(data)
+        if isinstance(data, torch.Tensor):
+            data = data.cpu().numpy()
             
         self.active_voices[voice_name] = data
         self.current_voice = voice_name
@@ -85,8 +92,6 @@ class KokoroAdapter:
                 self.current_voice = voice_name
                 
         voice_data = self.active_voices[voice_name]
-        
-        # We need the actual numpy style array for _create_audio
         if isinstance(voice_data, str):
             voice_data = self.pipeline.get_voice_style(voice_data)
         elif isinstance(voice_data, torch.Tensor):

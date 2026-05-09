@@ -1,0 +1,291 @@
+<div class="page-kokoro-voices">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Kokoro — Voices</h1>
+        <p class="lead">Mix two Kokoro voices to create a new blended voice.</p>
+    </header>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Mix Voices</h3>
+        <p class="lead" style="margin-bottom: var(--nui-space-double)">Select two voices and a blend ratio to create a mixed voice.</p>
+
+        <div style="display: flex; gap: var(--nui-space-double); align-items: flex-start;">
+            <div style="flex: 1;">
+                <nui-input-group>
+                    <label for="kv-voice-a">Voice A</label>
+                    <nui-select id="select-voice-a">
+                        <select id="kv-voice-a">
+                            <option value="" disabled selected>Select...</option>
+                        </select>
+                    </nui-select>
+                </nui-input-group>
+                <nui-button id="btn-play-a" style="margin-top: var(--nui-space-half)">
+                    <button type="button">
+                        <nui-icon name="play_arrow"></nui-icon> Preview A
+                    </button>
+                </nui-button>
+            </div>
+
+            <div style="flex: 1;">
+                <nui-input-group>
+                    <label for="kv-voice-b">Voice B</label>
+                    <nui-select id="select-voice-b">
+                        <select id="kv-voice-b">
+                            <option value="" disabled selected>Select...</option>
+                        </select>
+                    </nui-select>
+                </nui-input-group>
+                <nui-button id="btn-play-b" style="margin-top: var(--nui-space-half)">
+                    <button type="button">
+                        <nui-icon name="play_arrow"></nui-icon> Preview B
+                    </button>
+                </nui-button>
+            </div>
+        </div>
+
+        <nui-input-group>
+            <label for="kv-blend">Blend Ratio: <span id="kv-blend-label">50/50</span></label>
+            <nui-slider>
+                <input type="range" id="kv-blend" min="0" max="100" value="50">
+            </nui-slider>
+        </nui-input-group>
+
+        <nui-button id="btn-preview" style="margin-bottom: var(--nui-space-double)">
+            <button type="button">
+                <nui-icon name="play_arrow"></nui-icon> Preview Blend
+            </button>
+        </nui-button>
+
+        <nui-input-group>
+            <label for="kv-mix-name">Mixed Voice Name</label>
+            <nui-input>
+                <input type="text" id="kv-mix-name" placeholder="my_mixed_voice">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-button variant="primary" id="btn-mix-save">
+            <button type="button">Mix & Save</button>
+        </nui-button>
+
+        <div id="kv-mix-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <audio id="kv-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let allVoices = [];
+    let previewMediaSource = null;
+    let previewAbortController = null;
+
+    const selectA = element.querySelector('#select-voice-a');
+    const selectB = element.querySelector('#select-voice-b');
+    const voiceAEl = element.querySelector('#kv-voice-a');
+    const voiceBEl = element.querySelector('#kv-voice-b');
+    const btnPlayA = element.querySelector('#btn-play-a');
+    const btnPlayB = element.querySelector('#btn-play-b');
+    const blendSlider = element.querySelector('#kv-blend');
+    const blendLabel = element.querySelector('#kv-blend-label');
+    const mixNameInput = element.querySelector('#kv-mix-name');
+    const btnMixSave = element.querySelector('#btn-mix-save');
+    const btnPreview = element.querySelector('#btn-preview');
+    const statusEl = element.querySelector('#kv-mix-status');
+    const audioEl = element.querySelector('#kv-audio');
+
+    function stopPreview() {
+        if (previewAbortController) {
+            previewAbortController.abort();
+            previewAbortController = null;
+        }
+        audioEl.pause();
+        audioEl.removeAttribute('src');
+        if (previewMediaSource?.readyState === 'open') {
+            previewMediaSource.endOfStream();
+        }
+        previewMediaSource = null;
+    }
+
+    function loadVoices() {
+        const kokoroVoices = allVoices.filter(v =>
+            v.voice_type === 'builtin'
+        );
+        const items = kokoroVoices.map(v => ({ value: v.name, label: v.name }));
+        selectA.setItems(items);
+        selectB.setItems(items);
+    }
+
+    blendSlider.addEventListener('input', () => {
+        const val = parseInt(blendSlider.value);
+        blendLabel.textContent = `${val}/${100 - val}`;
+    });
+
+    const PREVIEW_TEXT = 'The quick brown fox jumps over the lazy dog. Voice blending allows you to create unique vocal characteristics by combining two source voices.';
+
+    async function playVoice(voiceName, label) {
+        stopPreview();
+
+        if (!voiceName) {
+            statusEl.innerHTML = `<nui-badge variant="danger">Select ${label} first.</nui-badge>`;
+            return;
+        }
+
+        previewAbortController = new AbortController();
+        const startTime = performance.now();
+
+        audioEl.style.display = 'block';
+        previewMediaSource = new MediaSource();
+        audioEl.src = URL.createObjectURL(previewMediaSource);
+        audioEl.play().catch(() => {});
+
+        statusEl.innerHTML = `<nui-progress type="busy"></nui-preview> Previewing ${label}...`;
+
+        previewMediaSource.addEventListener('sourceopen', async () => {
+            const sb = previewMediaSource.addSourceBuffer('audio/mpeg');
+            try {
+                const url = `/tts?text=${encodeURIComponent(PREVIEW_TEXT)}&output_format=mp3&voice_name=${encodeURIComponent(voiceName)}`;
+                const response = await fetch(url, { signal: previewAbortController.signal });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const reader = response.body.getReader();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    await new Promise((res, rej) => {
+                        sb.appendBuffer(value);
+                        sb.onupdateend = res;
+                        sb.onerror = rej;
+                    });
+                }
+                if (previewMediaSource.readyState === 'open') {
+                    previewMediaSource.endOfStream();
+                }
+                statusEl.innerHTML = `<span style="color: var(--color-success)">${label} preview done in ${(performance.now() - startTime).toFixed(0)}ms</span>`;
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    statusEl.innerHTML = `<span style="color: var(--color-danger)">Error: ${err.message}</span>`;
+                }
+            }
+        }, { once: true });
+    }
+
+    btnPlayA.addEventListener('nui-click', () => playVoice(voiceAEl.value, 'Voice A'));
+    btnPlayB.addEventListener('nui-click', () => playVoice(voiceBEl.value, 'Voice B'));
+
+    async function generatePreview(voiceName) {
+        stopPreview();
+
+        const text = PREVIEW_TEXT;
+        previewAbortController = new AbortController();
+        const startTime = performance.now();
+
+        audioEl.style.display = 'block';
+        previewMediaSource = new MediaSource();
+        audioEl.src = URL.createObjectURL(previewMediaSource);
+        audioEl.play().catch(() => {});
+
+        statusEl.innerHTML = '<nui-progress type="busy"></nui-preview> Generating preview...';
+
+        previewMediaSource.addEventListener('sourceopen', async () => {
+            const sb = previewMediaSource.addSourceBuffer('audio/mpeg');
+            try {
+                const url = `/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voiceName)}`;
+                const response = await fetch(url, { signal: previewAbortController.signal });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const reader = response.body.getReader();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    await new Promise((res, rej) => {
+                        sb.appendBuffer(value);
+                        sb.onupdateend = res;
+                        sb.onerror = rej;
+                    });
+                }
+                if (previewMediaSource.readyState === 'open') {
+                    previewMediaSource.endOfStream();
+                }
+                statusEl.innerHTML = `<span style="color: var(--color-success)">Preview done in ${(performance.now() - startTime).toFixed(0)}ms</span>`;
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    statusEl.innerHTML = `<span style="color: var(--color-danger)">Error: ${err.message}</span>`;
+                }
+            }
+        }, { once: true });
+    }
+
+    btnMixSave.addEventListener('nui-click', async () => {
+        const name = mixNameInput.value.trim();
+        if (!name) {
+            statusEl.innerHTML = '<nui-badge variant="danger">Provide a name for the mixed voice.</nui-badge>';
+            return;
+        }
+        const a = voiceAEl.value;
+        const b = voiceBEl.value;
+        if (!a || !b) {
+            statusEl.innerHTML = '<nui-badge variant="danger">Select both Voice A and Voice B.</nui-badge>';
+            return;
+        }
+        const ratio = parseInt(blendSlider.value) / 100;
+
+        statusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Mixing...';
+
+        try {
+            const res = await fetch('/voices/mix', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, voice_a: a, voice_b: b, ratio })
+            });
+            const result = await res.json();
+            if (res.ok) {
+                statusEl.innerHTML = `<nui-badge variant="success">Mixed voice "${name}" saved.</nui-badge>`;
+                mixNameInput.value = '';
+            } else {
+                statusEl.innerHTML = `<nui-badge variant="danger">${result.detail || 'Mix failed'}</nui-badge>`;
+            }
+        } catch (e) {
+            statusEl.innerHTML = `<nui-badge variant="danger">Error: ${e}</nui-badge>`;
+        }
+    });
+
+    btnPreview.addEventListener('nui-click', async () => {
+        const a = voiceAEl.value;
+        const b = voiceBEl.value;
+        if (!a || !b) {
+            statusEl.innerHTML = '<nui-badge variant="danger">Select both Voice A and Voice B.</nui-badge>';
+            return;
+        }
+        const ratio = parseInt(blendSlider.value) / 100;
+        const tmpName = `_preview_${a}_${b}_${ratio.toFixed(2)}`;
+
+        statusEl.innerHTML = '<nui-progress type="busy"></nui-preview> Creating blend preview...';
+
+        try {
+            const res = await fetch('/voices/mix', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: tmpName, voice_a: a, voice_b: b, ratio })
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                statusEl.innerHTML = `<nui-badge variant="danger">${err.detail || 'Blend failed'}</nui-badge>`;
+                return;
+            }
+            generatePreview(tmpName);
+        } catch (e) {
+            statusEl.innerHTML = `<nui-badge variant="danger">Error: ${e}</nui-badge>`;
+        }
+    });
+
+    element.show = () => {
+        fetch('/voices')
+            .then(r => r.json())
+            .then(d => {
+                allVoices = d.voices || [];
+                loadVoices();
+            });
+    };
+
+    element.hide = () => stopPreview();
+}
+</script>

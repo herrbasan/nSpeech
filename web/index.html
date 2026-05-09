@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <title>nSpeech</title>
+    <link rel="stylesheet" href="/lib/nui_wc2/NUI/css/nui-theme.css">
+    <link rel="stylesheet" href="/web/css/main.css">
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; }
+        nui-app:not(.nui-ready) { display: none; }
+        nui-loading:not(.active) { display: none; }
+    </style>
+    <script type="module" src="/web/js/app.js"></script>
+</head>
+<body>
+    <nui-loading mode="bar"></nui-loading>
+
+    <nui-app content-min-width="50rem">
+        <nui-skip-links></nui-skip-links>
+
+        <nui-app-header>
+            <div slot="left">
+                <nui-button data-action="toggle-sidebar">
+                    <button type="button" aria-label="Toggle navigation menu">
+                        <nui-icon name="menu">☰</nui-icon>
+                    </button>
+                </nui-button>
+                <h1>nSpeech</h1>
+            </div>
+
+            <div slot="right">
+                <nui-button data-action="toggle-theme">
+                    <button type="button" aria-label="Toggle light/dark theme">
+                        <nui-icon name="brightness">⛭</nui-icon>
+                    </button>
+                </nui-button>
+            </div>
+        </nui-app-header>
+
+        <nui-sidebar behavior="primary" id="nav-sidebar">
+            <nui-link-list mode="fold" id="main-navigation"></nui-link-list>
+        </nui-sidebar>
+
+        <nui-content>
+            <nui-main></nui-main>
+        </nui-content>
+    </nui-app>
+</body>
+</html>

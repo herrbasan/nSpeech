@@ -111,3 +111,62 @@ Or simply `python run.py` — it auto-detects `NSPEECH_ENGINE` from `.env` and
 re-launches with the correct venv Python.
 
 Client connects to specific host:port based on needed capability.
+
+## Web Dashboard (NUI)
+
+### Architecture
+The dashboard is built with **NUI** (`lib/nui_wc2/` — git submodule of https://github.com/herrbasan/nui_wc2). NUI is a vanilla Web Component library: zero build step, ES modules, Light DOM, CSS variables for theming.
+
+### File Layout
+```
+web/
+  index.html              # App shell (<nui-app> boilerplate)
+  css/main.css            # App-specific styles
+  js/app.js               # Router setup, nav data, global actions
+  pages/
+    kokoro-generate.html  # Kokoro: text input, voice select, generate/stop
+    kokoro-voices.html    # Kokoro: voice browser, mix voices
+    # Future engines get their own pages when adapters are created:
+    # cosyvoice-generate.html, cosyvoice-voices.html, etc.
+lib/
+  nui_wc2/                # Git submodule — the NUI library itself
+    NUI/nui.js            # Core module (import this)
+    NUI/css/nui-theme.css # Design tokens and component styles
+    NUI/assets/           # Icon sprite, patterns
+    documentation/        # Component docs, guides, components.json
+```
+
+### How It's Served
+FastAPI (`src/nspeech/server.py`) mounts static directories:
+- `/web/` → `web/` (html=True, serves index.html and pages)
+- `/lib/` → `lib/` (NUI submodule assets)
+- `GET /` returns `web/index.html` via FileResponse
+
+### Navigation Structure
+The sidebar (`nui-link-list`) is organized **per engine**. Each engine gets two pages:
+1. **Generate** — Text input, voice selector (`nui-select`), generate/stop buttons, audio player
+2. **Voices** — Voice management. Capabilities vary by engine (Kokoro: mix voices; CosyVoice: clone from audio)
+
+Engines are only added to navigation when their adapter actually exists and is installed.
+
+### Key NUI Patterns Used
+- **App shell:** `<nui-app>` with `<nui-app-header>`, `<nui-sidebar>`, `<nui-content>/<nui-main>`
+- **Router:** `nui.setupRouter({ container, basePath: '/web/pages', defaultPage })` — fragment-based SPA
+- **Navigation:** `nui-link-list` with `loadData()` — data-driven sidebar
+- **Actions:** `data-action` for declarative click handling (sidebar toggle, theme toggle)
+- **Component registry:** Always check `documentation/components.json` before using a component
+
+### Current State (2026-05-08)
+- NUI submodule added and serving correctly
+- Basic page structure created but needs restructuring:
+  - Navigation should be engine-centric (not "Engines", "Voices" as global sections)
+  - Each engine gets its own Generate and Voices pages
+  - Kokoro: generate page + mix voices page (no cloning)
+  - CosyVoice, etc.: added when adapters are ready
+- Server verified working — dashboard loads, NUI components render, API calls succeed
+- Layout issues to fix: page content sizing, sidebar navigation structure
+
+### NUI Reference for Agents
+- **Source of truth:** `lib/nui_wc2/documentation/components.json`
+- **Read before using:** `lib/nui_wc2/documentation/guides/` (introduction → getting-started → architecture-patterns → declarative-actions → api-structure)
+- **No custom CSS:** Use only `nui-theme.css` variables. Never invent CSS variables or use inline styles for static layout.
