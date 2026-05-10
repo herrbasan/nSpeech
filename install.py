@@ -399,7 +399,7 @@ def install_engine_full(engine, args):
         if patch_func == "patch_chatterbox":
             patch_chatterbox(python)
 
-    if args.models:
+    if args.models or engine == "kokoro":
         download_models(python, engine)
 
     all_ok = verify_engine(python, engine)

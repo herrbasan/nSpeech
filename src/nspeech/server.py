@@ -352,7 +352,12 @@ async def websocket_tts_endpoint(websocket: WebSocket):
             import asyncio
             engine = await asyncio.to_thread(get_engine, engine_name)
             if voice_name and voice_name != "default":
-                await asyncio.to_thread(engine.load_voice, voice_name, model=model)
+                import inspect
+                sig = inspect.signature(engine.load_voice)
+                if 'model' in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                    await asyncio.to_thread(engine.load_voice, voice_name, model=model)
+                else:
+                    await asyncio.to_thread(engine.load_voice, voice_name)
         except Exception as e:
             await websocket.send_json({"error": str(e)})
             await websocket.close()
@@ -464,7 +469,13 @@ def tts_endpoint(req: TTSRequest):
         engine = get_engine(req.engine)
         if req.voice_name and req.voice_name != "default":
             try:
-                engine.load_voice(req.voice_name, model=req.model)
+                import inspect
+                # Some engines may not support the model argument for load_voice
+                sig = inspect.signature(engine.load_voice)
+                if 'model' in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                    engine.load_voice(req.voice_name, model=req.model)
+                else:
+                    engine.load_voice(req.voice_name)
             except FileNotFoundError:
                 from pathlib import Path
                 voice_dir = _voice_dir()
@@ -472,7 +483,12 @@ def tts_endpoint(req: TTSRequest):
                 if wav_path.exists():
                     print(f"[{req.engine}] Compiling implicit voice cache for {req.voice_name}...")
                     engine.clone(str(wav_path), req.voice_name)
-                    engine.load_voice(req.voice_name, model=req.model)
+                    import inspect
+                    sig = inspect.signature(engine.load_voice)
+                    if 'model' in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                        engine.load_voice(req.voice_name, model=req.model)
+                    else:
+                        engine.load_voice(req.voice_name)
                 else:
                     pass
     except Exception as e:
