@@ -80,7 +80,11 @@ class ChatterboxAdapter:
         mt, model = self._resolve_model(None, self._current_model_type or "eng")
         cache_path = self._cache_path(voice_name, mt)
         if not cache_path.exists():
-            raise FileNotFoundError(f"Voice cache for '{voice_name}' not found at {cache_path}.")
+            wav_path = self.cache_dir / f"{voice_name}.wav"
+            if wav_path.exists():
+                self.clone(str(wav_path), voice_name, model=mt)
+                return
+            raise FileNotFoundError(f"Voice '{voice_name}' not found and no .wav to re-clone from.")
         self._loaded_voice = voice_name
         self._load_conds(model, mt, cache_path)
 

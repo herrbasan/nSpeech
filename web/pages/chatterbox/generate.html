@@ -105,11 +105,6 @@ function init(element, params, nui) {
                 const items = [{ value: 'default', label: 'Select a cloned voice...' }];
                 if (cloned.length) items.push(...cloned);
                 voiceSelect.setItems(items);
-            })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
-    }
 
     function stop() {
         if (abortController) {

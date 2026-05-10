@@ -40,6 +40,10 @@ async def startup():
     import threading
     threading.excepthook = _thread_excepthook
     get_logger().info("server_start", extra={"meta": {"engine": config.NSPEECH_ENGINE, "host": config.NSPEECH_HOST, "port": config.NSPEECH_PORT}, "category": "server"})
+    previews_dir = _voice_dir() / "previews"
+    if previews_dir.exists():
+        import shutil
+        shutil.rmtree(str(previews_dir))
 
 
 @app.middleware("http")
