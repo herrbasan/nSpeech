@@ -175,6 +175,11 @@ def install_engine_deps(python, engine):
         run([str(python), "-m", "pip", "install",
              "transformers==4.51.3", "tokenizers==0.21.0", "huggingface-hub==0.30.0"])
 
+    elif engine == "chatterbox":
+        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/nightly/cu128"])
+
     print("[+] Engine requirements installed.")
 
 
