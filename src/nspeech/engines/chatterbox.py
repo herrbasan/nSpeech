@@ -17,10 +17,14 @@ from nspeech import config
 
 import librosa
 _orig_librosa_load = librosa.load
+_orig_librosa_resample = librosa.resample
 def _load_f32(path, sr=None, *args, **kwargs):
     y, r = _orig_librosa_load(path, sr=sr, *args, **kwargs)
     return y.astype(np.float32), r
+def _resample_f32(y, *args, **kwargs):
+    return _orig_librosa_resample(y.astype(np.float32), *args, **kwargs).astype(np.float32)
 librosa.load = _load_f32
+librosa.resample = _resample_f32
 
 LANGUAGE_MAP = {
     "de": "de", "es": "es", "fr": "fr", "it": "it", "ja": "ja",
