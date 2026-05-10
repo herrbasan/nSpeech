@@ -21,6 +21,16 @@
             </nui-input>
         </nui-input-group>
 
+        <nui-input-group>
+            <label for="cb-clone-model">Clone For</label>
+            <nui-select>
+                <select id="cb-clone-model">
+                    <option value="turbo" selected>Turbo (350M)</option>
+                    <option value="eng">English (500M)</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
         <nui-button-container gap="medium">
             <nui-button variant="primary" id="btn-preview">
                 <button type="button">Preview</button>
@@ -51,6 +61,7 @@
 function init(element, params, nui) {
     const fileInput = element.querySelector('#cb-clone-file');
     const nameInput = element.querySelector('#cb-clone-name');
+    const modelEl = element.querySelector('#cb-clone-model');
     const btnPreview = element.querySelector('#btn-preview');
     const btnSave = element.querySelector('#btn-save');
     const statusEl = element.querySelector('#cb-status');
@@ -123,6 +134,7 @@ function init(element, params, nui) {
 
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('model', modelEl.value);
         formData.append('test_phrase', 'This is a preview of the cloned voice.');
 
         previewAudio.style.display = 'block';
@@ -176,6 +188,7 @@ function init(element, params, nui) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('name', name);
+        formData.append('model', modelEl.value);
 
         try {
             const res = await fetch('/voices/clone', { method: 'POST', body: formData });

@@ -1,7 +1,10 @@
 """
 Chatterbox TTS Engine Adapter
-Dual-model: English-only for quality, Multilingual for 23 languages.
-Lazy-loads the multilingual model only when a non-English language is requested.
+Three-model architecture:
+- Turbo (350M): English, paralinguistic tags [laugh][cough], fastest
+- English (500M): English, exaggeration/cfg tuning
+- Multilingual (500M): 23 languages, auto-selected for non-English
+Voice caches: .turbo.pt (Turbo), .chatterbox.pt (Eng/MTL)
 """
 import re
 import time
@@ -21,7 +24,7 @@ LANGUAGE_MAP = {
 
 
 class ChatterboxAdapter:
-    """TTS engine adapter for Chatterbox with dual-model support."""
+    """TTS engine adapter for Chatterbox with three-model support."""
 
     def __init__(self):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -29,14 +32,22 @@ class ChatterboxAdapter:
         self.cache_dir = Path(config.NSPEECH_VOICE_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+        self._turbo_model = None
         self._eng_model = None
         self._mtl_model = None
         self._active_model = None
         self._loaded_voice = None
+        self._current_model_type = None
 
     @property
     def model(self):
         return self._active_model
+
+    def _get_turbo_model(self):
+        if self._turbo_model is None:
+            from chatterbox.tts_turbo import ChatterboxTurboTTS
+            self._turbo_model = ChatterboxTurboTTS.from_pretrained(device=self.device)
+        return self._turbo_model
 
     def _get_eng_model(self):
         if self._eng_model is None:
@@ -50,42 +61,46 @@ class ChatterboxAdapter:
             self._mtl_model = ChatterboxMultilingualTTS.from_pretrained(device=self.device)
         return self._mtl_model
 
-    def _switch_model(self, language):
-        if language and LANGUAGE_MAP.get(language):
-            self._active_model = self._get_mtl_model()
-        else:
-            self._active_model = self._get_eng_model()
-        if self._loaded_voice:
-            self._restore_voice()
+    def _cache_ext(self, model_type):
+        return "turbo" if model_type == "turbo" else "chatterbox"
 
-    def _restore_voice(self):
-        from chatterbox.tts import Conditionals
-        cache_path = self.cache_dir / f"{self._loaded_voice}.{self.engine_name}.pt"
-        if cache_path.exists():
-            self._eng_model.conds = Conditionals.load(cache_path, map_location=self.device)
-            if self._mtl_model:
-                self._mtl_model.conds = Conditionals.load(cache_path, map_location=self.device)
+    def _cache_path(self, voice_name, model_type):
+        return self.cache_dir / f"{voice_name}.{self._cache_ext(model_type)}.pt"
+
+    def _resolve_model(self, language, model):
+        if model == "turbo":
+            return "turbo", self._get_turbo_model()
+        if model == "eng":
+            return "eng", self._get_eng_model()
+        if language and LANGUAGE_MAP.get(language):
+            return "mtl", self._get_mtl_model()
+        return "eng", self._get_eng_model()
 
     def load_voice(self, voice_name):
-        from chatterbox.tts import Conditionals
-        cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.pt"
+        mt, model = self._resolve_model(None, self._current_model_type or "eng")
+        cache_path = self._cache_path(voice_name, mt)
         if not cache_path.exists():
             raise FileNotFoundError(f"Voice cache for '{voice_name}' not found at {cache_path}.")
         self._loaded_voice = voice_name
-        if self._eng_model:
-            self._eng_model.conds = Conditionals.load(cache_path, map_location=self.device)
-        if self._mtl_model:
-            self._mtl_model.conds = Conditionals.load(cache_path, map_location=self.device)
+        self._load_conds(model, mt, cache_path)
+
+    def _load_conds(self, model, model_type, cache_path):
+        if model_type == "turbo":
+            from chatterbox.tts_turbo import Conditionals
+        else:
+            from chatterbox.tts import Conditionals
+        model.conds = Conditionals.load(cache_path, map_location=self.device)
 
     def clone(self, audio_path, voice_name, **kwargs):
         start_time = time.time()
-        exaggeration = kwargs.get("exaggeration", 0.5)
+        model_type = kwargs.get("model", "eng")
+        _, model = self._resolve_model(None, model_type)
 
-        model = self._get_eng_model()
-        model.prepare_conditionals(audio_path, exaggeration=exaggeration)
+        model.prepare_conditionals(audio_path, exaggeration=kwargs.get("exaggeration", 0.5))
         self._active_model = model
+        self._current_model_type = model_type
 
-        cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.pt"
+        cache_path = self._cache_path(voice_name, model_type)
         model.conds.save(cache_path)
 
         self._loaded_voice = voice_name
@@ -96,11 +111,15 @@ class ChatterboxAdapter:
         }
 
     def generate(self, text, **kwargs):
+        model_type, model = self._resolve_model(
+            kwargs.get("language"), kwargs.get("model")
+        )
+        self._active_model = model
+        self._current_model_type = model_type
+
         exaggeration = kwargs.get("exaggeration", 0.5)
         language = kwargs.get("language")
         language_id = LANGUAGE_MAP.get(language, "en") if language else "en"
-
-        self._switch_model(language)
 
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
         if not sentences:
@@ -108,8 +127,10 @@ class ChatterboxAdapter:
 
         for i, sentence in enumerate(sentences):
             is_final = (i == len(sentences) - 1)
-            if language and LANGUAGE_MAP.get(language):
-                chunk_tensor = self._mtl_model.generate(text=sentence, exaggeration=exaggeration, language_id=language_id)
+            if model_type == "turbo":
+                chunk_tensor = model.generate(text=sentence, audio_prompt_path="")
+            elif model_type == "mtl":
+                chunk_tensor = model.generate(text=sentence, exaggeration=exaggeration, language_id=language_id)
             else:
-                chunk_tensor = self._eng_model.generate(text=sentence, exaggeration=exaggeration)
+                chunk_tensor = model.generate(text=sentence, exaggeration=exaggeration)
             yield chunk_tensor, is_final

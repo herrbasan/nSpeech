@@ -15,6 +15,17 @@
         </nui-input-group>
 
         <nui-input-group>
+            <label for="cb-model">Model</label>
+            <nui-select>
+                <select id="cb-model">
+                    <option value="turbo" selected>Turbo (350M, paralinguistic)</option>
+                    <option value="eng">English (500M, exaggeration)</option>
+                    <option value="mtl">Multilingual (500M, 23 languages)</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
             <label for="cb-language">Language</label>
             <nui-select>
                 <select id="cb-language">
@@ -76,6 +87,7 @@ function init(element, params, nui) {
     const textArea = element.querySelector('#cb-text');
     const exaggerationEl = element.querySelector('#cb-exaggeration');
     const languageEl = element.querySelector('#cb-language');
+    const modelEl = element.querySelector('#cb-model');
     const exagValEl = element.querySelector('#cb-exag-val');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
@@ -140,6 +152,7 @@ function init(element, params, nui) {
             params.set('voice_name', voice);
             params.set('exaggeration', exaggeration);
             params.set('language', languageEl.value);
+            params.set('model', modelEl.value);
 
             try {
                 const response = await fetch(`/tts?${params.toString()}`, { signal: abortController.signal });
