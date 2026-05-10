@@ -21,7 +21,17 @@ from nspeech import config
 from nspeech.logger import get as get_logger, info, error, debug
 from nspeech.tts import get_engine
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="nSpeech", description="Pluggable Streaming TTS Service", docs_url=None)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
