@@ -1,6 +1,7 @@
 """
 Chatterbox TTS Engine Adapter
-Implements sentence-level chunking and caching using the Chatterbox backend.
+Implements sentence-level chunking and caching using Chatterbox Multilingual.
+Supports 23 languages via language_id parameter.
 """
 import re
 import time
@@ -10,42 +11,44 @@ from typing import Tuple, Generator, Dict, Any
 import torch
 from nspeech import config
 
+LANGUAGE_MAP = {
+    "de": "de", "en": "en", "es": "es", "fr": "fr", "it": "it",
+    "ja": "ja", "ko": "ko", "zh": "zh", "ru": "ru", "ar": "ar",
+    "da": "da", "el": "el", "fi": "fi", "he": "he", "hi": "hi",
+    "ms": "ms", "nl": "nl", "no": "no", "pl": "pl", "pt": "pt",
+    "sv": "sv", "sw": "sw", "tr": "tr",
+}
+
+
 class ChatterboxAdapter:
-    """TTS engine adapter for Chatterbox."""
+    """TTS engine adapter for Chatterbox Multilingual."""
 
     def __init__(self):
         try:
-            from chatterbox.tts import ChatterboxTTS
+            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
         except ImportError as e:
             print("REAL ERROR:", e)
             raise ImportError("Chatterbox is not installed. Run `pip install -r requirements/chatterbox.txt`.")
             
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = ChatterboxTTS.from_pretrained(device=self.device)
+        self.model = ChatterboxMultilingualTTS.from_pretrained(device=self.device)
         self.engine_name = "chatterbox"
         self.cache_dir = Path(config.NSPEECH_VOICE_DIR)
         
-        # Ensure voice directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     def generate(self, text: str, **kwargs) -> Generator[Tuple[torch.Tensor, bool], None, None]:
-        """
-        Generate speech from text, chunking by sentences.
-        Yields (pcm_tensor, is_final).
-        """
         exaggeration = kwargs.get("exaggeration", 0.5)
+        language = kwargs.get("language")
+        language_id = LANGUAGE_MAP.get(language, "en") if language else "en"
         
-        # Basic sentence splitting regex (handles punctuation followed by whitespace/newlines)
-        # In a production scenario, you might use a more robust NLP tokenizer if no dependencies wasn't a maxim.
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
         if not sentences:
             sentences = [text]
             
         for i, sentence in enumerate(sentences):
             is_final = (i == len(sentences) - 1)
-            # Generate raw PCM float32 at 24kHz (which is standard for Chatterbox usually)
-            chunk_tensor = self.model.generate(text=sentence, exaggeration=exaggeration)
-            
+            chunk_tensor = self.model.generate(text=sentence, exaggeration=exaggeration, language_id=language_id)
             yield chunk_tensor, is_final
 
     def clone(self, audio_path: str, voice_name: str, **kwargs) -> Dict[str, Any]:

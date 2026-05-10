@@ -15,6 +15,30 @@
         </nui-input-group>
 
         <nui-input-group>
+            <label for="cb-language">Language</label>
+            <nui-select>
+                <select id="cb-language">
+                    <option value="en" selected>English</option>
+                    <option value="de">German</option>
+                    <option value="fr">French</option>
+                    <option value="es">Spanish</option>
+                    <option value="it">Italian</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="zh">Chinese</option>
+                    <option value="ru">Russian</option>
+                    <option value="ar">Arabic</option>
+                    <option value="nl">Dutch</option>
+                    <option value="pl">Polish</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="sv">Swedish</option>
+                    <option value="tr">Turkish</option>
+                    <option value="hi">Hindi</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
             <label for="cb-text">Text</label>
             <nui-textarea auto-resize max-rows="8" min-rows="5">
                 <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox streaming system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
@@ -51,6 +75,7 @@ function init(element, params, nui) {
     const selectEl = element.querySelector('#cb-voice');
     const textArea = element.querySelector('#cb-text');
     const exaggerationEl = element.querySelector('#cb-exaggeration');
+    const languageEl = element.querySelector('#cb-language');
     const exagValEl = element.querySelector('#cb-exag-val');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
@@ -114,6 +139,7 @@ function init(element, params, nui) {
             params.set('output_format', 'mp3');
             params.set('voice_name', voice);
             params.set('exaggeration', exaggeration);
+            params.set('language', languageEl.value);
 
             try {
                 const response = await fetch(`/tts?${params.toString()}`, { signal: abortController.signal });
