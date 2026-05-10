@@ -223,16 +223,15 @@ def api_docs():
     if not docs_path.exists():
         raise HTTPException(status_code=404, detail="API_REFERENCE.md not found")
     content = docs_path.read_text(encoding="utf-8")
-    html = f"""<!DOCTYPE html>
+    html = """<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><title>nSpeech API Reference</title>
 <link rel="stylesheet" href="/lib/nui_wc2/NUI/css/nui-theme.css">
+<link rel="stylesheet" href="/lib/nui_wc2/NUI/css/modules/nui-syntax-highlight.css">
 <script type="module" src="/lib/nui_wc2/NUI/nui.js"></script>
 </head>
 <body style="max-width: 960px; margin: 0 auto; padding: var(--nui-space-double);">
-<nui-markdown id="md"><script type="text/markdown">
-{content.replace('<\/script>', '<\\/script>')}
-</script></nui-markdown>
+<nui-markdown src="/api-docs.md"></nui-markdown>
 </body></html>"""
     return HTMLResponse(html)
 
