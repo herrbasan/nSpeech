@@ -114,16 +114,16 @@ def get_all_voices() -> List[Dict[str, Any]]:
     existing_names = {v["name"] for v in voices}
     for ext in (".chatterbox.pt", ".turbo.pt"):
         for pt_path in voice_dir.glob(f"*{ext}"):
-        base_name = pt_path.stem.rsplit(".", 1)[0]
-        if base_name not in existing_names:
-            engine_name = pt_path.stem.rsplit(".", 1)[-1]
-            voices.append({
-                "name": base_name,
-                "source_file": pt_path.name,
-                "voice_type": "blended",
-                "engines": [{"name": engine_name, "cached": True}]
-            })
-            existing_names.add(base_name)
+            base_name = pt_path.stem.rsplit(".", 1)[0]
+            if base_name not in existing_names:
+                engine_name = pt_path.stem.rsplit(".", 1)[-1]
+                voices.append({
+                    "name": base_name,
+                    "source_file": pt_path.name,
+                    "voice_type": "blended",
+                    "engines": [{"name": engine_name, "cached": True}]
+                })
+                existing_names.add(base_name)
 
     # Inject Kokoro built-in voices (only for kokoro engine)
     if getattr(config, "NSPEECH_ENGINE", "kokoro") == "kokoro":
