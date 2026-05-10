@@ -113,7 +113,7 @@ class ChatterboxAdapter:
         model_type = kwargs.get("model", "eng")
         _, model = self._resolve_model(None, model_type)
 
-        model.prepare_conditionals(audio_path, exaggeration=kwargs.get("exaggeration", 0.5))
+        model.prepare_conditionals(audio_path, exaggeration=kwargs.get("exaggeration", 0.5), norm_loudness=False) if model_type == "turbo" else model.prepare_conditionals(audio_path, exaggeration=kwargs.get("exaggeration", 0.5))
         self._active_model = model
         self._current_model_type = model_type
 
