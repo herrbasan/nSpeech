@@ -11,8 +11,16 @@ import time
 from pathlib import Path
 from typing import Tuple, Generator, Dict, Any
 
+import numpy as np
 import torch
 from nspeech import config
+
+import librosa
+_orig_librosa_load = librosa.load
+def _load_f32(path, sr=None, *args, **kwargs):
+    y, r = _orig_librosa_load(path, sr=sr, *args, **kwargs)
+    return y.astype(np.float32), r
+librosa.load = _load_f32
 
 LANGUAGE_MAP = {
     "de": "de", "es": "es", "fr": "fr", "it": "it", "ja": "ja",
