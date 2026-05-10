@@ -227,6 +227,9 @@ def api_docs():
 <html lang="en">
 <head><meta charset="utf-8"><title>nSpeech API Reference</title>
 <link rel="stylesheet" href="/lib/nui_wc2/NUI/css/nui-theme.css">
+</head>
+<body style="max-width: 960px; margin: 0 auto; padding: var(--nui-space-double);">
+<div id="content"></div>
 <script type="module">
 import {{ nui }} from '/lib/nui_wc2/NUI/nui.js';
 fetch('/api-docs.md')
@@ -235,9 +238,6 @@ fetch('/api-docs.md')
     document.getElementById('content').innerHTML = nui.util.markdownToHtml(md);
   }});
 </script>
-</head>
-<body style="max-width: 960px; margin: 0 auto; padding: var(--nui-space-double);">
-<div id="content"></div>
 </body></html>"""
     return HTMLResponse(html)
 
