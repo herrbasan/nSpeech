@@ -25,7 +25,8 @@ document.addEventListener('click', (e) => {
 
 function buildNavigation(engine) {
     const nav = [
-        { label: 'Home', href: '#page=home', icon: 'home' }
+        { label: 'Home', href: '#page=home', icon: 'home' },
+        { label: 'Docs', href: '/docs', icon: 'book' }
     ];
 
     if (engine === 'kokoro') {

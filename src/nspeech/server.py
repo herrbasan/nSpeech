@@ -21,7 +21,7 @@ from nspeech import config
 from nspeech.logger import get as get_logger, info, error, debug
 from nspeech.tts import get_engine
 
-app = FastAPI(title="nSpeech", description="Pluggable Streaming TTS Service")
+app = FastAPI(title="nSpeech", description="Pluggable Streaming TTS Service", docs_url=None)
 
 
 @app.on_event("startup")
@@ -216,6 +216,32 @@ class OpenAITTSRequest(BaseModel):
 # ---------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------
+
+@app.get("/docs", response_class=HTMLResponse)
+def api_docs():
+    docs_path = Path(__file__).parent.parent.parent / "docs" / "API_REFERENCE.md"
+    if not docs_path.exists():
+        raise HTTPException(status_code=404, detail="API_REFERENCE.md not found")
+    content = docs_path.read_text(encoding="utf-8")
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>nSpeech API Reference</title>
+<link rel="stylesheet" href="/lib/nui_wc2/NUI/css/nui-theme.css">
+<script type="module" src="/lib/nui_wc2/NUI/nui.js"></script>
+</head>
+<body style="max-width: 960px; margin: 0 auto; padding: var(--nui-space-double);">
+<nui-markdown src="/api-docs.md"></nui-markdown>
+</body></html>"""
+    return HTMLResponse(html)
+
+
+@app.get("/api-docs.md")
+def api_docs_raw():
+    docs_path = Path(__file__).parent.parent.parent / "docs" / "API_REFERENCE.md"
+    if not docs_path.exists():
+        raise HTTPException(status_code=404, detail="API_REFERENCE.md not found")
+    return Response(docs_path.read_text(encoding="utf-8"), media_type="text/markdown")
+
 
 @app.get("/health")
 def health_endpoint():
