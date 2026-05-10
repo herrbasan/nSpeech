@@ -1,0 +1,182 @@
+<div class="page-chatterbox-voices">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Chatterbox — Voices</h1>
+        <p class="lead">Clone a voice from reference audio (max 30 seconds).</p>
+    </header>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Clone Voice</h3>
+
+        <nui-input-group>
+            <label for="cb-clone-file">Reference Audio (.wav, max 30s)</label>
+            <nui-input>
+                <input type="file" id="cb-clone-file" accept=".wav">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="cb-clone-name">Voice Name</label>
+            <nui-input>
+                <input type="text" id="cb-clone-name" placeholder="my_voice">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-preview">
+                <button type="button">Preview</button>
+            </nui-button>
+            <nui-button id="btn-save">
+                <button type="button">Save Voice</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="cb-preview-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+        <div id="cb-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Cloned Voices</h3>
+
+        <div id="cb-voice-list">
+            <p style="color: var(--color-shade6)">Loading...</p>
+        </div>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    const fileInput = element.querySelector('#cb-clone-file');
+    const nameInput = element.querySelector('#cb-clone-name');
+    const btnPreview = element.querySelector('#btn-preview');
+    const btnSave = element.querySelector('#btn-save');
+    const statusEl = element.querySelector('#cb-status');
+    const voiceListEl = element.querySelector('#cb-voice-list');
+    const previewAudio = element.querySelector('#cb-preview-audio');
+
+    let mediaSource = null;
+    let abortController = null;
+
+    function loadVoices() {
+        fetch('/voices')
+            .then(r => r.json())
+            .then(d => {
+                const voices = d.voices || [];
+                const cloned = voices.filter(v => v.voice_type === 'cloned' || v.voice_type === 'blended');
+                if (cloned.length === 0) {
+                    voiceListEl.innerHTML = '<p style="color: var(--color-shade6)">No cloned voices yet.</p>';
+                    return;
+                }
+                voiceListEl.innerHTML = cloned.map(v => `
+                    <div style="display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);">
+                        <span>${v.name}</span>
+                        <div>
+                            <nui-badge variant="info">${v.voice_type}</nui-badge>
+                            <button type="button" data-delete="${v.name}" style="margin-left: var(--nui-space-half);">Delete</button>
+                        </div>
+                    </div>
+                `).join('');
+
+                voiceListEl.querySelectorAll('[data-delete]').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        await fetch(`/voices/${encodeURIComponent(btn.dataset.delete)}`, { method: 'DELETE' });
+                        loadVoices();
+                    });
+                });
+            })
+            .catch(() => {
+                voiceListEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load voices.</p>';
+            });
+    }
+
+    function stopPreview() {
+        if (abortController) { abortController.abort(); abortController = null; }
+        previewAudio.pause();
+        previewAudio.removeAttribute('src');
+        if (mediaSource?.readyState === 'open') mediaSource.endOfStream();
+        mediaSource = null;
+    }
+
+    btnPreview.addEventListener('nui-click', () => {
+        const file = fileInput.files?.[0];
+        if (!file) { statusEl.innerHTML = '<nui-badge variant="danger">Select a .wav file first.</nui-badge>'; return; }
+        stopPreview();
+
+        abortController = new AbortController();
+        statusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Previewing...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('test_phrase', 'This is a preview of the cloned voice.');
+
+        previewAudio.style.display = 'block';
+        mediaSource = new MediaSource();
+        previewAudio.src = URL.createObjectURL(mediaSource);
+        previewAudio.play().catch(() => {});
+
+        let firstChunk = false;
+        const startTime = performance.now();
+
+        mediaSource.addEventListener('sourceopen', async () => {
+            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            try {
+                const res = await fetch('/voices/preview', { method: 'POST', body: formData, signal: abortController.signal });
+                if (!res.ok) {
+                    const err = await res.json();
+                    statusEl.innerHTML = `<nui-badge variant="danger">${err.detail || 'Preview failed'}</nui-badge>`;
+                    return;
+                }
+                const reader = res.body.getReader();
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!firstChunk && value?.length) {
+                        firstChunk = true;
+                        statusEl.innerHTML = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
+                    }
+                    await new Promise((res, rej) => {
+                        sourceBuffer.appendBuffer(value);
+                        sourceBuffer.onupdateend = res;
+                        sourceBuffer.onerror = rej;
+                    });
+                }
+                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                statusEl.innerHTML = `Done (${(performance.now() - startTime).toFixed(0)}ms)`;
+            } catch (e) {
+                if (e.name === 'AbortError') { statusEl.innerHTML = 'Stopped.'; }
+                else { statusEl.innerHTML = `<nui-badge variant="danger">Error: ${e}</nui-badge>`; }
+            }
+        }, { once: true });
+    });
+
+    btnSave.addEventListener('nui-click', async () => {
+        const file = fileInput.files?.[0];
+        if (!file) { statusEl.innerHTML = '<nui-badge variant="danger">Select a .wav file first.</nui-badge>'; return; }
+        const name = nameInput.value.trim();
+        if (!name) { statusEl.innerHTML = '<nui-badge variant="danger">Provide a name for the voice.</nui-badge>'; return; }
+
+        statusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Saving...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', name);
+
+        try {
+            const res = await fetch('/voices/clone', { method: 'POST', body: formData });
+            const result = await res.json();
+            if (res.ok) {
+                statusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved (${result.clone_time_ms}ms).</nui-badge>`;
+                nameInput.value = '';
+                fileInput.value = '';
+                loadVoices();
+            } else {
+                statusEl.innerHTML = `<nui-badge variant="danger">${result.detail || 'Save failed'}</nui-badge>`;
+            }
+        } catch (e) {
+            statusEl.innerHTML = `<nui-badge variant="danger">Error: ${e}</nui-badge>`;
+        }
+    });
+
+    element.show = () => loadVoices();
+    element.hide = () => stopPreview();
+}
+</script>

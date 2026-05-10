@@ -198,15 +198,11 @@ def patch_chatterbox(python):
         skip = False
         for line in content.splitlines():
             stripped = line.strip()
-            if stripped.startswith("try:") and "perth_net" not in stripped:
-                lines_to_keep.append(line)
-                continue
             if "from .perth_net" in stripped:
                 lines_to_keep.append("PerthImplicitWatermarker = None")
                 skip = True
                 continue
             if skip and stripped in ("except ImportError:", "except Exception:"):
-                skip = True
                 continue
             if skip and stripped.startswith("PerthImplicitWatermarker = None"):
                 skip = False
@@ -216,6 +212,8 @@ def patch_chatterbox(python):
                 lines_to_keep.append(line)
                 continue
             if skip:
+                continue
+            if stripped.startswith("if PerthImplicitWatermarker") or stripped.startswith("if __all__"):
                 continue
             lines_to_keep.append(line)
         content = "\n".join(lines_to_keep) + "\n"

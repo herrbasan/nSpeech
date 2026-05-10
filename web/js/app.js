@@ -55,6 +55,15 @@ function buildNavigation(engine) {
                 { label: 'Voices', href: '#page=chatterbox/voices' }
             ]
         });
+    } else if (engine === 'chatterbox') {
+        nav.push({
+            label: 'Chatterbox',
+            icon: 'headphones',
+            items: [
+                { label: 'Generate', href: '#page=chatterbox/generate' },
+                { label: 'Voices', href: '#page=chatterbox/voices' }
+            ]
+        });
     }
 
     return nav;

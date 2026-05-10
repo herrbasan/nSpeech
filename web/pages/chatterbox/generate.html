@@ -1,0 +1,155 @@
+<div class="page-chatterbox-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Chatterbox — Generate</h1>
+        <p class="lead">Zero-shot voice cloning TTS with per-sentence streaming.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="cb-voice">Voice</label>
+            <nui-select id="voice-select">
+                <select id="cb-voice">
+                    <option value="default" selected>Select a cloned voice...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="cb-text">Text</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="5">
+                <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox streaming system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="cb-exaggeration">Exaggeration: <span id="cb-exag-val">0.5</span></label>
+            <nui-input>
+                <input type="range" id="cb-exaggeration" min="0.0" max="1.0" step="0.05" value="0.5">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+            <nui-button id="btn-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="cb-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="cb-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let mediaSource = null;
+    let abortController = null;
+
+    const voiceSelect = element.querySelector('#voice-select');
+    const selectEl = element.querySelector('#cb-voice');
+    const textArea = element.querySelector('#cb-text');
+    const exaggerationEl = element.querySelector('#cb-exaggeration');
+    const exagValEl = element.querySelector('#cb-exag-val');
+    const generateBtn = element.querySelector('#btn-generate');
+    const stopBtn = element.querySelector('#btn-stop');
+    const audio = element.querySelector('#cb-audio');
+    const statusEl = element.querySelector('#cb-status');
+
+    function loadVoices() {
+        fetch('/voices')
+            .then(r => r.json())
+            .then(d => {
+                const allVoices = d.voices || [];
+                const cloned = allVoices
+                    .filter(v => v.voice_type === 'cloned')
+                    .map(v => ({ value: v.name, label: v.name }));
+                const items = [{ value: 'default', label: 'Select a cloned voice...' }];
+                if (cloned.length) items.push(...cloned);
+                voiceSelect.setItems(items);
+            })
+            .catch(() => {
+                statusEl.textContent = 'Failed to load voices';
+            });
+    }
+
+    function stop() {
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
+        }
+        audio.pause();
+        audio.removeAttribute('src');
+        if (mediaSource?.readyState === 'open') mediaSource.endOfStream();
+        mediaSource = null;
+        statusEl.textContent = '';
+    }
+
+    stopBtn.addEventListener('click', stop);
+
+    generateBtn.addEventListener('nui-click', () => {
+        const text = textArea.value.trim();
+        if (!text) return;
+        stop();
+
+        const voice = selectEl.value || 'default';
+        const exaggeration = exaggerationEl.value || '0.5';
+        abortController = new AbortController();
+        const startTime = performance.now();
+
+        audio.style.display = 'block';
+        mediaSource = new MediaSource();
+        audio.src = URL.createObjectURL(mediaSource);
+        audio.play().catch(() => {});
+
+        let firstChunk = false;
+
+        mediaSource.addEventListener('sourceopen', async () => {
+            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            statusEl.textContent = 'Buffering...';
+
+            const params = new URLSearchParams();
+            params.set('text', text);
+            params.set('output_format', 'mp3');
+            params.set('voice_name', voice);
+            params.set('exaggeration', exaggeration);
+
+            try {
+                const response = await fetch(`/tts?${params.toString()}`, { signal: abortController.signal });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const reader = response.body.getReader();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!firstChunk && value?.length) {
+                        firstChunk = true;
+                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
+                    }
+                    await new Promise((res, rej) => {
+                        sourceBuffer.appendBuffer(value);
+                        sourceBuffer.onupdateend = res;
+                        sourceBuffer.onerror = rej;
+                    });
+                }
+                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    statusEl.textContent = 'Stopped.';
+                } else {
+                    statusEl.textContent = `Error: ${err.message}`;
+                }
+            }
+        }, { once: true });
+    });
+
+    exaggerationEl.addEventListener('input', () => {
+        exagValEl.textContent = exaggerationEl.value;
+    });
+
+    element.show = () => loadVoices();
+    element.hide = () => stop();
+}
+</script>
