@@ -231,10 +231,11 @@ def serve_dashboard():
 
 @app.get("/tts")
 def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[str] = None, output_format: str = "mp3",
-                     instruct_text: Optional[str] = None, language: Optional[str] = None, speed: float = 1.0):
+                     instruct_text: Optional[str] = None, language: Optional[str] = None, speed: float = 1.0,
+                     exaggeration: float = 0.5):
     """Wrapper around POST /tts to allow native HTML <audio src="..."> streaming over GET."""
     req = TTSRequest(text=text, voice_name=voice_name, engine=engine, output_format=output_format,
-                     instruct_text=instruct_text, language=language, speed=speed)
+                     instruct_text=instruct_text, language=language, speed=speed, exaggeration=exaggeration)
     return tts_endpoint(req)
 
 
