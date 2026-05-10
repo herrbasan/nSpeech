@@ -18,7 +18,8 @@ and management. An OpenAI-proxy endpoint is also available.
 | POST | `/voices/mix` | Blend two Kokoro voices (Kokoro only) |
 | GET | `/tts` | Streaming synthesis (GET, for `<audio>` src) |
 | POST | `/tts` | Streaming synthesis (POST) |
-| WS | `/ws/tts` | WebSocket streaming synthesis |
+| GET | `/docs` | API reference (rendered via nui-markdown) |
+| GET | `/api-docs.md` | API reference (raw markdown) |
 | POST | `/v1/audio/speech` | OpenAI-compatible proxy |
 
 ---
@@ -183,3 +184,16 @@ Maps `model` → `engine`, `voice` → `voice_name`, `response_format` → `outp
 | `NSPEECH_LOG_DIR` | `logs` | No | Log output directory |
 | `NSPEECH_TRANSCODE_SAMPLE_RATE` | `24000` | No | Default output sample rate |
 | `NSPEECH_TRANSCODE_BITRATE` | `128k` | No | Default codec bitrate |
+
+---
+
+## 7. Documentation Endpoints
+
+### GET /docs
+Renders `API_REFERENCE.md` as a styled HTML page using the `nui-markdown` component.
+Accessible via the "Docs" link in the dashboard sidebar.
+
+### GET /api-docs.md
+Returns the raw `API_REFERENCE.md` as `text/markdown`.
+
+**Response:** Raw Markdown content of this document.
