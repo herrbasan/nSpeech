@@ -37,6 +37,8 @@ NSPEECH_API_KEY = os.environ.get("NSPEECH_API_KEY", "")
 NSPEECH_PRELOAD_MODEL = os.environ.get("NSPEECH_PRELOAD_MODEL", "false").lower() == "true"
 NSPEECH_MODEL_IDLE_TIMEOUT_SEC = int(os.environ.get("NSPEECH_MODEL_IDLE_TIMEOUT_SEC", "0"))
 NSPEECH_LOG_LEVEL = os.environ.get("NSPEECH_LOG_LEVEL", "INFO").upper()
+NSPEECH_TRANSCODE_SAMPLE_RATE = int(os.environ.get("NSPEECH_TRANSCODE_SAMPLE_RATE", "24000"))
+NSPEECH_TRANSCODE_BITRATE = os.environ.get("NSPEECH_TRANSCODE_BITRATE", "128k")
 
 # Ensure runtime directories exist
 Path(NSPEECH_VOICE_DIR).mkdir(parents=True, exist_ok=True)

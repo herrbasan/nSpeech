@@ -11,13 +11,15 @@ Key features:
 
 - **Engine-agnostic architecture** — pluggable TTS adapters; same API regardless of backend
 - **Per-engine isolation** — separate venvs, model dirs, and voice caches per engine
-- **Zero-shot voice cloning** from a short reference audio clip (engine-dependent)
+- **Zero-shot voice cloning** — clone from reference audio (Chatterbox/CosyVoice)
 - **Voice blending** — mix two Kokoro voices algorithmically (Kokoro only)
-- **Voice caching** — cloned/blended voices persist as `.pt` files per engine
-- **Automatic text chunking** — long input is split into sentence-level chunks
-- **Streaming** — audio chunks emitted as they are generated via HTTP and WebSocket
-- **On-the-fly transcoding** — PCM to MP3/Opus/AAC via PyAV
-- **Low latency** — first audio byte in ~400-700 ms (Kokoro CPU)
+- **Voice caching** — cloned/blended voices persist as engine-specific `.pt` files
+- **Automatic text chunking** — long input split into sentence-level chunks
+- **Streaming** — progressive audio chunks via HTTP and WebSocket
+- **On-the-fly transcoding** — PCM to MP3/Opus/WAV via PyAV
+- **Preview flow** — hear a voice before committing to save
+- **Multi-model** — Chatterbox supports Turbo, English, and Multilingual models
+- **Low latency** — first byte in ~400ms (Chatterbox GPU)
 
 The service exposes HTTP REST and WebSocket endpoints. Callers send text and receive
 audio. The underlying TTS engine is an implementation detail.
@@ -47,14 +49,17 @@ audio. The underlying TTS engine is an implementation detail.
 │  │  HTTP / WebSocket API  (FastAPI + uvicorn)          │   │
 │  │                                                     │   │
 │  │  GET  /              — Dashboard UI                 │   │
-│  │  POST /tts           — streaming synthesis          │   │
-│  │  GET  /tts           — HTML <audio> proxy           │   │
-│  │  POST /v1/audio/speech — OpenAI compatible          │   │
-│  │  POST /voices/clone  — clone voice from audio       │   │
-│  │  POST /voices/mix    — blend two voices (Kokoro)    │   │
-│  │  GET  /voices        — list available voices        │   │
-│  │  GET  /health        — health + engine status       │   │
-│  │  WS   /ws/tts        — streaming synthesis          │   │
+│  │  GET  /engine        — active engine info            │   │
+│  │  POST /tts           — streaming synthesis           │   │
+│  │  GET  /tts           — HTML <audio> proxy            │   │
+│  │  POST /v1/audio/speech — OpenAI proxy                │   │
+│  │  POST /voices/clone  — clone voice from audio        │   │
+│  │  POST /voices/preview — preview voice without save   │   │
+│  │  DELETE /voices/{name} — delete voice cache          │   │
+│  │  POST /voices/mix    — blend voices (Kokoro)         │   │
+│  │  GET  /voices        — list available voices         │   │
+│  │  GET  /health        — health + engine status        │   │
+│  │  WS   /ws/tts        — streaming synthesis           │   │
 │  └─────────────────────────────────────────────────────┘   │
 │                        │                                    │
 │                        ▼                                    │
@@ -69,9 +74,12 @@ audio. The underlying TTS engine is an implementation detail.
 │            ┌───────────┼───────────┬───────────┐           │
 │            ▼           ▼           ▼           ▼           │
 │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────┐  │
-│  │ Kokoro          │ │ Chatterbox      │ │ CosyVoice   │  │
-│  │ (default)       │ │ (archived)      │ │ (partial)   │  │
-│  │ ~6 MB RAM       │ │ ~3.8 GB VRAM    │ │ TBD         │  │
+│  │ Kokoro          │ │ Chatterbox      │ │ CosyVoice     │  │
+│  │ (CPU, default)  │ │ (GPU)           │ │ (GPU)         │  │
+│  │ ~6 MB RAM       │ │ ~10 GB VRAM     │ │ ~3.5 GB VRAM  │  │
+│  │ 54 built-in     │ │ zero-shot clone │ │ zero-shot     │  │
+│  │ voice mixing    │ │ 23 languages     │ │ 9 languages   │  │
+│  │                 │ │ 3 models         │ │               │  │
 │  │ 54 built-in     │ │ zero-shot clone │ │             │  │
 │  │ voice mixing    │ │                 │ │             │  │
 │  └─────────────────┘ └─────────────────┘ └─────────────┘  │

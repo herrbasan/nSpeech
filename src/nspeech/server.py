@@ -116,7 +116,7 @@ def get_all_voices() -> List[Dict[str, Any]]:
 
     # Scan standalone .pt files with no .wav companion (blended voices)
     existing_names = {v["name"] for v in voices}
-    for ext in (".chatterbox.pt", ".turbo.pt"):
+    for ext in (".chatterbox.pt", ".turbo.pt", ".kokoro.pt", ".cosyvoice.pt"):
         for pt_path in voice_dir.glob(f"*{ext}"):
             base_name = pt_path.stem.rsplit(".", 1)[0]
             if base_name not in existing_names:
@@ -194,8 +194,8 @@ class TTSRequest(BaseModel):
     language: Optional[str] = None
     speed: float = 1.0
     output_format: str = "wav"
-    transcode_sample_rate: int = 24000
-    transcode_bitrate: str = "128k"
+    transcode_sample_rate: int = config.NSPEECH_TRANSCODE_SAMPLE_RATE
+    transcode_bitrate: str = config.NSPEECH_TRANSCODE_BITRATE
 
 
 class MixVoiceRequest(BaseModel):

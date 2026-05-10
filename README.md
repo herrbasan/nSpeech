@@ -20,9 +20,9 @@ behavior stay the same regardless of backend.
 | **Adapter** | Duck-typed Python | Chunking, streaming, voice cache routing |
 | **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, ~6MB RAM. 54 built-in voices. Consistent pacing. |
 
-| **TTS Engine** | CosyVoice3-0.5B (GPU) | GPU required (~3.5 GB VRAM). Multilingual (9 languages), zero-shot voice cloning. Known prosody jitter on short phrases. |
+| **TTS Engine** | Chatterbox (GPU) | Zero-shot cloning. 3 models: Turbo (350M, paralinguistic), English (500M), Multilingual (500M, 23 languages). ~10 GB VRAM total. |
 
-| **TTS Engine** | Chatterbox | Archived. ~3.8 GB VRAM. Works well, English-only. Not deployed. |
+| **TTS Engine** | CosyVoice3-0.5B (GPU) | GPU required (~3.5 GB VRAM). Multilingual (9 languages), zero-shot voice cloning. Known prosody jitter on short phrases. 1.5B model unreleased. |
 | **Server** | FastAPI + uvicorn | HTTP / WebSocket API + Dashboard UI |
 | **Dashboard** | NUI (Web Components) | Browser UI — engine-centric navigation |
 
@@ -178,16 +178,18 @@ endpoints, please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
 
 ## Engine Differences
 
-| Feature | Kokoro | CosyVoice3-0.5B | Chatterbox |
-|---------|--------|------------------|------------|
-| Hardware | CPU | GPU (CUDA, ~3.5 GB VRAM) | GPU (CUDA, ~3.8 GB) |
-| RAM/VRAM | ~6 MB | ~3.5 GB | ~3.8 GB |
+| Feature | Kokoro | Chatterbox | CosyVoice3-0.5B |
+|---------|--------|------------|------------------|
+| Hardware | CPU | GPU (CUDA, ~10 GB VRAM) | GPU (CUDA, ~3.5 GB) |
+| RAM/VRAM | ~6 MB | ~10 GB (3 models) | ~3.5 GB |
 | Built-in voices | 54 | 0 (clone required) | 0 (clone required) |
 | Voice cloning | Stubbed (fallback) | True zero-shot | True zero-shot |
 | Voice mixing | Yes | No | No |
-| Languages | English (+ partial) | 9 languages | English |
-| Latency | Very low (~500ms) | Medium (~1.5s TTFA) | Medium |
-| Prosody | Consistent | Variable (0.5B limitation) | Good |
+| Languages | English (+ partial) | 23 languages | 9 languages |
+| Latency | Very low | Medium (~400ms TTFA) | Medium (~1.5s TTFA) |
+| Prosody | Consistent | Good | Variable (0.5B limitation) |
+| Paralinguistic tags | No | Turbo: [laugh], etc. | Inline emotion tags |
+| Streaming | Yes (internal) | Yes (per-sentence) | Yes (per-sentence) |
 
 **Note on CosyVoice3 Prosody:** The 0.5B model has known pacing jitter — speaking rate varies
 per sentence, with odd pauses on short phrases. The 1.5B model (unreleased) is expected to fix

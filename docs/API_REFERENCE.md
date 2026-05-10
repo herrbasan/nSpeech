@@ -1,156 +1,185 @@
 # nSpeech API Reference
 
-nSpeech provides both HTTP REST and WebSocket APIs for text-to-speech generation, voice cloning, and management. It also offers a drop-in compatibility route for OpenAI's SDKs.
+nSpeech provides HTTP REST and WebSocket APIs for TTS generation, voice cloning,
+and management. An OpenAI-proxy endpoint is also available.
 
 ---
 
-## 1. OpenAI Compatible Endpoint
+## Endpoints
 
-A proxy endpoint that allows you to use standard `openai` SDKs seamlessly with nSpeech models.
-
-### `POST /v1/audio/speech`
-Generates audio from input text using OpenAI-compatible payload structures.
-
-**Request Body (JSON):**
-```json
-{
-  "model": "chatterbox",
-  "input": "The quick brown fox jumps over the lazy dog.",
-  "voice": "default",
-  "response_format": "mp3",
-  "speed": 1.0
-}
-```
-*Field Mapping:*
-* `model` maps to the nSpeech `engine` (e.g. `chatterbox`).
-* `input` maps to the text to speak.
-* `voice` maps to the `.wav` voice file name in memory.
-* `response_format` maps to `output_format` (supports `mp3`, `wav`, `pcm`).
-* `speed` is mapped to nSpeech's exaggeration setting inversely for demonstration.
-
-**Response:**
-Returns chunked audio data using `Transfer-Encoding: chunked`. Stream playback can begin instantly on the client side.
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Server status |
+| GET | `/engine` | Active engine name |
+| GET | `/voices` | List all voices (cloned, builtin, previews) |
+| POST | `/voices/clone` | Clone a voice from reference audio |
+| POST | `/voices/preview` | Preview a voice without saving |
+| DELETE | `/voices/{name}` | Delete a cloned or preview voice |
+| POST | `/voices/mix` | Blend two Kokoro voices (Kokoro only) |
+| GET | `/tts` | Streaming synthesis (GET, for `<audio>` src) |
+| POST | `/tts` | Streaming synthesis (POST) |
+| WS | `/ws/tts` | WebSocket streaming synthesis |
+| POST | `/v1/audio/speech` | OpenAI-compatible proxy |
 
 ---
 
-## 2. Standard REST API Endpoints
+## 1. Health & Info
 
-### `POST /tts`
-Streaming synthesis endpoint. Generates spoken audio for the provided text.
-
-**Request Body (JSON):**
+### GET /health
 ```json
-{
-  "text": "Hello world",
-  "voice_name": "default",
-  "engine": "chatterbox",
-  "exaggeration": 0.5,
-  "output_format": "mp3",
-  "transcode_bitrate": "128k",
-  "transcode_sample_rate": 24000
-}
+{"status": "ok", "default_engine": "chatterbox"}
 ```
 
-**Response:**
-Binary audio stream (Content-Type depends on `output_format`).
+### GET /engine
+```json
+{"engine": "chatterbox"}
+```
 
 ---
 
-### `GET /voices`
-Lists all available voice samples and their cached engine embeddings.
+## 2. Voice Management
 
-**Response (JSON):**
+### GET /voices
+Returns all voices: cloned (`.wav` + cache), builtin (Kokoro), previews, and standalone
+caches.
+
 ```json
 {
   "voices": [
-    {
-      "name": "desktop",
-      "source_file": "desktop.wav",
-      "engines": [
-        {
-          "name": "chatterbox",
-          "cached": true,
-          "latency_tier": "standard"
-        }
-      ]
-    }
+    {"name": "Allan", "source_file": "Allan.wav", "voice_type": "cloned",
+     "engines": [{"name": "chatterbox", "cached": true}]},
+    {"name": "af_heart", "source_file": "builtin", "voice_type": "builtin",
+     "engines": [{"name": "kokoro", "cached": true, "latency_tier": "fast"}]}
   ]
 }
 ```
 
----
+### POST /voices/clone
+**Form data**: `file` (.wav), `name` (string), `engine` (optional), `model` (optional), `exaggeration` (float, default 0.5)
 
-### `POST /voices/clone`
-Uploads a `.wav` file, clones the voice into the specified engine, and saves the tensor cache for instant loading later.
-
-**Form Data:**
-* `file`: (File) The reference `.wav` audio.
-* `name`: (String) The ID/Name to save this voice as.
-* `engine`: (String, Optional) The engine to clone against (defaults to environment config).
-* `exaggeration`: (Float, Default: 0.5) Voice expression multiplier.
-
-**Response:**
 ```json
 {
-  "status": "success",
-  "message": "Voice 'my_voice' cloned and cached successfully.",
   "voice_name": "my_voice",
   "engine": "chatterbox",
-  "generation_time_sec": 1.2
+  "cache_file": "venv/chatterbox/voices/my_voice.chatterbox.pt",
+  "clone_time_ms": 570
 }
+```
+
+### POST /voices/preview
+**Form data**: `file` (.wav), `test_phrase` (optional), `engine` (optional), `model` (optional)
+
+Returns: streaming MP3 audio of the test phrase using the uploaded voice (not saved to
+permanent cache).
+
+### DELETE /voices/{name}
+Deletes the `.wav`, `.pt` cache files, and in-memory spk2info entry for the named voice.
+
+```json
+{"deleted": ["my_voice.wav", "my_voice.chatterbox.pt"]}
+```
+
+### POST /voices/mix (Kokoro only)
+**JSON body**:
+```json
+{"name": "my_blend", "voice_a": "af_heart", "voice_b": "af_bella", "ratio": 0.5}
 ```
 
 ---
 
-### `GET /health`
-Returns server status and default configuration flags.
+## 3. Text-to-Speech
 
-**Response (JSON):**
+### GET /tts (simplified, for `<audio src="...">`)
+**Query params**: `text` (required), `voice_name`, `output_format`, `engine`, `model`,
+`language`, `instruct_text`, `speed`, `exaggeration`
+
+### POST /tts
+**JSON body**:
 ```json
 {
-  "status": "ok",
-  "default_engine": "chatterbox"
-}
-```
-
----
-
-## 3. WebSocket Streaming API
-
-For ultra-low latency implementations, the WebSocket API allows the client to send a generation request and immediately receive raw binary audio frames as the backend produces them.
-
-### `WS /ws/tts`
-
-**Connection Flow:**
-1. Client opens connection to `ws://host:port/ws/tts`.
-2. Client sends a JSON payload describing the request.
-3. Server streams pure **binary frames** containing the audio codec frames (e.g., MP3 chunks or PCM buffers).
-4. Server sends a final JSON frame indicating completion: `{"is_final": true}`.
-
-**Initial Request (Client -> Server, JSON):**
-```json
-{
-  "text": "Here are today's headlines. First, the weather...",
-  "voice_name": "default",
+  "text": "Hello world.",
+  "voice_name": "Allan",
   "engine": "chatterbox",
+  "model": "turbo",
+  "language": "en",
+  "instruct_text": null,
+  "speed": 1.0,
+  "exaggeration": 0.5,
+  "output_format": "mp3",
+  "transcode_sample_rate": 24000,
+  "transcode_bitrate": "128k"
+}
+```
+
+| Field | Type | Default | Notes |
+|-------|------|---------|-------|
+| `text` | string | *required* | Text to synthesize |
+| `voice_name` | string | `"default"` | Voice to use (cloned name or "default") |
+| `engine` | string | env `NSPEECH_ENGINE` | Engine override |
+| `model` | string | `null` | Chatterbox model: `turbo`, `eng`, `mtl` |
+| `language` | string | `null` | Language code (de, fr, ja, etc.) |
+| `instruct_text` | string | `null` | Emotion/style instruction (CosyVoice) |
+| `speed` | float | `1.0` | Playback speed (CosyVoice, pitch-safe) |
+| `exaggeration` | float | `0.5` | Expression emphasis (Chatterbox, Kokoro) |
+| `output_format` | string | `"wav"` | `wav`, `mp3`, `pcm`, `ogg`, `webm` |
+| `transcode_sample_rate` | int | `24000` | Output sample rate |
+| `transcode_bitrate` | string | `"128k"` | Codec bitrate |
+
+**Response**: Streaming binary audio (`Transfer-Encoding: chunked`).
+
+---
+
+## 4. WebSocket (WS /ws/tts)
+
+Client sends JSON, server streams binary frames + final JSON `{"is_final": true}`.
+
+**Client → Server**:
+```json
+{
+  "text": "Hello world.",
+  "voice_name": "Allan",
+  "engine": "chatterbox",
+  "model": "turbo",
   "output_format": "mp3",
   "exaggeration": 0.5,
-  "transcode_bitrate": "128k",
-  "transcode_sample_rate": 24000
+  "speed": 1.0,
+  "transcode_sample_rate": 24000,
+  "transcode_bitrate": "128k"
 }
 ```
 
-**Response Stream (Server -> Client):**
-1. `Binary Frame` (Audio Bytes)
-2. `Binary Frame` (Audio Bytes)
-3. `...`
-4. `Text Frame` (JSON Completion Flag):
+---
+
+## 5. OpenAI Proxy (POST /v1/audio/speech)
+
 ```json
 {
-  "is_final": true
+  "model": "chatterbox",
+  "input": "Hello world.",
+  "voice": "Allan",
+  "response_format": "mp3",
+  "speed": 1.0
 }
 ```
 
-## 4. UI Dashboard
-A fully functional testing UI with WebSocket, MediaSource API, and REST integration is bundled natively.
-* Viewable in browser at: `GET /`
+Maps `model` → `engine`, `voice` → `voice_name`, `response_format` → `output_format`.
+`speed` mapped to exaggeration inversely.
+
+---
+
+## 6. Environment Variables
+
+| Variable | Default | Required | Notes |
+|----------|---------|----------|-------|
+| `NSPEECH_ENGINE` | — | **Yes** | Engine: `kokoro`, `cosyvoice`, `chatterbox` |
+| `NSPEECH_VOICE_DIR` | — | **Yes** | Voice cache directory |
+| `NSPEECH_MODEL_DIR` | — | **Yes** | Model weights directory |
+| `NSPEECH_HOST` | `127.0.0.1` | No | Bind address |
+| `NSPEECH_PORT` | `8000` | No | Bind port |
+| `NSPEECH_API_KEY` | `""` | No | Auth token (unused) |
+| `NSPEECH_PRELOAD_MODEL` | `false` | No | Preload engine on startup |
+| `NSPEECH_MODEL_IDLE_TIMEOUT_SEC` | `0` | No | LRU eviction timeout |
+| `NSPEECH_LOG_LEVEL` | `INFO` | No | Log level |
+| `NSPEECH_LOG_DIR` | `logs` | No | Log output directory |
+| `NSPEECH_TRANSCODE_SAMPLE_RATE` | `24000` | No | Default output sample rate |
+| `NSPEECH_TRANSCODE_BITRATE` | `128k` | No | Default codec bitrate |

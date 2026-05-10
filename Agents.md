@@ -63,14 +63,15 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 - **Reliable Prosody:** CosyVoice3-0.5B has significant pacing jitter — the 1.5B model (unreleased) is the expected fix. Kokoro-82M remains the benchmark for consistent pacing.
 
 ### Current Project State
-The text-to-speech service supports two operational engines:
-- **Kokoro-82M** (CPU, FATTEN): Ultra-fast streaming, 54 built-in voices, English only. Consistently paced, proven reliability. The benchmark for prosody quality.
+The text-to-speech service supports three operational engines:
+
+- **Kokoro-82M** (CPU, FATTEN): Ultra-fast streaming, 54 built-in voices, voice blending. English only. Consistently paced, proven reliability. The benchmark for prosody quality.
+- **Chatterbox** (GPU, BADKID): Three models — Turbo (350M, paralinguistic tags like `[laugh]`/`[cough]`), English (500M, exaggeration tuning), Multilingual (500M, 23 languages). Zero-shot voice cloning, per-sentence streaming, auto-re-clone for cross-model voice compatibility.
 - **CosyVoice3-0.5B** (GPU, BADKID): Multilingual (9 languages), zero-shot voice cloning. Operational but with known prosody limitations — variable speaking rate per sentence. 1.5B model expected to fix prosody but not yet released.
-- **Chatterbox** (GPU): Archived. Works well but English-only, not deployed.
 
 Voice management supports Preview → Save flow with streaming preview audio. In-memory previews appear under "Previews" tab, persisted voices under "Saved" tab. Per-engine voice caches stored as `.pt` files in `venv/<engine>/voices/`.
 
-Logging uses nLogger-compatible JSON Lines format, output to `logs/nspeech.log` (rolling 10MB). Thread crash capture via `threading.excepthook` ensures CosyVoice LLM thread errors are visible in logs.
+Logging uses nLogger-compatible JSON Lines format, output to `logs/nspeech.log` (rolling 10MB). Thread crash capture via `threading.excepthook` ensures engine thread errors are visible in logs.
 
 ## Multi-Host Deployment Architecture
 
