@@ -35,11 +35,15 @@
     </nui-card>
 
     <nui-card>
-        <h3 style="margin-top: 0">Cloned Voices</h3>
-
-        <div id="cb-voice-list">
-            <p style="color: var(--color-shade6)">Loading...</p>
-        </div>
+        <h3 style="margin-top: 0">Voices</h3>
+        <nui-tabs>
+            <nav>
+                <button>Saved</button>
+                <button>Previews</button>
+            </nav>
+            <section><div id="cb-saved-list"><p style="color: var(--color-shade6)">Loading...</p></div></section>
+            <section hidden><div id="cb-preview-list"><p style="color: var(--color-shade6)">No previews yet.</p></div></section>
+        </nui-tabs>
     </nui-card>
 </div>
 
@@ -50,11 +54,31 @@ function init(element, params, nui) {
     const btnPreview = element.querySelector('#btn-preview');
     const btnSave = element.querySelector('#btn-save');
     const statusEl = element.querySelector('#cb-status');
-    const voiceListEl = element.querySelector('#cb-voice-list');
+    const savedListEl = element.querySelector('#cb-saved-list');
+    const previewListEl = element.querySelector('#cb-preview-list');
     const previewAudio = element.querySelector('#cb-preview-audio');
 
     let mediaSource = null;
     let abortController = null;
+
+    function buildVoiceRow(name, isPreview) {
+
+    function buildVoiceRow(name, isPreview) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);';
+        const label = document.createElement('span');
+        label.textContent = name;
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', async () => {
+            await fetch(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            loadVoices();
+        });
+        row.appendChild(label);
+        row.appendChild(delBtn);
+        return row;
+    }
 
     function loadVoices() {
         fetch('/voices')
@@ -62,29 +86,24 @@ function init(element, params, nui) {
             .then(d => {
                 const voices = d.voices || [];
                 const cloned = voices.filter(v => v.voice_type === 'cloned' || v.voice_type === 'blended');
-                if (cloned.length === 0) {
-                    voiceListEl.innerHTML = '<p style="color: var(--color-shade6)">No cloned voices yet.</p>';
-                    return;
-                }
-                voiceListEl.innerHTML = cloned.map(v => `
-                    <div style="display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);">
-                        <span>${v.name}</span>
-                        <div>
-                            <nui-badge variant="info">${v.voice_type}</nui-badge>
-                            <button type="button" data-delete="${v.name}" style="margin-left: var(--nui-space-half);">Delete</button>
-                        </div>
-                    </div>
-                `).join('');
+                const previews = voices.filter(v => v.voice_type === 'preview');
 
-                voiceListEl.querySelectorAll('[data-delete]').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        await fetch(`/voices/${encodeURIComponent(btn.dataset.delete)}`, { method: 'DELETE' });
-                        loadVoices();
-                    });
-                });
+                if (cloned.length === 0) {
+                    savedListEl.innerHTML = '<p style="color: var(--color-shade6)">No saved voices yet.</p>';
+                } else {
+                    savedListEl.innerHTML = '';
+                    cloned.forEach(v => savedListEl.appendChild(buildVoiceRow(v.name, false)));
+                }
+
+                if (previews.length === 0) {
+                    previewListEl.innerHTML = '<p style="color: var(--color-shade6)">No previews yet.</p>';
+                } else {
+                    previewListEl.innerHTML = '';
+                    previews.forEach(v => previewListEl.appendChild(buildVoiceRow(v.name, true)));
+                }
             })
             .catch(() => {
-                voiceListEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load voices.</p>';
+                savedListEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load voices.</p>';
             });
     }
 

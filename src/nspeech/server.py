@@ -153,6 +153,21 @@ def get_all_voices() -> List[Dict[str, Any]]:
         except Exception:
             pass
 
+    # Scan previews subdirectory (chatterbox & future engines)
+    previews_dir = voice_dir / "previews"
+    if previews_dir.exists():
+        for pt_path in previews_dir.glob("*.pt"):
+            base_name = pt_path.stem.rsplit(".", 1)[0]
+            if base_name not in existing_names:
+                engine_name = pt_path.stem.rsplit(".", 1)[-1]
+                voices.append({
+                    "name": base_name,
+                    "source_file": pt_path.name,
+                    "voice_type": "preview",
+                    "engines": [{"name": engine_name, "cached": True}]
+                })
+                existing_names.add(base_name)
+
     return voices
 
 
@@ -574,8 +589,16 @@ async def voice_preview_endpoint(
         tmp_wav.close()
 
         preview_name = f"__preview__{_os.urandom(4).hex()}"
-        tts_engine.clone(str(Path(tmp_wav.name)), preview_name)
-        tts_engine.load_voice(preview_name)
+
+        saved_cache_dir = tts_engine.cache_dir
+        previews_dir = _voice_dir() / "previews"
+        previews_dir.mkdir(parents=True, exist_ok=True)
+        tts_engine.cache_dir = previews_dir
+        try:
+            tts_engine.clone(str(Path(tmp_wav.name)), preview_name)
+            tts_engine.load_voice(preview_name)
+        finally:
+            tts_engine.cache_dir = saved_cache_dir
     finally:
         _os.unlink(tmp_wav.name)
 
@@ -619,11 +642,12 @@ def delete_voice_endpoint(name: str, engine: Optional[str] = None):
     """Delete a cloned or preview voice."""
     voice_dir = _voice_dir()
     deleted = []
-    for ext in (".wav", ".pt"):
-        p = voice_dir / f"{name}{ext}"
-        if p.exists():
-            p.unlink()
-            deleted.append(p.name)
+    for dir_path in (voice_dir, voice_dir / "previews"):
+        for ext in (".wav", ".pt"):
+            p = dir_path / f"{name}{ext}"
+            if p.exists():
+                p.unlink()
+                deleted.append(p.name)
 
     # Also remove from in-memory spk2info (preview voices)
     try:
