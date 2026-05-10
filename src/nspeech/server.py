@@ -306,6 +306,7 @@ async def websocket_tts_endpoint(websocket: WebSocket):
         instruct_text = data.get("instruct_text")
         language = data.get("language")
         speed = float(data.get("speed", 1.0))
+        model = data.get("model")
         transcode_sample_rate = int(data.get("transcode_sample_rate", 24000))
         transcode_bitrate = data.get("transcode_bitrate", "128k")
 
@@ -314,7 +315,7 @@ async def websocket_tts_endpoint(websocket: WebSocket):
             import asyncio
             engine = await asyncio.to_thread(get_engine, engine_name)
             if voice_name and voice_name != "default":
-                await asyncio.to_thread(engine.load_voice, voice_name)
+                await asyncio.to_thread(engine.load_voice, voice_name, model=model)
         except Exception as e:
             await websocket.send_json({"error": str(e)})
             await websocket.close()
@@ -426,7 +427,7 @@ def tts_endpoint(req: TTSRequest):
         engine = get_engine(req.engine)
         if req.voice_name and req.voice_name != "default":
             try:
-                engine.load_voice(req.voice_name)
+                engine.load_voice(req.voice_name, model=req.model)
             except FileNotFoundError:
                 from pathlib import Path
                 voice_dir = _voice_dir()
@@ -434,7 +435,7 @@ def tts_endpoint(req: TTSRequest):
                 if wav_path.exists():
                     print(f"[{req.engine}] Compiling implicit voice cache for {req.voice_name}...")
                     engine.clone(str(wav_path), req.voice_name)
-                    engine.load_voice(req.voice_name)
+                    engine.load_voice(req.voice_name, model=req.model)
                 else:
                     pass
     except Exception as e:
@@ -607,7 +608,7 @@ async def voice_preview_endpoint(
         tts_engine.cache_dir = previews_dir
         try:
             tts_engine.clone(str(Path(tmp_wav.name)), preview_name, model=model)
-            tts_engine.load_voice(preview_name)
+            tts_engine.load_voice(preview_name, model=model)
         finally:
             tts_engine.cache_dir = saved_cache_dir
     finally:

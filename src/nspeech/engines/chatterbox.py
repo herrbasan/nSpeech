@@ -84,8 +84,9 @@ class ChatterboxAdapter:
             return "mtl", self._get_mtl_model()
         return "eng", self._get_eng_model()
 
-    def load_voice(self, voice_name):
-        mt, model = self._resolve_model(None, self._current_model_type or "eng")
+    def load_voice(self, voice_name, model=None):
+        mt, mdl = self._resolve_model(None, model or self._current_model_type or "eng")
+        self._current_model_type = mt
         cache_path = self._cache_path(voice_name, mt)
         if not cache_path.exists():
             wav_path = self.cache_dir / f"{voice_name}.wav"
@@ -94,7 +95,7 @@ class ChatterboxAdapter:
                 return
             raise FileNotFoundError(f"Voice '{voice_name}' not found and no .wav to re-clone from.")
         self._loaded_voice = voice_name
-        self._load_conds(model, mt, cache_path)
+        self._load_conds(mdl, mt, cache_path)
 
     def _load_conds(self, model, model_type, cache_path):
         if model_type == "turbo":
