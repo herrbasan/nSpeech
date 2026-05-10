@@ -206,7 +206,7 @@ def patch_chatterbox(python):
             if stripped.startswith("try:"):
                 continue
             if "from .perth_net" in stripped:
-                lines_to_keep.append("PerthImplicitWatermarker = None")
+                lines_to_keep.append("PerthImplicitWatermarker = DummyWatermarker")
                 skip = True
                 continue
             if skip and stripped in ("except ImportError:", "except Exception:"):
