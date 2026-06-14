@@ -8,6 +8,7 @@ import io
 import os
 import wave
 import time
+import json
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -18,6 +19,8 @@ from pydantic import BaseModel
 
 import torch
 from nspeech import config
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent.resolve()
 from nspeech.logger import get as get_logger, info, error, debug
 from nspeech.tts import get_engine
 
@@ -101,6 +104,29 @@ def generate_streaming_wav_header(sample_rate: int = 24000) -> bytes:
     return bytes(header)
 
 
+def _ensure_wav(audio_bytes: bytes, suffix: str = ".wav") -> bytes:
+    """
+    Convert any audio format to WAV (PCM 16-bit, mono, original sample rate).
+    Engines like Chatterbox accept any soundfile-readable format, but the voice
+    cache always stores .wav for consistency. Returns the raw WAV bytes.
+    """
+    suffix = suffix.lower()
+    if suffix in (".wav",):
+        return audio_bytes
+    try:
+        import soundfile as sf
+        import io as _io
+        data, sr = sf.read(_io.BytesIO(audio_bytes))
+        # Convert to mono if stereo
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        buf = _io.BytesIO()
+        sf.write(buf, data, sr, format="WAV", subtype="PCM_16")
+        return buf.getvalue()
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Cannot decode audio ({suffix}): {e}")
+
+
 def _voice_dir() -> Path:
     return Path(config.NSPEECH_VOICE_DIR)
 
@@ -123,6 +149,18 @@ def get_all_voices() -> List[Dict[str, Any]]:
             "voice_type": "cloned",
             "engines": engines_info
         })
+
+    # Scan .dots.json voice caches (dots.tts zero-shot voice sidecars)
+    for json_path in voice_dir.glob("*.dots.json"):
+        base_name = json_path.name[:-len(".dots.json")]
+        if base_name not in existing_names:
+            voices.append({
+                "name": base_name,
+                "source_file": json_path.name,
+                "voice_type": "cloned",
+                "engines": [{"name": "dots", "cached": True}]
+            })
+            existing_names.add(base_name)
 
     # Scan standalone .pt files with no .wav companion (blended voices)
     existing_names = {v["name"] for v in voices}
@@ -203,6 +241,8 @@ class TTSRequest(BaseModel):
     instruct_text: Optional[str] = None
     language: Optional[str] = None
     speed: float = 1.0
+    seed: Optional[int] = None
+    offline: bool = False
     output_format: str = "wav"
     transcode_sample_rate: int = config.NSPEECH_TRANSCODE_SAMPLE_RATE
     transcode_bitrate: str = config.NSPEECH_TRANSCODE_BITRATE
@@ -275,11 +315,12 @@ def serve_dashboard():
 @app.get("/tts")
 def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[str] = None, output_format: str = "mp3",
                      instruct_text: Optional[str] = None, language: Optional[str] = None, speed: float = 1.0,
-                     exaggeration: float = 0.5, model: Optional[str] = None):
+                     exaggeration: float = 0.5, model: Optional[str] = None, seed: Optional[int] = None,
+                     offline: bool = False):
     """Wrapper around POST /tts to allow native HTML <audio src="..."> streaming over GET."""
     req = TTSRequest(text=text, voice_name=voice_name, engine=engine, output_format=output_format,
                      instruct_text=instruct_text, language=language, speed=speed, exaggeration=exaggeration,
-                     model=model)
+                     model=model, seed=seed, offline=offline)
     return tts_endpoint(req)
 
 
@@ -287,6 +328,60 @@ def tts_get_endpoint(text: str, voice_name: str = "default", engine: Optional[st
 def list_voices():
     """Lists all available voices and their compiled engine caches."""
     return {"voices": get_all_voices()}
+
+
+@app.get("/arena-samples")
+def arena_samples():
+    """
+    Return random message snippets from archived LLM arena conversations.
+    Used as meaningful test phrases for voice cloning and generation.
+    """
+    import random
+    import re as _re
+
+    archive_dir = PROJECT_ROOT / "docs" / "_Archive"
+    arena_files = list(archive_dir.glob("arena-*.json"))
+    if not arena_files:
+        return {"error": "No arena archives found"}
+
+    # Collect all assistant messages (skip moderator/system)
+    all_messages = []
+    for path in arena_files:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for msg in data.get("messages", []):
+                if msg.get("role") == "assistant" and msg.get("content"):
+                    all_messages.append({
+                        "speaker": msg.get("speaker", "unknown"),
+                        "content": msg["content"],
+                        "topic": data.get("summary", {}).get("title", ""),
+                    })
+        except Exception:
+            continue
+
+    if not all_messages:
+        return {"error": "No assistant messages found in archives"}
+
+    # Pick a random message
+    chosen = random.choice(all_messages)
+    content = chosen["content"].strip()
+
+    # Trim to a reasonable length (50-300 chars) for test phrase
+    if len(content) > 300:
+        # Try to cut at a sentence boundary
+        truncated = content[:300]
+        last_period = max(truncated.rfind(". "), truncated.rfind("? "), truncated.rfind("! "))
+        if last_period > 50:
+            content = truncated[:last_period + 1]
+        else:
+            content = truncated + "..."
+
+    return {
+        "text": content,
+        "speaker": chosen["speaker"],
+        "topic": chosen["topic"],
+    }
 
 
 @app.post("/voices/mix")
@@ -503,7 +598,7 @@ def tts_endpoint(req: TTSRequest):
 
         try:
             if req.output_format == "pcm":
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model):
+                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model, seed=req.seed, offline=req.offline):
                     mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
@@ -511,7 +606,7 @@ def tts_endpoint(req: TTSRequest):
 
             if req.output_format == "wav":
                 yield generate_streaming_wav_header(req.transcode_sample_rate)
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model):
+                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model, seed=req.seed, offline=req.offline):
                     mark_engine_used(req.engine)
                     audio_np = chunk_tensor.squeeze().cpu().numpy()
                     yield (audio_np * 32767.0).astype("int16").tobytes()
@@ -536,7 +631,7 @@ def tts_endpoint(req: TTSRequest):
 
             last_pos = 0
             chunk_idx = 0
-            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model):
+            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model, seed=req.seed, offline=req.offline):
                 mark_engine_used(req.engine)
                 engine_time = _time.time()
                 print(f"[Backend] [Chunk {chunk_idx}] Engine logic finished at {engine_time - start_time:.3f}s")
@@ -599,7 +694,8 @@ async def clone_voice_endpoint(
     name: str = Form(...),
     engine: str = Form(None),
     model: str = Form(None),
-    exaggeration: float = Form(0.5)
+    exaggeration: float = Form(0.5),
+    prompt_text: str = Form(None),
 ):
     """Clone a voice and generate an engine embedding."""
     engine_name = engine or config.NSPEECH_ENGINE
@@ -614,16 +710,21 @@ async def clone_voice_endpoint(
 
     wav_path = voice_dir / f"{name}.wav"
 
-    wav_bytes = await file.read()
+    raw_bytes = await file.read()
+    # Accept any audio format — convert to WAV for the voice cache
+    original_suffix = Path(file.filename or "").suffix.lower() or ".wav"
+    wav_bytes = _ensure_wav(raw_bytes, original_suffix)
     with open(wav_path, "wb") as f:
         f.write(wav_bytes)
 
     try:
+        clone_kwargs = {"exaggeration": exaggeration, "model": model}
+        if prompt_text:
+            clone_kwargs["prompt_text"] = prompt_text
         metadata = tts_engine.clone(
             audio_path=str(wav_path),
             voice_name=name,
-            exaggeration=exaggeration,
-            model=model
+            **clone_kwargs,
         )
         return JSONResponse(content=metadata)
     except Exception as e:
@@ -637,6 +738,7 @@ async def voice_preview_endpoint(
     test_phrase: str = Form(None),
     engine: str = Form(None),
     model: str = Form(None),
+    offline: bool = Form(False),
 ):
     """Upload a voice sample, clone temporarily, and stream a test phrase."""
     engine_name = engine or config.NSPEECH_ENGINE
@@ -649,7 +751,9 @@ async def voice_preview_endpoint(
     import tempfile, os as _os
     tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     try:
-        wav_bytes = await file.read()
+        raw_bytes = await file.read()
+        original_suffix = Path(file.filename or "").suffix.lower() or ".wav"
+        wav_bytes = _ensure_wav(raw_bytes, original_suffix)
         tmp_wav.write(wav_bytes)
         tmp_wav.close()
 
@@ -660,7 +764,10 @@ async def voice_preview_endpoint(
         previews_dir.mkdir(parents=True, exist_ok=True)
         tts_engine.cache_dir = previews_dir
         try:
-            tts_engine.clone(str(Path(tmp_wav.name)), preview_name, model=model)
+            clone_kwargs = {"model": model}
+            if prompt_text:
+                clone_kwargs["prompt_text"] = prompt_text
+            tts_engine.clone(str(Path(tmp_wav.name)), preview_name, **clone_kwargs)
             tts_engine.load_voice(preview_name, model=model)
         finally:
             tts_engine.cache_dir = saved_cache_dir
@@ -669,7 +776,7 @@ async def voice_preview_endpoint(
 
     phrase = test_phrase or "This is a preview of the cloned voice."
     media_type = "audio/mp3"
-    generator = tts_engine.generate(phrase, voice_name=preview_name, model=model)
+    generator = tts_engine.generate(phrase, voice_name=preview_name, model=model, offline=offline)
 
     def stream_preview():
         import av, io as _io
@@ -708,7 +815,7 @@ def delete_voice_endpoint(name: str, engine: Optional[str] = None):
     voice_dir = _voice_dir()
     deleted = []
     for dir_path in (voice_dir, voice_dir / "previews"):
-        for ext in (".wav", ".pt"):
+        for ext in (".wav", ".pt", ".dots.json"):
             p = dir_path / f"{name}{ext}"
             if p.exists():
                 p.unlink()

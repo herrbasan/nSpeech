@@ -1,77 +1,74 @@
-<div class="page-chatterbox-generate">
+<div class="page-dots-generate">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>Chatterbox — Generate</h1>
-        <p class="lead">Zero-shot voice cloning TTS with per-sentence streaming.</p>
+        <h1>dots.tts — Generate</h1>
+        <p class="lead">2B fully continuous AR TTS. SOTA voice cloning quality.</p>
     </header>
 
     <nui-card>
         <nui-input-group>
-            <label for="cb-voice">Voice</label>
+            <label for="dots-voice">Voice</label>
             <nui-select id="voice-select">
-                <select id="cb-voice">
-                    <option value="default" selected>Select a cloned voice...</option>
+                <select id="dots-voice">
+                    <option value="default" selected>Default</option>
                 </select>
             </nui-select>
         </nui-input-group>
 
         <nui-input-group>
-            <label for="cb-model">Model</label>
-            <nui-select>
-                <select id="cb-model">
-                    <option value="turbo" selected>Turbo (350M, paralinguistic)</option>
-                    <option value="eng">English (500M, exaggeration)</option>
-                    <option value="mtl">Multilingual (500M, 23 languages)</option>
-                </select>
-            </nui-select>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="cb-language">Language</label>
-            <nui-select>
-                <select id="cb-language">
-                    <option value="en" selected>English</option>
-                    <option value="de">German</option>
-                    <option value="fr">French</option>
-                    <option value="es">Spanish</option>
-                    <option value="it">Italian</option>
-                    <option value="ja">Japanese</option>
-                    <option value="ko">Korean</option>
-                    <option value="zh">Chinese</option>
-                    <option value="ru">Russian</option>
-                    <option value="ar">Arabic</option>
-                    <option value="nl">Dutch</option>
-                    <option value="pl">Polish</option>
-                    <option value="pt">Portuguese</option>
-                    <option value="sv">Swedish</option>
-                    <option value="tr">Turkish</option>
-                    <option value="hi">Hindi</option>
-                </select>
-            </nui-select>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="cb-text">Text</label>
+            <label for="dots-text">Text</label>
             <nui-textarea auto-resize max-rows="8" min-rows="5">
-                <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox streaming system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
+                <textarea id="dots-text" placeholder="Text to synthesize...">This is a test of the dots.tts streaming system. The fully continuous autoregressive architecture produces highly natural speech with excellent voice cloning fidelity.</textarea>
             </nui-textarea>
         </nui-input-group>
 
         <nui-button id="btn-arena-sample">
             <button type="button">Random Arena Sample</button>
         </nui-button>
-        <p id="cb-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
+        <p id="dots-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
 
         <nui-input-group>
-            <label for="cb-exaggeration">Exaggeration: <span id="cb-exag-val">0.5</span></label>
+            <label for="dots-language">Language (optional)</label>
+            <nui-select>
+                <select id="dots-language">
+                    <option value="" selected>Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="zh">Chinese</option>
+                    <option value="de">German</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="it">Italian</option>
+                    <option value="ru">Russian</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="dots-seed">Seed (for prosody variation)</label>
             <nui-input>
-                <input type="range" id="cb-exaggeration" min="0.0" max="1.0" step="0.05" value="0.5">
+                <input type="number" id="dots-seed" value="42">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="dots-steps">Steps (quality vs speed): <span id="dots-steps-val">4</span></label>
+            <nui-input>
+                <input type="range" id="dots-steps" min="1" max="16" step="1" value="4">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="dots-guidance">Guidance Scale: <span id="dots-guidance-val">1.2</span></label>
+            <nui-input>
+                <input type="range" id="dots-guidance" min="0" max="3" step="0.1" value="1.2">
             </nui-input>
         </nui-input-group>
 
         <nui-input-group>
             <nui-input>
-                <input type="checkbox" id="cb-offline">
-                <label for="cb-offline">Offline mode (no streaming — best quality)</label>
+                <input type="checkbox" id="dots-offline">
+                <label for="dots-offline">Offline mode (no streaming — best quality, no TTFA)</label>
             </nui-input>
         </nui-input-group>
 
@@ -84,8 +81,8 @@
             </nui-button>
         </nui-button-container>
 
-        <audio id="cb-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="cb-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+        <audio id="dots-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="dots-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
@@ -95,27 +92,33 @@ function init(element, params, nui) {
     let abortController = null;
 
     const voiceSelect = element.querySelector('#voice-select');
-    const selectEl = element.querySelector('#cb-voice');
-    const textArea = element.querySelector('#cb-text');
-    const exaggerationEl = element.querySelector('#cb-exaggeration');
-    const languageEl = element.querySelector('#cb-language');
-    const modelEl = element.querySelector('#cb-model');
-    const exagValEl = element.querySelector('#cb-exag-val');
-    const arenaBtn = element.querySelector('#btn-arena-sample');
-    const arenaInfo = element.querySelector('#cb-arena-info');
-    const offlineEl = element.querySelector('#cb-offline');
+    const selectEl = element.querySelector('#dots-voice');
+    const textArea = element.querySelector('#dots-text');
+    const languageEl = element.querySelector('#dots-language');
+    const seedEl = element.querySelector('#dots-seed');
+    const stepsEl = element.querySelector('#dots-steps');
+    const stepsValEl = element.querySelector('#dots-steps-val');
+    const guidanceEl = element.querySelector('#dots-guidance');
+    const guidanceValEl = element.querySelector('#dots-guidance-val');
+    const offlineEl = element.querySelector('#dots-offline');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
+    const arenaBtn = element.querySelector('#btn-arena-sample');
+    const arenaInfo = element.querySelector('#dots-arena-info');
+    const audio = element.querySelector('#dots-audio');
 
-    // Manual auto-resize fallback
+    // Manual auto-resize fallback — adjust height to fit content
     function autoResize(ta) {
         ta.style.height = 'auto';
         ta.style.height = ta.scrollHeight + 'px';
     }
     textArea.addEventListener('input', () => autoResize(textArea));
     autoResize(textArea);
-    const audio = element.querySelector('#cb-audio');
-    const statusEl = element.querySelector('#cb-status');
+    const statusEl = element.querySelector('#dots-status');
+
+    // Update slider value displays
+    stepsEl.addEventListener('input', () => stepsValEl.textContent = stepsEl.value);
+    guidanceEl.addEventListener('input', () => guidanceValEl.textContent = guidanceEl.value);
 
     arenaBtn.addEventListener('nui-click', () => {
         fetch('/arena-samples')
@@ -140,7 +143,7 @@ function init(element, params, nui) {
                 const cloned = allVoices
                     .filter(v => v.voice_type === 'cloned')
                     .map(v => ({ value: v.name, label: v.name }));
-                const items = [{ value: 'default', label: 'Select a cloned voice...' }];
+                const items = [{ value: 'default', label: 'Default' }];
                 if (cloned.length) items.push(...cloned);
                 voiceSelect.setItems(items);
             })
@@ -156,7 +159,9 @@ function init(element, params, nui) {
         }
         audio.pause();
         audio.removeAttribute('src');
-        if (mediaSource?.readyState === 'open') mediaSource.endOfStream();
+        if (mediaSource?.readyState === 'open') {
+            mediaSource.endOfStream();
+        }
         mediaSource = null;
         statusEl.textContent = '';
     }
@@ -169,7 +174,6 @@ function init(element, params, nui) {
         stop();
 
         const voice = selectEl.value || 'default';
-        const exaggeration = exaggerationEl.value || '0.5';
         abortController = new AbortController();
         const startTime = performance.now();
 
@@ -188,9 +192,15 @@ function init(element, params, nui) {
             params.set('text', text);
             params.set('output_format', 'mp3');
             params.set('voice_name', voice);
-            params.set('exaggeration', exaggeration);
-            params.set('language', languageEl.value);
-            params.set('model', modelEl.value);
+
+            const lang = languageEl.value;
+            if (lang) params.set('language', lang);
+            const seed = seedEl.value;
+            if (seed) params.set('seed', seed);
+            const numSteps = stepsEl.value;
+            if (numSteps) params.set('num_steps', numSteps);
+            const guidance = guidanceEl.value;
+            if (guidance) params.set('guidance_scale', guidance);
             if (offlineEl.checked) params.set('offline', 'true');
 
             try {
@@ -211,7 +221,9 @@ function init(element, params, nui) {
                         sourceBuffer.onerror = rej;
                     });
                 }
-                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                if (mediaSource.readyState === 'open') {
+                    mediaSource.endOfStream();
+                }
                 statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
             } catch (err) {
                 if (err.name === 'AbortError') {
@@ -223,11 +235,10 @@ function init(element, params, nui) {
         }, { once: true });
     });
 
-    exaggerationEl.addEventListener('input', () => {
-        exagValEl.textContent = exaggerationEl.value;
-    });
-
-    element.show = () => loadVoices();
+    element.show = () => {
+        selectEl.value = 'default';
+        loadVoices();
+    };
     element.hide = () => stop();
 }
 </script>

@@ -56,6 +56,15 @@ function buildNavigation(engine) {
                 { label: 'Voices', href: '#page=chatterbox/voices' }
             ]
         });
+    } else if (engine === 'dots') {
+        nav.push({
+            label: 'dots.tts',
+            icon: 'headphones',
+            items: [
+                { label: 'Generate', href: '#page=dots/generate' },
+                { label: 'Voices', href: '#page=dots/voices' }
+            ]
+        });
     } else if (engine === 'chatterbox') {
         nav.push({
             label: 'Chatterbox',
@@ -76,18 +85,21 @@ function initNav() {
         .then(d => {
             const engine = d.engine || 'kokoro';
             const nav = buildNavigation(engine);
-            const sideNav = document.getElementById('main-navigation');
-            if (sideNav?.loadData) {
-                sideNav.loadData(nav);
-            }
+            renderNav(nav);
         })
         .catch(() => {
             const nav = buildNavigation('kokoro');
-            const sideNav = document.getElementById('main-navigation');
-            if (sideNav?.loadData) {
-                sideNav.loadData(nav);
-            }
+            renderNav(nav);
         });
+}
+
+function renderNav(navData) {
+    customElements.whenDefined('nui-link-list').then(() => {
+        const sideNav = document.getElementById('main-navigation');
+        if (sideNav && typeof sideNav.loadData === 'function') {
+            sideNav.loadData(navData);
+        }
+    });
 }
 
 initNav();

@@ -32,6 +32,12 @@ LANGUAGE_MAP = {
     "el": "el", "fi": "fi", "he": "he", "hi": "hi", "ms": "ms",
     "nl": "nl", "no": "no", "pl": "pl", "pt": "pt", "sv": "sv",
     "sw": "sw", "tr": "tr",
+    # Friendly aliases
+    "german": "de", "english": "en", "spanish": "es", "french": "fr",
+    "italian": "it", "japanese": "ja", "korean": "ko", "chinese": "zh",
+    "russian": "ru", "arabic": "ar", "danish": "da", "dutch": "nl",
+    "finnish": "fi", "hebrew": "he", "hindi": "hi", "norwegian": "no",
+    "polish": "pl", "portuguese": "pt", "swedish": "sv", "turkish": "tr",
 }
 
 
@@ -132,6 +138,15 @@ class ChatterboxAdapter:
             kwargs.get("language"), kwargs.get("model")
         )
         self._active_model = model
+
+        # If a voice was loaded but for a different model type, rehydrate
+        # conditionals onto the newly resolved model (e.g. voice cloned with
+        # "eng" model, now generating with "mtl" because language is non-English).
+        if self._loaded_voice and model_type != self._current_model_type:
+            cache_path = self._cache_path(self._loaded_voice, model_type)
+            if cache_path.exists():
+                self._load_conds(model, model_type, cache_path)
+
         self._current_model_type = model_type
 
         exaggeration = kwargs.get("exaggeration", 0.5)

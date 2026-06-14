@@ -38,12 +38,20 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 REQUIREMENTS_DIR = PROJECT_ROOT / "requirements"
 VENV_BASE = PROJECT_ROOT / "venv"
 
-ENGINES = ["kokoro", "cosyvoice", "chatterbox", "all"]
+ENGINES = ["kokoro", "cosyvoice", "chatterbox", "dots", "all"]
+
+# Per-engine Python version override.
+# Engines not listed here use the system Python (whatever runs install.py).
+# dots.tts requires 3.10-3.12 (does NOT support 3.13).
+ENGINE_PYTHON_VERSIONS = {
+    "dots": "3.10",
+}
 
 ENGINE_PATCHES = {
     "chatterbox": ["patch_chatterbox"],
     "cosyvoice": [],
     "kokoro": [],
+    "dots": [],
 }
 
 
@@ -71,6 +79,42 @@ def _pip(engine):
     if platform.system() == "Windows":
         return d / "Scripts" / "pip.exe"
     return d / "bin" / "pip"
+
+
+def _resolve_engine_python(engine):
+    """
+    Find the Python executable for an engine's venv.
+
+    Engines listed in ENGINE_PYTHON_VERSIONS get a venv created with that
+    specific Python version (found via the Windows py launcher or PATH).
+    Engines not listed return None — the system Python is used.
+
+    This is the whole point of per-engine venvs: each engine gets the runtime
+    it actually needs, not whatever the OS happens to default to.
+    """
+    version = ENGINE_PYTHON_VERSIONS.get(engine)
+    if not version:
+        return None
+
+    if platform.system() == "Windows":
+        # Use the py launcher to find the exact version
+        result = run(["py", f"-{version}", "-c", "import sys; print(sys.executable)"],
+                     capture=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        raise RuntimeError(
+            f"Python {version} not found via 'py -{version}'. "
+            f"Install it or add it to PATH."
+        )
+    else:
+        # On Unix, try python3.X directly
+        candidate = f"python{version}"
+        result = run(["which", candidate], capture=True, check=False)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        raise RuntimeError(
+            f"Python {version} not found. Install {candidate} or add it to PATH."
+        )
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -124,8 +168,18 @@ def create_venv(engine):
 
     VENV_BASE.mkdir(parents=True, exist_ok=True)
     (VENV_BASE / engine).mkdir(parents=True, exist_ok=True)
+
+    # Resolve which Python to use for this engine's venv.
+    # Most engines use the system Python. Some (dots.tts) need a specific version.
+    target_python = _resolve_engine_python(engine)
+
     print(f"[*] Creating venv at {env_path} ...")
-    venv.create(env_path, with_pip=True)
+    if target_python:
+        print(f"    Using Python: {target_python}")
+        run([target_python, "-m", "venv", "--copies", str(env_path)])
+    else:
+        print(f"    Using system Python: {sys.executable}")
+        venv.create(env_path, with_pip=True)
     print(f"[+] venv created: venv/{engine}/env/")
     return True
 

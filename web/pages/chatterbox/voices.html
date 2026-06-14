@@ -8,9 +8,9 @@
         <h3 style="margin-top: 0">Clone Voice</h3>
 
         <nui-input-group>
-            <label for="cb-clone-file">Reference Audio (.wav, max 30s)</label>
+            <label for="cb-clone-file">Reference Audio (.wav, .mp3, .flac, .ogg, max 30s)</label>
             <nui-input>
-                <input type="file" id="cb-clone-file" accept=".wav">
+                <input type="file" id="cb-clone-file" accept=".wav,.mp3,.flac,.ogg,.m4a">
             </nui-input>
         </nui-input-group>
 
@@ -25,10 +25,30 @@
             <label for="cb-clone-model">Clone For</label>
             <nui-select>
                 <select id="cb-clone-model">
-                    <option value="turbo" selected>Turbo (350M)</option>
-                    <option value="eng">English (500M)</option>
+                    <option value="turbo">Turbo (350M, paralinguistic)</option>
+                    <option value="eng" selected>English (500M, exaggeration)</option>
+                    <option value="mtl">Multilingual (500M, 23 languages)</option>
                 </select>
             </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="cb-test-phrase">Test Phrase</label>
+            <nui-textarea auto-resize max-rows="4" min-rows="2">
+                <textarea id="cb-test-phrase">This is a preview of the cloned voice. The quick brown fox jumps over the lazy dog. How does it sound to you?</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-button id="btn-arena-sample">
+            <button type="button">Random Arena Sample</button>
+        </nui-button>
+        <p id="cb-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
+
+        <nui-input-group>
+            <nui-input>
+                <input type="checkbox" id="cb-preview-offline">
+                <label for="cb-preview-offline">Offline mode (no streaming — best quality)</label>
+            </nui-input>
         </nui-input-group>
 
         <nui-button-container gap="medium">
@@ -62,12 +82,39 @@ function init(element, params, nui) {
     const fileInput = element.querySelector('#cb-clone-file');
     const nameInput = element.querySelector('#cb-clone-name');
     const modelEl = element.querySelector('#cb-clone-model');
+    const testPhraseEl = element.querySelector('#cb-test-phrase');
+    const arenaBtn = element.querySelector('#btn-arena-sample');
+    const arenaInfo = element.querySelector('#cb-arena-info');
+    const previewOfflineEl = element.querySelector('#cb-preview-offline');
     const btnPreview = element.querySelector('#btn-preview');
     const btnSave = element.querySelector('#btn-save');
     const statusEl = element.querySelector('#cb-status');
     const savedListEl = element.querySelector('#cb-saved-list');
     const previewListEl = element.querySelector('#cb-preview-list');
     const previewAudio = element.querySelector('#cb-preview-audio');
+
+    // Manual auto-resize fallback
+    function autoResize(ta) {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    }
+    testPhraseEl.addEventListener('input', () => autoResize(testPhraseEl));
+    autoResize(testPhraseEl);
+
+    arenaBtn.addEventListener('nui-click', () => {
+        fetch('/arena-samples')
+            .then(r => r.json())
+            .then(d => {
+                if (d.text) {
+                    testPhraseEl.value = d.text;
+                    autoResize(testPhraseEl);
+                    arenaInfo.textContent = `From: ${d.speaker} — "${d.topic}"`;
+                }
+            })
+            .catch(() => {
+                arenaInfo.textContent = 'No arena samples available.';
+            });
+    });
 
     let mediaSource = null;
     let abortController = null;
@@ -135,7 +182,8 @@ function init(element, params, nui) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('model', modelEl.value);
-        formData.append('test_phrase', 'This is a preview of the cloned voice.');
+        formData.append('test_phrase', testPhraseEl.value || 'This is a preview of the cloned voice.');
+        if (previewOfflineEl.checked) formData.append('offline', 'true');
 
         previewAudio.style.display = 'block';
         mediaSource = new MediaSource();

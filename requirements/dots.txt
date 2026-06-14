@@ -1,0 +1,10 @@
+# dots.tts engine dependencies (GPU)
+# dots.tts installs from source via: pip install -e . -c constraints/recommended.txt
+# This file lists additional deps not covered by the dots.tts pyproject.toml.
+# The installer clones the repo and runs the source install separately.
+#
+# Python 3.10-3.12 required (NOT 3.13). The installer creates the venv with py -3.10.
+#
+# PyTorch CUDA is installed separately by install.py (cu128 nightly for RTX 5090 Blackwell).
+# transformers/torch pins come from dots.tts's own constraints file.
+soundfile>=0.12.1

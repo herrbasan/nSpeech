@@ -11,6 +11,7 @@ venv/
 models/
 voices/
 voices_samples/
+voice_gen/
 
 # Environment Variables
 .env
