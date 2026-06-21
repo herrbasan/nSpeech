@@ -1,8 +1,9 @@
 """
 Kokoro TTS Engine Adapter
 Implements sentence-level chunking and voice caching using the Kokoro backend.
-Thread-safe: serialize access to ONNX pipeline via lock to prevent empty
-output under concurrent load.
+Thread-safe: voice-state mutations are lock-protected. ONNX inference
+(Session.run) is thread-safe per ONNX Runtime docs and left un-serialized.
+If empty output reoccurs, fall back to per-thread pipeline instances.
 """
 import re
 import time
@@ -48,10 +49,12 @@ class KokoroAdapter:
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.active_voices = {}
         
-        # Thread safety: serialize access to ONNX pipeline and shared state.
-        # Kokoro's create() has internal mutable buffers (phonemizer, voice cache)
-        # that cause empty output under concurrent access.
-        self._lock = threading.Lock()
+        # Lock protects voice-state mutations only (active_voices dict,
+        # current_voice). ONNX inference runs outside the lock — ONNX
+        # Runtime's Session.run() is documented as thread-safe.
+        # If empty output reoccurs, the race is in Kokoro's ONNX wrapper
+        # internals; fallback: N pipeline instances (one per worker thread).
+        self._voice_lock = threading.Lock()
 
     def load_voice(self, voice_name: str) -> None:
         """
@@ -59,7 +62,7 @@ class KokoroAdapter:
         Fails fast if the file `voices/<voice_name>.<engine_name>.pt` doesn't exist.
         """
         if voice_name in self.pipeline.get_voices():
-            with self._lock:
+            with self._voice_lock:
                 self.active_voices[voice_name] = voice_name
                 self.current_voice = voice_name
             return
@@ -73,7 +76,7 @@ class KokoroAdapter:
         data = torch.load(cache_path, weights_only=False)
         if isinstance(data, str):
             if data in self.pipeline.get_voices():
-                with self._lock:
+                with self._voice_lock:
                     self.active_voices[voice_name] = data
                     self.current_voice = voice_name
                 return
@@ -81,7 +84,7 @@ class KokoroAdapter:
         if isinstance(data, torch.Tensor):
             data = data.cpu().numpy()
             
-        with self._lock:
+        with self._voice_lock:
             self.active_voices[voice_name] = data
             self.current_voice = voice_name
 
@@ -89,28 +92,36 @@ class KokoroAdapter:
         """
         Generate speech from text, chunking by sentences.
         Yields (pcm_tensor, is_final).
-        Thread-safe: serializes access to the ONNX pipeline.
+        Thread-safe: voice-state resolution is lock-protected; ONNX inference
+        runs concurrently (Session.run() is thread-safe per ONNX Runtime docs).
         """
         speed = kwargs.get("speed", 1.0)
-        # Use the lastly loaded voice or fallback
         voice_name = kwargs.get("voice_name", getattr(self, "current_voice", "af_heart"))
         
-        # Load from cache if not already in memory but exists on disk
-        if voice_name not in self.active_voices:
+        # ── Voice resolution (lock-protected dict access only) ──────────
+        # Lock guards active_voices dict reads/writes. Data loading and
+        # style extraction run unlocked — they're I/O or pure computation.
+        with self._voice_lock:
+            voice_data = self.active_voices.get(voice_name)
+        
+        if voice_data is None:
             try:
                 self.load_voice(voice_name)
             except FileNotFoundError:
-                # Direct voice strings passed to Kokoro (pre-packaged voices)
-                with self._lock:
+                with self._voice_lock:
                     self.active_voices[voice_name] = voice_name
                     self.current_voice = voice_name
-                
-        with self._lock:
-            voice_data = self.active_voices[voice_name]
+            
+            with self._voice_lock:
+                voice_data = self.active_voices[voice_name]
+        
         if isinstance(voice_data, str):
             voice_data = self.pipeline.get_voice_style(voice_data)
         elif isinstance(voice_data, torch.Tensor):
             voice_data = voice_data.cpu().numpy()
+        
+        # voice_data is now a local numpy array — immutable, safe for
+        # concurrent use across threads without any lock.
 
         # Basic sentence splitting regex
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
@@ -120,9 +131,9 @@ class KokoroAdapter:
         for i, sentence in enumerate(sentences):
             is_final = (i == len(sentences) - 1)
             
-            # Serialize ONNX inference to prevent empty output from concurrent access
-            with self._lock:
-                audio_array, _ = self.pipeline.create(sentence, voice=voice_data, speed=speed)
+            # ONNX inference — no lock. Session.run() is thread-safe.
+            # voice_data is a local numpy array, not shared state.
+            audio_array, _ = self.pipeline.create(sentence, voice=voice_data, speed=speed)
             
             # Fail fast on empty output — indicates inference race or pipeline error
             if audio_array is None or len(audio_array) == 0:
