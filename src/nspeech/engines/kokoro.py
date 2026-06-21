@@ -1,15 +1,19 @@
 """
 Kokoro TTS Engine Adapter
 Implements sentence-level chunking and voice caching using the Kokoro backend.
+Thread-safe: serialize access to ONNX pipeline via lock to prevent empty
+output under concurrent load.
 """
 import re
 import time
+import threading
 from pathlib import Path
 from typing import Tuple, Generator, Dict, Any
 
 import torch
 import numpy as np
 from nspeech import config
+from nspeech.logger import get as get_logger, error as log_error
 
 class KokoroAdapter:
     """TTS engine adapter for Kokoro."""
@@ -43,6 +47,11 @@ class KokoroAdapter:
         # Ensure voice directory exists
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.active_voices = {}
+        
+        # Thread safety: serialize access to ONNX pipeline and shared state.
+        # Kokoro's create() has internal mutable buffers (phonemizer, voice cache)
+        # that cause empty output under concurrent access.
+        self._lock = threading.Lock()
 
     def load_voice(self, voice_name: str) -> None:
         """
@@ -50,8 +59,9 @@ class KokoroAdapter:
         Fails fast if the file `voices/<voice_name>.<engine_name>.pt` doesn't exist.
         """
         if voice_name in self.pipeline.get_voices():
-            self.active_voices[voice_name] = voice_name
-            self.current_voice = voice_name
+            with self._lock:
+                self.active_voices[voice_name] = voice_name
+                self.current_voice = voice_name
             return
 
         cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.pt"
@@ -63,20 +73,23 @@ class KokoroAdapter:
         data = torch.load(cache_path, weights_only=False)
         if isinstance(data, str):
             if data in self.pipeline.get_voices():
-                self.active_voices[voice_name] = data
-                self.current_voice = voice_name
+                with self._lock:
+                    self.active_voices[voice_name] = data
+                    self.current_voice = voice_name
                 return
             data = self.pipeline.get_voice_style(data)
         if isinstance(data, torch.Tensor):
             data = data.cpu().numpy()
             
-        self.active_voices[voice_name] = data
-        self.current_voice = voice_name
+        with self._lock:
+            self.active_voices[voice_name] = data
+            self.current_voice = voice_name
 
     def generate(self, text: str, **kwargs) -> Generator[Tuple[torch.Tensor, bool], None, None]:
         """
         Generate speech from text, chunking by sentences.
         Yields (pcm_tensor, is_final).
+        Thread-safe: serializes access to the ONNX pipeline.
         """
         speed = kwargs.get("speed", 1.0)
         # Use the lastly loaded voice or fallback
@@ -88,10 +101,12 @@ class KokoroAdapter:
                 self.load_voice(voice_name)
             except FileNotFoundError:
                 # Direct voice strings passed to Kokoro (pre-packaged voices)
-                self.active_voices[voice_name] = voice_name
-                self.current_voice = voice_name
+                with self._lock:
+                    self.active_voices[voice_name] = voice_name
+                    self.current_voice = voice_name
                 
-        voice_data = self.active_voices[voice_name]
+        with self._lock:
+            voice_data = self.active_voices[voice_name]
         if isinstance(voice_data, str):
             voice_data = self.pipeline.get_voice_style(voice_data)
         elif isinstance(voice_data, torch.Tensor):
@@ -105,7 +120,25 @@ class KokoroAdapter:
         for i, sentence in enumerate(sentences):
             is_final = (i == len(sentences) - 1)
             
-            audio_array, _ = self.pipeline.create(sentence, voice=voice_data, speed=speed)
+            # Serialize ONNX inference to prevent empty output from concurrent access
+            with self._lock:
+                audio_array, _ = self.pipeline.create(sentence, voice=voice_data, speed=speed)
+            
+            # Fail fast on empty output — indicates inference race or pipeline error
+            if audio_array is None or len(audio_array) == 0:
+                log_error("kokoro_empty_output", {
+                    "sentence": sentence[:200],
+                    "voice_name": voice_name,
+                    "speed": speed,
+                    "sentence_idx": i,
+                    "total_sentences": len(sentences),
+                    "full_text_len": len(text),
+                }, "kokoro")
+                raise RuntimeError(
+                    f"Kokoro produced empty audio for sentence {i}/{len(sentences)} "
+                    f"(voice={voice_name}, speed={speed}). "
+                    f"Text: {sentence[:120]}..."
+                )
             
             chunk_tensor = torch.from_numpy(audio_array).float()
                 

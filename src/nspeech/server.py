@@ -559,13 +559,12 @@ async def websocket_tts_endpoint(websocket: WebSocket):
 
 @app.post("/tts")
 def tts_endpoint(req: TTSRequest):
-    """Streaming synthesis. Returns chunked audio using Transfer-Encoding: chunked."""
+    """Synthesize speech. Buffers audio to validate non-empty before returning 200."""
     try:
         engine = get_engine(req.engine)
         if req.voice_name and req.voice_name != "default":
             try:
                 import inspect
-                # Some engines may not support the model argument for load_voice
                 sig = inspect.signature(engine.load_voice)
                 if 'model' in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
                     engine.load_voice(req.voice_name, model=req.model)
@@ -591,88 +590,116 @@ def tts_endpoint(req: TTSRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-    def stream_audio():
-        import time as _time
-        start_time = _time.time()
-        print(f"[Backend] Starting request for text length {len(req.text)}")
+    # Buffer all audio into memory to validate it's non-empty before sending.
+    # StreamingResponse commits HTTP 200 before body, making it impossible
+    # to return 5xx on empty output. For the typical use case (paragraphs of
+    # 1-5 sentences), the memory overhead is negligible (~200 KB MP3).
+    import time as _time
+    start_time = _time.time()
+    print(f"[Backend] Starting request for text length {len(req.text)}")
+
+    audio_bytes = _collect_audio_bytes(engine, req)
+
+    if not audio_bytes or len(audio_bytes) == 0:
+        error("tts_empty_response", {
+            "text": req.text[:200],
+            "text_len": len(req.text),
+            "voice_name": req.voice_name,
+            "engine": req.engine or config.NSPEECH_ENGINE,
+            "output_format": req.output_format,
+            "speed": req.speed,
+            "ms": int((_time.time() - start_time) * 1000),
+        }, "server")
+        raise HTTPException(
+            status_code=500,
+            detail=f"TTS engine produced empty audio. Voice: {req.voice_name}, "
+                   f"text length: {len(req.text)}. Retry may succeed."
+        )
+
+    print(f"[Backend] Request complete at {_time.time() - start_time:.3f}s ({len(audio_bytes)} bytes)")
+    media_type = "audio/wav" if req.output_format == "wav" else f"audio/{req.output_format}"
+    return Response(content=audio_bytes, media_type=media_type)
+
+
+def _collect_audio_bytes(engine, req: TTSRequest) -> bytes:
+    """Collect all audio chunks into a single bytes buffer. Returns empty bytes on failure."""
+    try:
+        if req.output_format == "pcm":
+            parts = []
+            for chunk_tensor, is_final in engine.generate(
+                req.text, exaggeration=req.exaggeration, speed=req.speed,
+                instruct_text=req.instruct_text, language=req.language, model=req.model,
+                seed=req.seed, offline=req.offline
+            ):
+                mark_engine_used(req.engine)
+                audio_np = chunk_tensor.squeeze().cpu().numpy()
+                parts.append((audio_np * 32767.0).astype("int16").tobytes())
+            return b"".join(parts)
+
+        if req.output_format == "wav":
+            parts = [generate_streaming_wav_header(req.transcode_sample_rate)]
+            for chunk_tensor, is_final in engine.generate(
+                req.text, exaggeration=req.exaggeration, speed=req.speed,
+                instruct_text=req.instruct_text, language=req.language, model=req.model,
+                seed=req.seed, offline=req.offline
+            ):
+                mark_engine_used(req.engine)
+                audio_np = chunk_tensor.squeeze().cpu().numpy()
+                parts.append((audio_np * 32767.0).astype("int16").tobytes())
+            return b"".join(parts)
+
+        import av
+        output_io = io.BytesIO()
+        container = av.open(output_io, mode='w', format=req.output_format)
+
+        if req.output_format == "mp3":
+            codec = "libmp3lame"
+        elif req.output_format in ("ogg", "webm"):
+            codec = "libopus"
+        else:
+            codec = "aac"
 
         try:
-            if req.output_format == "pcm":
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model, seed=req.seed, offline=req.offline):
-                    mark_engine_used(req.engine)
-                    audio_np = chunk_tensor.squeeze().cpu().numpy()
-                    yield (audio_np * 32767.0).astype("int16").tobytes()
-                return
+            stream = container.add_stream(codec, rate=req.transcode_sample_rate)
+            stream.bit_rate = int(req.transcode_bitrate.replace('k', '000').replace('m', '000000'))
+        except Exception:
+            stream = container.add_stream('mp3', rate=req.transcode_sample_rate)
 
-            if req.output_format == "wav":
-                yield generate_streaming_wav_header(req.transcode_sample_rate)
-                for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model, seed=req.seed, offline=req.offline):
-                    mark_engine_used(req.engine)
-                    audio_np = chunk_tensor.squeeze().cpu().numpy()
-                    yield (audio_np * 32767.0).astype("int16").tobytes()
-                return
+        for chunk_tensor, is_final in engine.generate(
+            req.text, exaggeration=req.exaggeration, speed=req.speed,
+            instruct_text=req.instruct_text, language=req.language, model=req.model,
+            seed=req.seed, offline=req.offline
+        ):
+            mark_engine_used(req.engine)
+            audio_np = chunk_tensor.squeeze().cpu().numpy()
+            audio_int16 = (audio_np * 32767.0).astype("int16")
 
-            import av
-            output_io = io.BytesIO()
-            container = av.open(output_io, mode='w', format=req.output_format)
+            frame = av.AudioFrame.from_ndarray(
+                audio_int16.reshape(1, -1), format='s16', layout='mono'
+            )
+            frame.sample_rate = req.transcode_sample_rate
 
-            if req.output_format == "mp3":
-                codec = "libmp3lame"
-            elif req.output_format in ("ogg", "webm"):
-                codec = "libopus"
-            else:
-                codec = "aac"
-
-            try:
-                stream = container.add_stream(codec, rate=req.transcode_sample_rate)
-                stream.bit_rate = int(req.transcode_bitrate.replace('k', '000').replace('m', '000000'))
-            except Exception:
-                stream = container.add_stream('mp3', rate=req.transcode_sample_rate)
-
-            last_pos = 0
-            chunk_idx = 0
-            for chunk_tensor, is_final in engine.generate(req.text, exaggeration=req.exaggeration, speed=req.speed, instruct_text=req.instruct_text, language=req.language, model=req.model, seed=req.seed, offline=req.offline):
-                mark_engine_used(req.engine)
-                engine_time = _time.time()
-                print(f"[Backend] [Chunk {chunk_idx}] Engine logic finished at {engine_time - start_time:.3f}s")
-                audio_np = chunk_tensor.squeeze().cpu().numpy()
-                audio_int16 = (audio_np * 32767.0).astype("int16")
-
-                frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format='s16', layout='mono')
-                frame.sample_rate = req.transcode_sample_rate
-
-                for packet in stream.encode(frame):
-                    container.mux(packet)
-
-                current_pos = output_io.tell()
-                output_io.seek(last_pos)
-                data = output_io.read()
-                output_io.seek(current_pos)
-                last_pos = current_pos
-
-                if data:
-                    yield data
-                yield_time = _time.time()
-                print(f"[Backend] [Chunk {chunk_idx}] Bytes yielded at {yield_time - start_time:.3f}s (size: {len(data)})")
-                chunk_idx += 1
-
-            for packet in stream.encode():
+            for packet in stream.encode(frame):
                 container.mux(packet)
-            container.close()
 
-            output_io.seek(last_pos)
-            data = output_io.read()
-            if data:
-                yield data
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
 
-            print(f"[Backend] Stream finished at {_time.time() - start_time:.3f}s")
+        return output_io.getvalue()
 
-        except GeneratorExit:
-            print(f"[Backend] Client disconnected! TTS engine loop gracefully halted at {_time.time() - start_time:.3f}s.")
-            return
-
-    media_type = "audio/wav" if req.output_format == "wav" else f"audio/{req.output_format}"
-    return StreamingResponse(stream_audio(), media_type=media_type)
+    except Exception as e:
+        import traceback
+        error("tts_generation_error", {
+            "text": req.text[:200],
+            "text_len": len(req.text),
+            "voice_name": req.voice_name,
+            "engine": req.engine or config.NSPEECH_ENGINE,
+            "output_format": req.output_format,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }, "server")
+        raise
 
 
 @app.post("/v1/audio/speech")
