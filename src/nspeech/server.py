@@ -590,35 +590,61 @@ def tts_endpoint(req: TTSRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Buffer all audio into memory to validate it's non-empty before sending.
-    # StreamingResponse commits HTTP 200 before body, making it impossible
-    # to return 5xx on empty output. For the typical use case (paragraphs of
-    # 1-5 sentences), the memory overhead is negligible (~200 KB MP3).
+    # ── Offline path: buffer all audio, validate, return as single response ──
+    # Batch callers (e.g. Arena Slides) use offline=true for guaranteed
+    # empty-output detection. The 200-vs-500 decision happens before headers.
     import time as _time
     start_time = _time.time()
-    print(f"[Backend] Starting request for text length {len(req.text)}")
+    print(f"[Backend] Starting{' offline' if req.offline else ''} request for text length {len(req.text)}")
 
-    audio_bytes = _collect_audio_bytes(engine, req)
+    if req.offline:
+        audio_bytes = _collect_audio_bytes(engine, req)
+        if not audio_bytes or len(audio_bytes) == 0:
+            error("tts_empty_response", {
+                "text": req.text[:200], "text_len": len(req.text),
+                "voice_name": req.voice_name,
+                "engine": req.engine or config.NSPEECH_ENGINE,
+                "output_format": req.output_format, "speed": req.speed,
+                "ms": int((_time.time() - start_time) * 1000),
+            }, "server")
+            raise HTTPException(
+                status_code=500,
+                detail=f"TTS engine produced empty audio. Voice: {req.voice_name}, "
+                       f"text length: {len(req.text)}. Retry may succeed."
+            )
+        print(f"[Backend] Offline complete at {_time.time() - start_time:.3f}s ({len(audio_bytes)} bytes)")
+        media_type = "audio/wav" if req.output_format == "wav" else f"audio/{req.output_format}"
+        return Response(content=audio_bytes, media_type=media_type)
 
-    if not audio_bytes or len(audio_bytes) == 0:
-        error("tts_empty_response", {
-            "text": req.text[:200],
-            "text_len": len(req.text),
-            "voice_name": req.voice_name,
-            "engine": req.engine or config.NSPEECH_ENGINE,
-            "output_format": req.output_format,
-            "speed": req.speed,
-            "ms": int((_time.time() - start_time) * 1000),
-        }, "server")
-        raise HTTPException(
-            status_code=500,
-            detail=f"TTS engine produced empty audio. Voice: {req.voice_name}, "
-                   f"text length: {len(req.text)}. Retry may succeed."
-        )
-
-    print(f"[Backend] Request complete at {_time.time() - start_time:.3f}s ({len(audio_bytes)} bytes)")
+    # ── Realtime path: streaming with pre-flight first-chunk validation ──
+    # Peek at the first chunk before creating StreamingResponse so we can
+    # return 500 if empty. If valid, replay it through the streaming generator.
     media_type = "audio/wav" if req.output_format == "wav" else f"audio/{req.output_format}"
-    return Response(content=audio_bytes, media_type=media_type)
+
+    gen = engine.generate(
+        req.text, exaggeration=req.exaggeration, speed=req.speed,
+        instruct_text=req.instruct_text, language=req.language, model=req.model,
+        seed=req.seed, offline=req.offline
+    )
+
+    try:
+        first_tensor, first_is_final = next(gen)
+    except StopIteration:
+        _log_and_raise_empty(req, start_time)
+
+    # Validate first chunk has audio data
+    if first_tensor.numel() == 0:
+        _log_and_raise_empty(req, start_time)
+
+    mark_engine_used(req.engine)
+
+    # Replay first chunk through the streaming path, then delegate to gen
+    return StreamingResponse(
+        _stream_from_generator(
+            req, first_tensor, first_is_final, gen, start_time
+        ),
+        media_type=media_type,
+    )
 
 
 def _collect_audio_bytes(engine, req: TTSRequest) -> bytes:
@@ -700,6 +726,119 @@ def _collect_audio_bytes(engine, req: TTSRequest) -> bytes:
             "traceback": traceback.format_exc(),
         }, "server")
         raise
+
+
+def _stream_from_generator(req: TTSRequest, first_tensor, first_final, gen, start_time: float):
+    """Stream audio chunks from a pre-peeked generator. Yields the first
+    (already-validated) chunk, then delegates to the remaining generator."""
+    first_chunk_yielded = False
+
+    try:
+        # ── PCM / WAV: each chunk is independent, yield directly ──
+        if req.output_format in ("pcm", "wav"):
+            if req.output_format == "wav":
+                yield generate_streaming_wav_header(req.transcode_sample_rate)
+            for tensor, is_final in _chain(first_tensor, first_final, gen):
+                mark_engine_used(req.engine)
+                audio_np = tensor.squeeze().cpu().numpy()
+                pcm_bytes = (audio_np * 32767.0).astype("int16").tobytes()
+                if pcm_bytes:
+                    first_chunk_yielded = True
+                    yield pcm_bytes
+            if not first_chunk_yielded:
+                _log_and_raise_empty_generator(req, start_time)
+            return
+
+        # ── Transcoding (mp3, ogg, etc.): accumulate into shared container,
+        #     yield diffs to stream progressively ──
+        import av
+        output_io = io.BytesIO()
+        container = av.open(output_io, mode='w', format=req.output_format)
+        try:
+            stream = container.add_stream("libmp3lame", rate=req.transcode_sample_rate)
+            stream.bit_rate = int(req.transcode_bitrate.replace('k', '000').replace('m', '000000'))
+        except Exception:
+            stream = container.add_stream('mp3', rate=req.transcode_sample_rate)
+
+        last_pos = 0
+        for tensor, is_final in _chain(first_tensor, first_final, gen):
+            mark_engine_used(req.engine)
+            audio_np = tensor.squeeze().cpu().numpy()
+            audio_int16 = (audio_np * 32767.0).astype("int16")
+            frame = av.AudioFrame.from_ndarray(
+                audio_int16.reshape(1, -1), format='s16', layout='mono'
+            )
+            frame.sample_rate = req.transcode_sample_rate
+            for packet in stream.encode(frame):
+                container.mux(packet)
+            current_pos = output_io.tell()
+            output_io.seek(last_pos)
+            data = output_io.read()
+            output_io.seek(current_pos)
+            last_pos = current_pos
+            if data:
+                first_chunk_yielded = True
+                yield data
+
+        for packet in stream.encode():
+            container.mux(packet)
+        container.close()
+        output_io.seek(last_pos)
+        data = output_io.read()
+        if data:
+            first_chunk_yielded = True
+            yield data
+
+        if not first_chunk_yielded:
+            _log_and_raise_empty_generator(req, start_time)
+
+    except GeneratorExit:
+        import time as _time
+        print(f"[Backend] Client disconnected! Stream halted at {_time.time() - start_time:.3f}s.")
+        return
+
+
+def _log_and_raise_empty_generator(req: TTSRequest, start_time: float):
+    """Log empty output from the streaming generator. Raising an exception
+    this late won't change the HTTP status (headers already sent), but it
+    will be logged. The pre-flight check in tts_endpoint prevents this path
+    from being reached in practice."""
+    import time as _time
+    error("tts_empty_response", {
+        "text": req.text[:200], "text_len": len(req.text),
+        "voice_name": req.voice_name,
+        "engine": req.engine or config.NSPEECH_ENGINE,
+        "output_format": req.output_format, "speed": req.speed,
+        "ms": int((_time.time() - start_time) * 1000),
+    }, "server")
+    raise RuntimeError(
+        f"TTS engine produced empty audio. Voice: {req.voice_name}, "
+        f"text length: {len(req.text)}. Retry may succeed."
+    )
+
+
+def _chain(first_tensor, first_final, gen):
+    """Yield a pre-peeked chunk, then delegate to the generator."""
+    yield first_tensor, first_final
+    yield from gen
+
+
+def _log_and_raise_empty(req: TTSRequest, start_time: float):
+    """Log and raise HTTPException for empty audio. Called before
+    StreamingResponse is created, so 500 status is guaranteed."""
+    import time as _time
+    error("tts_empty_response", {
+        "text": req.text[:200], "text_len": len(req.text),
+        "voice_name": req.voice_name,
+        "engine": req.engine or config.NSPEECH_ENGINE,
+        "output_format": req.output_format, "speed": req.speed,
+        "ms": int((_time.time() - start_time) * 1000),
+    }, "server")
+    raise HTTPException(
+        status_code=500,
+        detail=f"TTS engine produced empty audio. Voice: {req.voice_name}, "
+               f"text length: {len(req.text)}. Retry may succeed."
+    )
 
 
 @app.post("/v1/audio/speech")
