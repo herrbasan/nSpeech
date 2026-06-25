@@ -1,0 +1,15 @@
+{
+  "name": "nspeech-root",
+  "version": "3.0.0",
+  "description": "nSpeech V3 — Node/Fastify API service managing isolated Python TTS child engines",
+  "type": "module",
+  "scripts": {
+    "postinstall": "cd server && npm install",
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "private": true
+}
