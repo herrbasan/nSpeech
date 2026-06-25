@@ -8,13 +8,14 @@ import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
 import fastifyMultipart from '@fastify/multipart';
 import { readFile } from 'node:fs/promises';
-import { Readable } from 'node:stream';
 import { resolve } from 'node:path';
 
 import { config } from './config.js';
 import { logger } from './logger.js';
 import { manager } from './engine/manager.js';
-import { WorkerError } from './engine/worker.js';
+import { registerSpeechRoute } from './api/speech.js';
+import { registerSpeechCloneRoute } from './api/speech-clone.js';
+import { registerVoiceRoutes } from './api/voices.js';
 
 // ── Initialize logger ───────────────────────────────────────────────────────
 
@@ -53,25 +54,6 @@ await app.register(fastifyMultipart, {
 
 manager.init(config.defaultEngine);
 
-// ── Helper: send a WorkerError as an OpenAI-compatible error response ───────
-
-function sendWorkerError(reply, err) {
-  const status = err.status || 503;
-  const body = err.toJSON ? err.toJSON() : {
-    error: { message: err.message, type: 'engine_error', code: 'unknown' },
-  };
-  reply.code(status).send(body);
-}
-
-/**
- * Convert a Web ReadableStream (from fetch) to a Node Readable stream
- * that Fastify can send. Returns null if the body is empty.
- */
-function webStreamToNode(webStream) {
-  if (!webStream) return null;
-  return Readable.fromWeb(webStream);
-}
-
 // ── Dashboard routes ────────────────────────────────────────────────────────
 
 /**
@@ -108,184 +90,11 @@ app.get('/v1/admin/status', async () => {
   return manager.getStatus();
 });
 
-// ── Worker proxy routes ─────────────────────────────────────────────────────
-//
-// These routes forward requests to the appropriate engine worker.
-// Node is transport-only: it does not generate, transcode, or modify audio.
-// The engine is resolved from the request body or defaults to the current engine.
+// ── API routes (OpenAI-compatible surface) ──────────────────────────────────
 
-/**
- * POST /v1/audio/speech — proxy TTS to the engine worker.
- * Engine is resolved from body.engine or body.model, falling back to current.
- */
-app.post('/v1/audio/speech', async (request, reply) => {
-  const body = typeof request.body === 'object' ? request.body : {};
-  const engineName = body.engine || body.model || manager.currentEngine;
-
-  let worker;
-  try {
-    worker = await manager.getWorker(engineName);
-  } catch (err) {
-    return sendWorkerError(reply, err);
-  }
-
-  try {
-    const resp = await worker.relay('POST', '/v1/audio/speech', {
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: request.raw.socket.destroyed ? AbortSignal.abort() : undefined,
-    });
-
-    // Forward the response — read body and send to client
-    reply.code(resp.status);
-    const contentType = resp.headers.get('content-type');
-    if (contentType) reply.type(contentType);
-
-    if (resp._stallTimer) clearTimeout(resp._stallTimer);
-
-    if (resp.body) {
-      const buf = Buffer.from(await resp.arrayBuffer());
-      reply.send(buf);
-    } else {
-      reply.send();
-    }
-  } catch (err) {
-    sendWorkerError(reply, err);
-  }
-});
-
-/**
- * GET /v1/voices — list voices for the current engine.
- */
-app.get('/v1/voices', async (request, reply) => {
-  const engineName = request.query.engine || manager.currentEngine;
-
-  let worker;
-  try {
-    worker = await manager.getWorker(engineName);
-  } catch (err) {
-    return sendWorkerError(reply, err);
-  }
-
-  try {
-    const resp = await worker.relay('GET', '/v1/voices');
-    reply.code(resp.status).send(await resp.json());
-  } catch (err) {
-    sendWorkerError(reply, err);
-  }
-});
-
-/**
- * POST /v1/voices/clone — multipart upload, forwarded to worker.
- */
-app.post('/v1/voices/clone', async (request, reply) => {
-  const engineName = (request.query.engine || manager.currentEngine);
-
-  let worker;
-  try {
-    worker = await manager.getWorker(engineName);
-  } catch (err) {
-    return sendWorkerError(reply, err);
-  }
-
-  try {
-    // Forward the raw multipart body
-    const contentType = request.headers['content-type'];
-    const resp = await worker.relay('POST', '/v1/voices/clone', {
-      headers: { 'content-type': contentType },
-      body: request.raw,
-    });
-
-    reply.code(resp.status);
-    if (resp.headers.get('content-type')) reply.type(resp.headers.get('content-type'));
-    const text = await resp.text();
-    reply.send(text);
-  } catch (err) {
-    sendWorkerError(reply, err);
-  }
-});
-
-/**
- * POST /v1/voices/preview — multipart upload, forwarded to worker.
- */
-app.post('/v1/voices/preview', async (request, reply) => {
-  const engineName = (request.query.engine || manager.currentEngine);
-
-  let worker;
-  try {
-    worker = await manager.getWorker(engineName);
-  } catch (err) {
-    return sendWorkerError(reply, err);
-  }
-
-  try {
-    const contentType = request.headers['content-type'];
-    const resp = await worker.relay('POST', '/v1/voices/preview', {
-      headers: { 'content-type': contentType },
-      body: request.raw,
-    });
-
-    reply.code(resp.status);
-    if (resp.headers.get('content-type')) reply.type(resp.headers.get('content-type'));
-    const nodeStream = webStreamToNode(resp.body);
-    if (nodeStream) {
-      nodeStream.on('end', () => { if (resp._stallTimer) clearTimeout(resp._stallTimer); });
-      nodeStream.on('error', () => { if (resp._stallTimer) clearTimeout(resp._stallTimer); });
-      reply.send(nodeStream);
-    } else {
-      if (resp._stallTimer) clearTimeout(resp._stallTimer);
-      reply.send();
-    }
-  } catch (err) {
-    sendWorkerError(reply, err);
-  }
-});
-
-/**
- * POST /v1/voices/mix — JSON body, forwarded to worker.
- */
-app.post('/v1/voices/mix', async (request, reply) => {
-  const engineName = manager.currentEngine;
-
-  let worker;
-  try {
-    worker = await manager.getWorker(engineName);
-  } catch (err) {
-    return sendWorkerError(reply, err);
-  }
-
-  try {
-    const resp = await worker.relay('POST', '/v1/voices/mix', {
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(request.body),
-    });
-    reply.code(resp.status).send(await resp.text());
-  } catch (err) {
-    sendWorkerError(reply, err);
-  }
-});
-
-/**
- * DELETE /v1/voices/:voice_id — delete a voice.
- */
-app.delete('/v1/voices/:voiceId', async (request, reply) => {
-  const engineName = (request.query.engine || manager.currentEngine);
-  const { voiceId } = request.params;
-
-  let worker;
-  try {
-    worker = await manager.getWorker(engineName);
-  } catch (err) {
-    return sendWorkerError(reply, err);
-  }
-
-  try {
-    const resp = await worker.relay('DELETE', `/v1/voices/${encodeURIComponent(voiceId)}`);
-    reply.code(resp.status).send(await resp.text());
-  } catch (err) {
-    sendWorkerError(reply, err);
-  }
-});
+registerSpeechRoute(app);
+registerSpeechCloneRoute(app);
+registerVoiceRoutes(app);
 
 // ── Graceful shutdown ───────────────────────────────────────────────────────
 
