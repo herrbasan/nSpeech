@@ -46,6 +46,27 @@ class TTSAdapterProtocol(Protocol):
         """
         ...
 
+    def list_voices(self) -> list:
+        """
+        Return a list of voice dicts for this engine.
+        Each dict: {"voice_id": str, "name": str, "category": "builtin"|"cloned"|"blended"}
+        """
+        ...
+
+    def is_loaded(self) -> bool:
+        """
+        Return True if the engine's model weights are resident in memory.
+        Used by /health to distinguish 'warming' from 'ready'.
+        """
+        ...
+
+    def unload(self) -> None:
+        """
+        Release model weights and free VRAM/RAM. Called before killing a worker
+        or when evicting an idle engine. After this, the adapter is unusable.
+        """
+        ...
+
 
 # Simple LRU-style cache for active engines
 _engine_cache: Dict[str, TTSAdapterProtocol] = {}
