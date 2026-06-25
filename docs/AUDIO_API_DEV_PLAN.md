@@ -1,5 +1,6 @@
 # nSpeech Audio API — Development Plan
 
+**Version: 3.0.0** (branch `v3.0.0`)  
 Status: draft  
 Date: 2026-06-25  
 Depends on: [AUDIO_API_PLAN.md](AUDIO_API_PLAN.md)
@@ -97,16 +98,24 @@ Worker startup:
 ```bash
 venv/kokoro/env/Scripts/python -m nspeech.worker_server --engine kokoro --port 0
 ```
-`--port 0` lets the OS assign a port; the worker prints its bound URL on stdout.
+`--port 0` lets the OS assign a port. The worker writes its bound port to a temp file
+(`%TEMP%/nspeech-<engine>-<pid>.port`) and also prints it on stdout as the first line.
+Node reads the temp file (authoritative); stdout is a fallback for debugging.
+
+Rationale: stdout-only port discovery is fragile — engine libraries (transformers,
+torch, onnxruntime) write warnings to stdout and can interleave with or delay the
+port line. The temp file is deterministic and race-free.
 
 Adapter changes:
 - Add `list_voices() -> list[dict]` to `TTSAdapterProtocol`.
 - Add `unload() -> None` for explicit resource cleanup.
+- Add `is_loaded() -> bool` so `/health` can report model load state accurately.
 - `generate()` stays unchanged: yields `(pcm_tensor, is_final)`.
 
 Verify:
 - `python -m nspeech.worker_server --engine kokoro --port 9001` starts.
 - `GET http://127.0.0.1:9001/v1/voices` returns voices.
+- Temp file appears and contains the correct port.
 
 ### Phase 2: Engine worker manager in Node
 
@@ -135,16 +144,35 @@ Registry format (`server/engine/registry.json`):
 
 Manager behavior:
 - Lazy start on first request for an engine.
-- Spawns worker with `--port 0`, reads the bound URL from stdout.
-- Polls `/health` before marking worker ready.
+- Spawns worker with `--port 0`, reads the bound port from the temp file.
+- Polls `/health` before marking worker ready. `/health` reports `warming` until the
+  adapter's model is loaded (first request triggers load), then `ready`. Node does not
+  mark a GPU worker ready until `/health` returns `ready` — or accepts that the first
+  request after `warming` will be slow and lets the client wait.
 - If a GPU engine is requested while another GPU engine is loaded, unload the old one first.
 - CPU engines can stay loaded alongside each other.
 - Crash detection: if a worker exits unexpectedly, clear it from cache and return 503.
+- **Stream stall detection:** Node wraps every relayed response in a byte-flow watchdog.
+  If no bytes arrive for `STREAM_TIMEOUT` seconds (default 30, configurable per engine),
+  Node aborts the upstream request, closes the client connection, and marks the worker
+  unhealthy. This catches GPU deadlocks that don't exit the process.
+- **Request cancellation:** Node passes an `AbortController` to every upstream fetch.
+  When the client disconnects mid-stream, Node aborts the upstream request immediately.
+  The worker must detect client disconnect (FastAPI `Request.is_disconnected()`) and stop
+  generation — a cancelled 30s GPU request must not run to completion.
+- **In-flight tracking:** each worker maintains an atomic request counter. Engine switch
+  and unload are blocked while the counter is non-zero (see Phase 6).
+- **Process group kill:** workers are spawned in a process group. On Node shutdown
+  (SIGINT/SIGTERM), Node kills the entire group, not just the child PID. On startup,
+  Node sweeps for stale `nspeech.worker_server` processes (matching the temp-file
+  pattern) and kills them before spawning new ones.
 - Node relays requests by forwarding the HTTP stream to the worker URL.
 
 Verify:
 - Node can spawn a Kokoro worker and proxy `GET /v1/voices`.
 - Node can switch from Kokoro to CosyVoice and back.
+- Killing a worker mid-request causes Node to return 503 to the client.
+- Client disconnect mid-stream causes the worker to stop generating (check GPU idle).
 
 ### Phase 3: OpenAI-compatible TTS endpoints
 
@@ -243,13 +271,24 @@ data: {"stage": "load_done", "engine": "dots"}
 ```
 
 Behavior:
-- If a generation is active for the current engine, return 409 Conflict.
-- Otherwise unload current GPU engine (if any), spawn requested engine, run a smoke `list_voices` call.
+- **Serialized:** engine switches are queued through a mutex. Two concurrent switch
+  requests do not race — the second waits for the first to complete.
+- **In-flight check:** if the current engine's worker has active requests (non-zero
+  in-flight counter), return 409 Conflict with a clear error message. "Active" means
+  any request still streaming or processing, not just TTS — voice clones and mixes
+  count too.
+- Otherwise unload current GPU engine (if any), spawn requested engine, run a smoke
+  `list_voices` call.
 - Update `current_engine` state.
+- **In-flight requests to the old engine are killed on switch.** This is intentional.
+  Clients must handle mid-stream disconnects during a switch. The dashboard should
+  disable the switch button while generation is active.
 
 Verify:
 - Switch engines via curl and receive SSE events.
 - Dashboard reflects new active engine.
+- Concurrent switch requests are serialized, not interleaved.
+- Switch while a stream is active returns 409.
 
 ### Phase 7: Dashboard migration
 
@@ -269,15 +308,27 @@ Verify:
 
 Goal: treat OpenAI, ElevenLabs, Azure, etc. as engines.
 
-Files:
-- `src/nspeech/engines/openai_tts.py` — adapter calling OpenAI `/audio/speech`.
-- `src/nspeech/engines/elevenlabs.py` — adapter calling ElevenLabs API.
-- Add entries to `server/engine/registry.json`.
+Cloud adapters only need an HTTP client — no model weights, no GPU, no venv. Spawning
+a Python process per cloud provider is heavyweight and pointless. Cloud adapters run
+**directly in Node** as native fetch-based modules, not as Python workers.
 
-These adapters run in the main nSpeech Python environment (or a lightweight shared venv) because they only need HTTP clients. They expose the same worker HTTP endpoints.
+Files:
+- `server/cloud/openai_tts.js` — calls OpenAI `/v1/audio/speech`, streams response.
+- `server/cloud/elevenlabs.js` — calls ElevenLabs API.
+- `server/cloud/registry.js` — maps `model` prefix to cloud adapter (e.g. `openai_*` → openai_tts).
+
+Cloud adapters implement the same relay contract as worker forwarding:
+- Accept the OpenAI-compatible request body (minimal translation needed).
+- Stream the provider's response back to the client.
+- Set `X-Stream-Mode: chunked` header (see §11) since cloud TTS returns complete files.
+- Read API keys from `.env` at startup; fail fast if missing.
+
+The registry in `server/engine/manager.js` checks cloud first: if `model` matches a
+cloud prefix, route to the Node cloud adapter. Otherwise route to the Python worker.
 
 Verify:
-- Request with `model: openai_tts_1` calls OpenAI and returns audio through the Node relay.
+- Request with `model: openai_tts_1` calls OpenAI and returns audio through Node.
+- No Python process is spawned for cloud models.
 
 ### Phase 9: Decommission old Python server
 
@@ -373,11 +424,14 @@ Response: `204 No Content` or `{"deleted": "my_voice"}`.
 
 | Format | Producer | Notes |
 |--------|----------|-------|
-| `pcm` | Worker | OpenAI-compatible PCM: 24kHz 16-bit signed little-endian mono. |
-| `pcm_f32` | Worker | nSpeech native: 24kHz float32 mono. Use via `extra_body.output_format`. |
+| `pcm` | Worker | OpenAI-compatible PCM: 24kHz 16-bit signed little-endian mono. This is the default interpretation of `response_format: pcm`. |
+| `pcm_f32` | Worker | nSpeech native: 24kHz float32 mono. Request via `response_format: pcm_f32`. Internal clients (dashboard, Arena Slides) use this to skip a conversion. |
 | `mp3/opus/aac/flac/wav` | Worker | Engine chooses encoder (PyAV, soundfile, etc.). |
 
 Node only rewrites headers if necessary. It never transcodes.
+
+Decision: `pcm` is always OpenAI 16-bit LE. OpenAI clients expect this; breaking it
+defeats the purpose of compatibility. Native float32 is opt-in via `pcm_f32`.
 
 ## 8. Config shape
 
@@ -405,12 +459,51 @@ ELEVENLABS_API_KEY=...
 | Risk | Mitigation |
 |------|------------|
 | Worker spawn latency is high (5–10s for GPU) | Keep lazy loading; engine switch is explicit and sends progress events. |
-| Multiple HTTP servers on localhost | Dynamic port allocation (`--port 0`) and health polling. |
+| Multiple HTTP servers on localhost | Dynamic port allocation (`--port 0`) + temp-file port discovery. |
 | Worker crashes mid-stream | Node detects exit, returns 503, and respawns on next request. |
+| Worker hangs mid-stream (GPU deadlock, no exit) | Byte-flow watchdog in Node relay: abort upstream after `STREAM_TIMEOUT` seconds of no data. |
+| Orphaned workers on Node crash | Process group kill on shutdown + stale-process sweep on startup. |
+| Client disconnect wastes GPU | AbortController on upstream fetch + worker checks `is_disconnected()`. |
+| Concurrent engine switches race | Switch mutex serializes all switch requests. |
 | Cloud adapter credentials | `.env` only; fail fast at startup if required key missing. |
 | Old dashboard broken during migration | Keep Python server running on a different port until Phase 9. |
+| Voice ID collision across engines | Voice IDs are engine-scoped; cross-engine voice requests fail with a clear error (see API plan §7). |
 
-## 10. Definition of done
+## 10. Error response schema
+
+All error responses (from Node, workers, and cloud adapters) use the OpenAI shape:
+
+```json
+{
+  "error": {
+    "message": "Voice 'af_heart' not found in engine cosyvoice_0.5b",
+    "type": "invalid_request_error",
+    "code": "voice_not_found",
+    "param": "voice"
+  }
+}
+```
+
+Common error types: `invalid_request_error`, `engine_error`, `rate_limit_exceeded`,
+`service_unavailable`. Workers translate engine-specific exceptions into these types.
+Node wraps worker errors that don't match the schema.
+
+## 11. Streaming honesty
+
+Local engines stream real incremental generation. Cloud adapters return complete files.
+Both support `stream: true`, but clients should know which they're getting.
+
+Node sets a response header on all streaming responses:
+
+| Header | Value | Meaning |
+|--------|-------|---------|
+| `X-Stream-Mode` | `native` | Bytes arrive as they are generated (local engines). |
+| `X-Stream-Mode` | `chunked` | Complete file sliced into chunks (cloud adapters, or `offline: true`). |
+
+Clients that need true incremental delivery (e.g. low-latency playback) should check
+this header and prefer `native` engines.
+
+## 12. Definition of done
 
 - `node server/index.js` starts and serves the dashboard.
 - `/v1/audio/speech` works for local and cloud engines.

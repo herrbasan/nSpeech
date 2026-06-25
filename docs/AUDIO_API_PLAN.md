@@ -1,5 +1,6 @@
 # nSpeech Unified Audio API Plan
 
+**Version: 3.0.0** (branch `v3.0.0`)  
 Status: draft  
 Date: 2026-06-25  
 Goal: define an OpenAI-compatible audio surface for nSpeech that also covers local-only features (cloning, blending, forced alignment) and can host cloud-provider adapters.
@@ -87,9 +88,9 @@ Returns raw audio bytes with the appropriate `Content-Type`.
 
 ### PCM format
 
-- OpenAI spec: 24 kHz, 16-bit signed little-endian, mono.
-- nSpeech native: 24 kHz, float32, mono.
-- The adapter normalizes to the requested contract. A non-standard `response_format` value such as `pcm_f32` may be used by local clients that want the native format.
+- `response_format: pcm` → OpenAI spec: 24 kHz, 16-bit signed little-endian, mono. This is the default and what OpenAI clients expect.
+- `response_format: pcm_f32` → nSpeech native: 24 kHz, float32, mono. Internal clients (dashboard, Arena Slides) use this to skip a conversion.
+- The adapter normalizes to the requested contract.
 
 ### Streaming
 
@@ -98,6 +99,13 @@ OpenAI-compatible streaming is requested with `stream: true`.
 - Local engines that already yield PCM chunks stream each chunk as it is generated.
 - Cloud adapters that return complete files buffer and stream chunks of a fixed byte size.
 - Each chunk is a raw audio fragment; no SSE or JSON wrapper.
+- **Streaming mode header:** every streaming response includes `X-Stream-Mode: native`
+  (real incremental generation, local engines) or `X-Stream-Mode: chunked` (complete
+  file sliced into chunks, cloud adapters or `offline: true`). Clients that need true
+  low-latency incremental delivery should check this header.
+- **Streaming is best-effort and non-resumable.** If the connection breaks mid-stream
+  (worker crash, engine switch, client disconnect), the client receives a partial
+  response. There is no resume or offset mechanism. Clients must re-request from scratch.
 
 ## 4. One-shot TTS from reference — `/v1/audio/speech/clone`
 
@@ -225,6 +233,18 @@ language: en
 ```
 
 ## 7. Voice management — `/v1/voices`
+
+### Voice ID namespacing
+
+Voice IDs are **engine-scoped**. A voice `af_heart` exists in Kokoro; it does not exist
+in CosyVoice. Requesting `model: cosyvoice_0.5b, voice: af_heart` returns a `voice_not_found`
+error, not a silent fallback to a default voice. Silent fallback hides bugs.
+
+A cloned voice `my_voice` persisted in Kokoro's cache is not visible to dots.tts. To use
+the same reference audio across engines, clone it separately in each engine.
+
+The `engine` field in voice listings (see below) makes the scope explicit. Clients must
+not assume a voice ID is portable across engines.
 
 ### `GET /v1/voices`
 
@@ -356,9 +376,36 @@ Gateway does **not** need to:
 - Manage engine venvs.
 - Implement per-provider audio translation.
 
-## 10. Open questions / next steps
+## 10. Error responses
+
+All errors use the OpenAI-compatible shape:
+
+```json
+{
+  "error": {
+    "message": "Voice 'af_heart' not found in engine cosyvoice_0.5b",
+    "type": "invalid_request_error",
+    "code": "voice_not_found",
+    "param": "voice"
+  }
+}
+```
+
+Common error types:
+
+| `type` | When |
+|-------|------|
+| `invalid_request_error` | Bad input, unknown voice, unknown model, bad format. |
+| `engine_error` | Engine failed during generation (GPU OOM, model load failure). |
+| `rate_limit_exceeded` | Cloud provider rate limit hit. |
+| `service_unavailable` | Worker crashed, not ready, or switching. |
+
+HTTP status codes: 400 (invalid request), 404 (voice/model not found), 409 (engine
+switch conflict), 429 (rate limit), 500 (engine error), 503 (worker unavailable).
+
+## 11. Open questions / next steps
 
 1. Research cloud TTS provider option sets (OpenAI, ElevenLabs, Azure, Google, Amazon, PlayHT, Cartesia) to confirm `extra_body` can express their key parameters.
 2. Decide whether STT should be a separate nVoice service or merged into nSpeech.
-3. Define error code mapping to OpenAI-compatible `error` objects.
-4. Decide `pcm` default: OpenAI 16-bit LE or nSpeech native float32.
+3. ~~Define error code mapping to OpenAI-compatible `error` objects.~~ → Done, see §10.
+4. ~~Decide `pcm` default: OpenAI 16-bit LE or nSpeech native float32.~~ → Decided: `pcm` is OpenAI 16-bit LE; `pcm_f32` is the native opt-in.
