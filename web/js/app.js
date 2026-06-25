@@ -93,6 +93,9 @@ function initNav() {
         });
 }
 
+// Attach initNav globally so that page-switches can trigger dynamic sidebar updates
+window.initNav = initNav;
+
 function renderNav(navData) {
     customElements.whenDefined('nui-link-list').then(() => {
         const sideNav = document.getElementById('main-navigation');

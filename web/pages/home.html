@@ -11,17 +11,70 @@
             <p>Status: <strong id="engine-status">Checking...</strong></p>
         </nui-card>
     </section>
+
+    <section style="margin-top: var(--nui-space-double)">
+        <h2>Hot Swap Engine</h2>
+        <nui-card>
+            <p style="margin-top: 0; color: var(--text-color-dim)">Select an engine from the list below to unload the current one and load the selected runner into memory.</p>
+            <div style="display: flex; gap: var(--nui-space); align-items: flex-end; margin-bottom: var(--nui-space);">
+                <nui-select label="Target Engine" id="engine-selector">
+                    <select id="engine-dropdown">
+                        <option value="">Loading list...</option>
+                    </select>
+                </nui-select>
+                <nui-button variant="primary">
+                    <button type="button" id="btn-switch" disabled>Switch Engine</button>
+                </nui-button>
+            </div>
+
+            <!-- Transition tracking logs console -->
+            <div id="switch-progress-console" style="margin-top: var(--nui-space); display: none;">
+                <p style="margin-bottom: var(--nui-space-half)"><strong>Transition Progress:</strong> <span id="switch-status-text">Idle</span></p>
+                <div id="switch-log" style="font-family: monospace; font-size: 0.85em; max-height: 180px; overflow-y: auto; background: var(--color-shade2); padding: var(--nui-space-half); border-radius: var(--border-radius1); border: 1px solid var(--border-shade1)"></div>
+            </div>
+        </nui-card>
+    </section>
 </div>
 
 <script type="nui/page">
 function init(element, params, nui) {
     const nameEl = element.querySelector('#engine-name');
     const statusEl = element.querySelector('#engine-status');
+    const dropdownEl = element.querySelector('#engine-dropdown');
+    const btnSwitch = element.querySelector('#btn-switch');
+    const consoleEl = element.querySelector('#switch-progress-console');
+    const logEl = element.querySelector('#switch-log');
+    const statusTextEl = element.querySelector('#switch-status-text');
+
+    function loadEnginesList(currentEngine) {
+        fetch('/v1/admin/engines')
+            .then(r => r.json())
+            .then(d => {
+                dropdownEl.innerHTML = '';
+                d.engines.forEach(eng => {
+                    const opt = document.createElement('option');
+                    opt.value = eng.name;
+                    opt.textContent = `${eng.name}${eng.gpu ? ' (GPU)' : ' (CPU)'}${eng.name === currentEngine ? ' [Active]' : ''}`;
+                    if (eng.name === currentEngine) {
+                        opt.selected = true;
+                    }
+                    dropdownEl.appendChild(opt);
+                });
+                btnSwitch.removeAttribute('disabled');
+            })
+            .catch(() => {
+                dropdownEl.innerHTML = '<option value="">Failed to load list</option>';
+            });
+    }
 
     element.show = () => {
         fetch('/engine')
             .then(r => r.json())
-            .then(d => { nameEl.textContent = d.engine || 'unknown'; });
+            .then(d => {
+                const current = d.engine || 'unknown';
+                nameEl.textContent = current;
+                loadEnginesList(current);
+            });
 
         fetch('/voices')
             .then(r => r.json())
@@ -31,10 +84,118 @@ function init(element, params, nui) {
                 statusEl.style.color = 'var(--color-success)';
             })
             .catch(() => {
-                statusEl.textContent = 'Offline';
+                statusEl.textContent = 'Offline / Warming Up';
                 statusEl.style.color = 'var(--color-danger)';
             });
     };
+
+    btnSwitch.addEventListener('click', () => {
+        const selectedEngine = dropdownEl.value;
+        if (!selectedEngine) return;
+
+        btnSwitch.setAttribute('disabled', 'true');
+        consoleEl.style.display = 'block';
+        logEl.innerHTML = '';
+        statusTextEl.textContent = 'Requesting change...';
+        statusTextEl.style.color = 'var(--text-color)';
+
+        logEl.innerHTML += `<div>[${new Date().toLocaleTimeString()}] Sending request to switch to ${selectedEngine}...</div>`;
+
+        fetch('/v1/admin/engine', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'text/event-stream'
+            },
+            body: JSON.stringify({ engine: selectedEngine })
+        })
+        .then(async response => {
+            if (!response.ok) {
+                const body = await response.json().catch(() => ({}));
+                const msg = body.error?.message || `HTTP ${response.status} Error`;
+                throw new Error(msg);
+            }
+
+            // Connection is SSE stream
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let rawBuffer = '';
+
+            function readStream() {
+                reader.read().then(({ done, value }) => {
+                    if (done) {
+                        btnSwitch.removeAttribute('disabled');
+                        return;
+                    }
+
+                    rawBuffer += decoder.decode(value, { stream: true });
+                    const lines = rawBuffer.split('\n');
+                    
+                    // Retain the last unfinished line in buffer
+                    rawBuffer = lines.pop();
+
+                    let currentEvent = null;
+
+                    lines.forEach(line => {
+                        const trimmed = line.trim();
+                        if (!trimmed) return;
+
+                        if (trimmed.startsWith('event:')) {
+                            currentEvent = trimmed.substring(6).trim();
+                        } else if (trimmed.startsWith('data:') && currentEvent) {
+                            try {
+                                const data = JSON.parse(trimmed.substring(5).trim());
+                                const timeStr = new Date().toLocaleTimeString();
+                                
+                                if (currentEvent === 'status') {
+                                    logEl.innerHTML += `<div style="color: var(--color-warning-dim)">[${timeStr}] Status: ${data.stage} on engine: ${data.engine}</div>`;
+                                    statusTextEl.textContent = `Stage: ${data.stage}`;
+                                } else if (currentEvent === 'result') {
+                                    logEl.innerHTML += `<div style="color: var(--color-success); font-weight: bold;">[${timeStr}] Completed: successfully hot-swapped to ${data.engine}!</div>`;
+                                    statusTextEl.textContent = 'Switched successfully!';
+                                    statusTextEl.style.color = 'var(--color-success)';
+                                    
+                                    // Refresh Home status
+                                    element.show();
+
+                                    // Refresh App Side Navigation
+                                    if (typeof window.initNav === 'function') {
+                                        window.initNav();
+                                    }
+                                } else if (currentEvent === 'error') {
+                                    const errMsg = data.error?.message || 'Unknown error during transition';
+                                    logEl.innerHTML += `<div style="color: var(--color-danger); font-weight: bold;">[${timeStr}] Error: ${errMsg}</div>`;
+                                    statusTextEl.textContent = `Transition failed!`;
+                                    statusTextEl.style.color = 'var(--color-danger)';
+                                }
+                            } catch (e) {
+                                // Parsing fail, silent ignore
+                            }
+                            currentEvent = null;
+                        }
+                    });
+
+                    // Keep scrolling logs to bottom
+                    logEl.scrollTop = logEl.scrollHeight;
+
+                    readStream();
+                }).catch(err => {
+                    logEl.innerHTML += `<div style="color: var(--color-danger)">[Error] Stream disconnected: ${err.message}</div>`;
+                    statusTextEl.textContent = 'Connection aborted.';
+                    statusTextEl.style.color = 'var(--color-danger)';
+                    btnSwitch.removeAttribute('disabled');
+                });
+            }
+
+            readStream();
+        })
+        .catch(err => {
+            logEl.innerHTML += `<div style="color: var(--color-danger)">[Error] Failed to switch: ${err.message}</div>`;
+            statusTextEl.textContent = 'Switch failed.';
+            statusTextEl.style.color = 'var(--color-danger)';
+            btnSwitch.removeAttribute('disabled');
+        });
+    });
 
     element.show();
 }
