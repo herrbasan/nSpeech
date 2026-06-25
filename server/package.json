@@ -1,0 +1,18 @@
+{
+  "name": "nspeech-server",
+  "version": "3.0.0",
+  "description": "nSpeech V3 — Node management layer over per-engine Python TTS workers",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0",
+    "@fastify/static": "^8.0.3"
+  }
+}

@@ -4,6 +4,10 @@ __pycache__/
 *$py.class
 *.so
 
+# Node
+node_modules/
+server/node_modules/
+
 # Virtual Environments, Engine Models & Voices
 venv/
 

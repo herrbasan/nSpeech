@@ -1,0 +1,9 @@
+{
+  "host": "127.0.0.1",
+  "port": 8000,
+  "default_engine": "kokoro",
+  "nvoice_url": "https://192.168.0.100:2244",
+  "voice_dir": "venv/{engine}/voices",
+  "model_dir": "venv/{engine}/models",
+  "log_level": "INFO"
+}
