@@ -1,0 +1,22 @@
+{
+  "kokoro": {
+    "venv_python": "venv/kokoro/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": false
+  },
+  "cosyvoice": {
+    "venv_python": "venv/cosyvoice/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
+  },
+  "chatterbox": {
+    "venv_python": "venv/chatterbox/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
+  },
+  "dots": {
+    "venv_python": "venv/dots/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
+  }
+}
