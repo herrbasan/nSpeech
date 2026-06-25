@@ -161,38 +161,30 @@ export class WorkerProcess {
   async _discoverPort() {
     const startTime = Date.now();
     const tempDir = tmpdir();
+    const targetPid = this.proc.pid;
+    const targetFileName = `nspeech-${this.engineName}-${targetPid}.port`;
+    const targetFilePath = join(tempDir, targetFileName);
+
+    log.info(`discovering port for worker pid ${targetPid}, looking for file ${targetFileName}`);
 
     while (Date.now() - startTime < PORT_DISCOVERY_TIMEOUT_MS) {
       if (this.state === 'dead') {
         throw new Error('worker died during port discovery');
       }
 
-      // Scan for port files matching this engine
-      let files;
-      try {
-        files = readdirSync(tempDir).filter(f => f.startsWith(`nspeech-${this.engineName}-`) && f.endsWith('.port'));
-      } catch {
-        files = [];
-      }
-
-      if (files.length > 0) {
-        // Pick the most recently modified file (in case of stale files)
-        let best = null;
-        let bestMtime = 0;
-        for (const f of files) {
-          const fullPath = join(tempDir, f);
-          const stat = statSync(fullPath);
-          if (stat.mtimeMs > bestMtime) {
-            bestMtime = stat.mtimeMs;
-            best = fullPath;
+      // Check specifically for our spawned worker's port file
+      if (existsSync(targetFilePath)) {
+        try {
+          const content = readFileSync(targetFilePath, 'utf8').trim();
+          if (content) {
+            this.port = parseInt(content, 10);
+            this.portFile = targetFilePath;
+            this.baseUrl = `http://127.0.0.1:${this.port}`;
+            log.info(`discovered port via PID-matched file: ${this.engineName} is on port ${this.port}`);
+            return;
           }
-        }
-
-        if (best) {
-          this.portFile = best;
-          this.port = parseInt(readFileSync(best, 'utf8').trim(), 10);
-          this.baseUrl = `http://127.0.0.1:${this.port}`;
-          return;
+        } catch (err) {
+          log.warn(`error reading port file: ${err.message}, will retry`);
         }
       }
 
@@ -237,7 +229,8 @@ export class WorkerProcess {
           });
           return;  // Process is up — accept warming or ready
         }
-      } catch {
+      } catch (err) {
+        log.warn(`health check poll failed for ${this.engineName}: ${err.message} on url ${this.baseUrl} with cause: ${err.cause ? err.cause.message || err.cause : 'none'}`);
         // Not ready yet, keep polling
       }
 

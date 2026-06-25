@@ -16,6 +16,8 @@ import { manager } from './engine/manager.js';
 import { registerSpeechRoute } from './api/speech.js';
 import { registerSpeechCloneRoute } from './api/speech-clone.js';
 import { registerVoiceRoutes } from './api/voices.js';
+import { registerSttRoutes } from './api/transcriptions.js';
+import { registerAdminRoutes } from './api/admin.js';
 
 // ── Initialize logger ───────────────────────────────────────────────────────
 
@@ -95,6 +97,8 @@ app.get('/v1/admin/status', async () => {
 registerSpeechRoute(app);
 registerSpeechCloneRoute(app);
 registerVoiceRoutes(app);
+registerSttRoutes(app);
+registerAdminRoutes(app);
 
 // ── Graceful shutdown ───────────────────────────────────────────────────────
 
