@@ -1,61 +1,50 @@
-import sys
 import os
-import platform
+import sys
+import subprocess
+import shutil
 from pathlib import Path
 
+def main():
+    root = Path(__file__).resolve().parent
+    server_dir = root / "server"
 
-def _resolve_python():
-    script = Path(__file__).resolve()
-    project_root = script.parent
+    print("=========================================")
+    print("      Starting nSpeech V3 Server         ")
+    print("=========================================")
 
-    engine = os.environ.get("NSPEECH_ENGINE")
-    if not engine:
-        env_file = project_root / ".env"
-        if env_file.exists():
-            with open(env_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("NSPEECH_ENGINE="):
-                        engine = line.split("=", 1)[1].strip()
-                        break
-
-    if not engine:
-        print("[!] NSPEECH_ENGINE not set. Set it in .env or environment.")
+    # 1. Verify Node.js is installed
+    node_executable = shutil.which("node")
+    if not node_executable:
+        print("[!] Error: Node.js was not found on your system PATH.")
+        print("    Please install Node.js (version 22 or newer) to run nSpeech V3.")
         sys.exit(1)
 
-    if platform.system() == "Windows":
-        venv_python = project_root / "venv" / engine / "env" / "Scripts" / "python.exe"
-    else:
-        venv_python = project_root / "venv" / engine / "env" / "bin" / "python"
+    # 2. Check if node_modules exists, run npm install if not
+    node_modules_dir = server_dir / "node_modules"
+    if not node_modules_dir.exists():
+        print("• First time setup: Node dependencies not found. Installing...")
+        npm_executable = shutil.which("npm")
+        if not npm_executable:
+            print("[!] Error: npm was not found on your system PATH.")
+            print("    Please ensure npm is installed alongside Node.js.")
+            sys.exit(1)
+        
+        try:
+            subprocess.run([npm_executable, "install"], cwd=str(server_dir), check=True)
+            print("• Dependencies successfully installed.")
+        except subprocess.CalledProcessError as e:
+            print(f"[!] Error: npm install failed. (Exit code: {e.returncode})")
+            sys.exit(1)
 
-    if venv_python.exists() and Path(sys.executable).resolve() != venv_python:
-        import subprocess
-        raise SystemExit(subprocess.call([str(venv_python), str(script)] + sys.argv[1:]))
-
+    # 3. Launch Fastify Node Server
+    print("• Booting modern V3 Fastify endpoint gateway...")
+    try:
+        # We forward all system platform signals (e.g. Ctrl+C) direct to process tree
+        result = subprocess.run([node_executable, "index.js"], cwd=str(server_dir))
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        print("\n• Shutting down nSpeech gateway cleanly. Goodbye!")
+        sys.exit(0)
 
 if __name__ == "__main__":
-    _resolve_python()
-
-    import signal
-    signal.signal(signal.SIGINT, lambda sig, frame: os._exit(-1))
-
-    import uvicorn
-
-    src_dir = str(Path(__file__).parent / "src")
-    if src_dir not in sys.path:
-        sys.path.insert(0, src_dir)
-
-    os.environ["PYTHONPATH"] = src_dir + os.pathsep + os.environ.get("PYTHONPATH", "")
-
-    from nspeech.config import NSPEECH_HOST, NSPEECH_PORT
-    print("=========================================")
-    print("      Starting nSpeech API Server        ")
-    print("=========================================")
-    dashboard_url = f"http://{NSPEECH_HOST}:{NSPEECH_PORT}/"
-    print(f"• Dashboard: {dashboard_url}")
-    print("• Stop Server: Press Ctrl+C")
-    print("=========================================\n")
-
-    config = uvicorn.Config("nspeech.server:app", host=NSPEECH_HOST, port=NSPEECH_PORT, reload=False, timeout_graceful_shutdown=0)
-    server = uvicorn.Server(config)
-    server.run()
+    main()
