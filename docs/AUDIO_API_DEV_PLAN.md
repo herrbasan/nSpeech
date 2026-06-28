@@ -48,6 +48,17 @@ What stays Python:
 
 Node is a thin translation layer. It does not generate, transcode, or stream audio itself. It validates the OpenAI-compatible surface, picks the right worker, and relays the request/response. This makes local engines and cloud providers structurally identical from Node's perspective.
 
+> **Implementation reality (2026-06-28) — DIVERGENCE, by design.**
+> The transcoding decision below was reversed during implementation: PyAV wheels
+> on Windows ship without libmp3lame, so the worker could not produce MP3/Opus
+> reliably. Instead **Node transcodes**: it requests `output_format: pcm` from the
+> worker (raw s16le 24kHz mono) and spawns ffmpeg (bundled via the lib/nvideo
+> submodule, `server/transcode.js`) to transcode PCM→mp3/opus/aac, piping the
+> worker's PCM into ffmpeg stdin and ffmpeg stdout to the client. Benefit: a
+> **single** streaming/transcode code path shared by every engine, and MP3 works
+> everywhere. Worker still emits raw PCM; Node owns all container/codec output.
+> The "Node never transcodes" statements in §4, §3.7, and §7 are superseded by this.
+
 ## 4. Decisions
 
 | Area | Decision | Rationale |
@@ -55,7 +66,7 @@ Node is a thin translation layer. It does not generate, transcode, or stream aud
 | Runtime | Node 22, ESM, no TypeScript | Matches Gateway stack; prime directive prefers bare platform. |
 | HTTP framework | Fastify | Lightweight, native JS, streaming-friendly. |
 | Worker interface | HTTP server per engine | Engine owns streaming, transcoding, and multipart handling. Node just relays. |
-| Transcoding | Inside Python worker via PyAV | Engine chooses its own output strategy; Node remains transport-only. |
+| Transcoding | **Node** via bundled ffmpeg (`server/transcode.js`, lib/nvideo) | Diverged from "worker/PyAV": PyAV wheels lack libmp3lame on Windows. Node requests raw PCM from the worker and transcodes → mp3/opus/aac. One shared streaming code path for all engines. See §3 divergence note. |
 | STT / alignment | Proxied to nVoice service | nVoice gets the same refactor later; stays separate for now. |
 | Engine switching | Kill previous GPU worker, spawn new one | Only one GPU engine resident at a time; CPU engines can coexist. |
 | Config | `config.json` for service config, `.env` for secrets | Secrets stay out of committed files. |

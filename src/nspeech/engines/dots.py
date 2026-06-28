@@ -167,8 +167,24 @@ class DotsAdapter:
             prompt_text = self._transcribe(audio_path)
 
         dest_wav = self.cache_dir / f"{voice_name}.wav"
-        if Path(audio_path).resolve() != dest_wav.resolve():
-            shutil.copy2(audio_path, dest_wav)
+
+        # dots.tts runtime uses librosa.load() internally, which on Windows
+        # uses audioread and fails on certain WAV formats. Pre-resample to
+        # 24kHz mono 16-bit using soundfile — reliable across platforms.
+        import soundfile as sf
+        try:
+            data, sr = sf.read(str(audio_path))
+        except Exception as e:
+            raise RuntimeError(f"Cannot read audio for voice clone: {e}")
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        target_sr = 24000
+        if sr != target_sr:
+            import numpy as np
+            from scipy.signal import resample
+            num_samples = int(len(data) * target_sr / sr)
+            data = resample(data, num_samples).astype("float32")
+        sf.write(str(dest_wav), data, target_sr, subtype="PCM_16")
 
         cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.json"
         voice_data = {
@@ -202,7 +218,7 @@ class DotsAdapter:
 
         # Allow checkpoint override per-request via model param
         # (requires reloading runtime — expensive, so only if different)
-        num_steps = kwargs.get("num_steps", 4)
+        num_steps = kwargs.get("steps", kwargs.get("num_steps", 4))
         guidance_scale = kwargs.get("guidance_scale", 1.2)
         seed = kwargs.get("seed", 42)
         offline = kwargs.get("offline", False)
@@ -214,16 +230,21 @@ class DotsAdapter:
                 torch.cuda.manual_seed_all(seed)
 
         prompt_audio = self._prompt_audio_path
-        prompt_text = self._prompt_text
+        # Audio-ONLY conditioning by default (prompt_text=None).
+        # dots.tts continuation-prefill requires the transcript to EXACTLY match
+        # the reference audio; any mismatch corrupts conditioning and makes EOS
+        # fire after 0-2 patches (near-empty/garbled output). We can't verify a
+        # transcript without reliable STT, so audio-only is the reliable path.
+        # The matched-transcript prefill can be re-enabled when transcript
+        # verification (nVoice STT) is available and trusted.
+        prompt_text = None
 
         if offline:
             # Non-streaming mode: generate the entire audio in one pass.
-            # Best for quality — no patch-by-patch gaps from AR loop.
-            # Tradeoff: no audio until full generation completes.
             result = self.runtime.generate(
                 text=text,
                 prompt_audio_path=prompt_audio if prompt_audio else None,
-                prompt_text=prompt_text if prompt_text else None,
+                prompt_text=None,
                 num_steps=num_steps,
                 guidance_scale=guidance_scale,
             )
@@ -242,7 +263,7 @@ class DotsAdapter:
         stream = self.runtime.generate_stream(
             text=text,
             prompt_audio_path=prompt_audio if prompt_audio else None,
-            prompt_text=prompt_text if prompt_text else None,
+            prompt_text=None,
             num_steps=num_steps,
             guidance_scale=guidance_scale,
         )
@@ -252,7 +273,18 @@ class DotsAdapter:
             pcm = chunk.detach().float().cpu()
             if pcm.dim() > 1:
                 pcm = pcm.squeeze(0)
-            # Resample 48kHz -> 24kHz
+            # Resample 48kHz -> 24kHz per patch. The FIR filter's edge support is
+            # ~50 samples vs ~7300 samples/patch, so boundary transients are
+            # sub-percent — far better than the prompt-text mismatch blip. True
+            # overlap-add streaming resample can be added later if needed.
             if self.native_sample_rate != 24000:
                 pcm = self._resampler(pcm.unsqueeze(0)).squeeze(0)
             yield pcm, False
+
+    def list_voices(self) -> list:
+        """dots.tts has no native voice catalog — all voices are user-cloned.
+        Return [] so the worker falls through to its directory-scan fallback."""
+        return []
+
+
+# end of DotsAdapter

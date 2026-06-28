@@ -1,114 +1,95 @@
 /**
- * nLogger-compatible JSON Lines logger for Node.
- * Matches the Python logger format:
- *   {"ts":"ISO","level":"LEVEL","type":"Category","msg":"text","meta":{},"session":"id"}
+ * nSpeech Node logger — adapter over the canonical nLogger submodule
+ * (lib/nlogger). nLogger is the shared logging library across the stack;
+ * this wrapper adapts its API to the call shape used throughout server/.
  *
- * Output: stdout (INFO+) and rotating file (DEBUG+, 10MB × 5).
+ * Preserved surface (no call-site changes needed):
+ *   logger.setLogDir(dir)        — create the singleton, pointing at dir
+ *   logger.setLevel(level)       — DEBUG/INFO/WARN/ERROR threshold
+ *   logger.child(category)       — { info, warn, error, debug }(msg, meta)
+ *   logger.info/warn/error/debug(msg, meta, category)
+ *
+ * nLogger writes:
+ *   - logs/main-0.log (rolling JSONL, machine-parseable)
+ *   - logs/<timestamp>-<session>.log (human-readable per-session)
+ *
+ * The Python worker writes nLogger-format JSONL too; aligning its target
+ * file with main-0.log unifies engine and server logs in one stream.
  */
-import { createWriteStream } from 'node:fs';
-import { mkdirSync, existsSync, renameSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
-
-const SESSION_ID = randomUUID().slice(0, 8);
-const MAX_BYTES = 10 * 1024 * 1024;
-const BACKUP_COUNT = 5;
-
-let _logDir = null;
-let _logPath = null;
-let _stream = null;
-let _level = 'INFO';
+import { createLogger, getLogger } from '../lib/nlogger/src/logger.js';
 
 const LEVELS = { DEBUG: 10, INFO: 20, WARN: 30, ERROR: 40 };
 
-function setLogDir(logDir) {
-  _logDir = resolve(logDir);
-  if (!existsSync(_logDir)) mkdirSync(_logDir, { recursive: true });
-  _logPath = resolve(_logDir, 'nspeech.log');
-  openStream();
-}
+let _level = 'INFO';
+let _created = false;
 
-function setLevel(level) {
-  _level = (level || 'INFO').toUpperCase();
-}
-
-function openStream() {
-  _stream = createWriteStream(_logPath, { flags: 'a' });
-  _stream.on('error', (err) => {
-    // File logging is best-effort; never crash the server over a log write.
-    process.stderr.write(`[logger] file write error: ${err.message}\n`);
-  });
-}
-
-/** Rotate the log file if it exceeds MAX_BYTES. */
-function maybeRotate() {
-  try {
-    const stat = statSync(_logPath);
-    if (stat.size < MAX_BYTES) return;
-  } catch {
-    return;
+function ensure(dir) {
+  if (!_created) {
+    createLogger({
+      logsDir: dir,
+      sessionPrefix: 'nspeech',
+    });
+    _created = true;
   }
-
-  _stream.end();
-  for (let i = BACKUP_COUNT - 1; i > 0; i--) {
-    const from = `${_logPath}.${i}`;
-    const to = `${_logPath}.${i + 1}`;
-    try {
-      if (existsSync(from)) {
-        if (i + 1 > BACKUP_COUNT) continue;
-        renameSync(from, to);
-      }
-    } catch { /* best-effort */ }
-  }
-  try {
-    renameSync(_logPath, `${_logPath}.1`);
-  } catch { /* best-effort */ }
-  openStream();
+  return getLogger();
 }
 
-function write(level, category, msg, meta = {}) {
-  if (LEVELS[level] === undefined) level = 'INFO';
-  if (LEVELS[level] < LEVELS[_level]) return;
+function atLeast(level) {
+  return (LEVELS[level] ?? LEVELS.INFO) >= (LEVELS[_level] ?? LEVELS.INFO);
+}
 
-  const entry = {
-    ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
-    level,
-    type: category,
-    msg,
-    meta,
-    session: SESSION_ID,
+function makeChild(category) {
+  return {
+    debug: (msg, meta = {}) => {
+      if (!atLeast('DEBUG')) return;
+      ensure().debug(msg, meta || {}, category);
+    },
+    info: (msg, meta = {}) => {
+      if (!atLeast('INFO')) return;
+      ensure().info(msg, meta || {}, category);
+    },
+    warn: (msg, meta = {}) => {
+      if (!atLeast('WARN')) return;
+      ensure().warn(msg, meta || {}, category);
+    },
+    // nSpeech child.error is (msg, meta); nLogger.error is (msg, error, meta, type).
+    error: (msg, meta = {}) => {
+      if (!atLeast('ERROR')) return;
+      ensure().error(msg, null, meta || {}, category);
+    },
   };
-
-  const line = JSON.stringify(entry);
-
-  // Console: stdout for INFO+, stderr for WARN+
-  if (level === 'WARN' || level === 'ERROR') {
-    process.stderr.write(line + '\n');
-  } else {
-    process.stdout.write(line + '\n');
-  }
-
-  // File: all levels
-  if (_stream) {
-    _stream.write(line + '\n');
-    maybeRotate();
-  }
 }
 
 export const logger = {
-  setLogDir,
-  setLevel,
+  setLogDir(dir) {
+    ensure(dir);
+  },
 
-  debug: (msg, meta, category = 'node') => write('DEBUG', category, msg, meta),
-  info:  (msg, meta, category = 'node') => write('INFO',  category, msg, meta),
-  warn:  (msg, meta, category = 'node') => write('WARN',  category, msg, meta),
-  error: (msg, meta, category = 'node') => write('ERROR', category, msg, meta),
+  setLevel(level) {
+    _level = (level || 'INFO').toUpperCase();
+    // nLogger gates debug() on DEBUG/NODE_ENV; honor a DEBUG threshold by
+    // enabling that env flag so debug entries are emitted.
+    if (_level === 'DEBUG') process.env.DEBUG = '1';
+  },
 
-  /** Create a child logger with a fixed category. */
-  child: (category) => ({
-    debug: (msg, meta) => write('DEBUG', category, msg, meta),
-    info:  (msg, meta) => write('INFO',  category, msg, meta),
-    warn:  (msg, meta) => write('WARN',  category, msg, meta),
-    error: (msg, meta) => write('ERROR', category, msg, meta),
-  }),
+  child(category) {
+    return makeChild(category);
+  },
+
+  debug: (msg, meta = {}, category = 'node') => {
+    if (!atLeast('DEBUG')) return;
+    ensure().debug(msg, meta || {}, category);
+  },
+  info: (msg, meta = {}, category = 'node') => {
+    if (!atLeast('INFO')) return;
+    ensure().info(msg, meta || {}, category);
+  },
+  warn: (msg, meta = {}, category = 'node') => {
+    if (!atLeast('WARN')) return;
+    ensure().warn(msg, meta || {}, category);
+  },
+  error: (msg, meta = {}, category = 'node') => {
+    if (!atLeast('ERROR')) return;
+    ensure().error(msg, null, meta || {}, category);
+  },
 };

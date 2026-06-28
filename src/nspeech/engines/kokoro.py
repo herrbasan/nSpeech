@@ -159,6 +159,20 @@ class KokoroAdapter:
                 
             yield chunk_tensor.cpu(), is_final
 
+    def list_voices(self) -> list:
+        """
+        Return the engine's native voice catalog (Kokoro's 54 built-in voices).
+        Cloned/blended voices are merged in by the worker after this returns.
+        """
+        try:
+            names = self.pipeline.get_voices()
+        except Exception:
+            return []
+        return [
+            {"voice_id": n, "name": n, "category": "builtin", "voice_type": "builtin"}
+            for n in names
+        ]
+
     def clone(self, audio_path: str, voice_name: str, **kwargs) -> Dict[str, Any]:
         """
         Clone a voice from reference audio.

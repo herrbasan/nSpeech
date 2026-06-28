@@ -40,6 +40,7 @@
 function init(element, params, nui) {
     const nameEl = element.querySelector('#engine-name');
     const statusEl = element.querySelector('#engine-status');
+    const selectorEl = element.querySelector('#engine-selector');
     const dropdownEl = element.querySelector('#engine-dropdown');
     const btnSwitch = element.querySelector('#btn-switch');
     const consoleEl = element.querySelector('#switch-progress-console');
@@ -50,20 +51,19 @@ function init(element, params, nui) {
         fetch('/v1/admin/engines')
             .then(r => r.json())
             .then(d => {
-                dropdownEl.innerHTML = '';
-                d.engines.forEach(eng => {
-                    const opt = document.createElement('option');
-                    opt.value = eng.name;
-                    opt.textContent = `${eng.name}${eng.gpu ? ' (GPU)' : ' (CPU)'}${eng.name === currentEngine ? ' [Active]' : ''}`;
-                    if (eng.name === currentEngine) {
-                        opt.selected = true;
-                    }
-                    dropdownEl.appendChild(opt);
-                });
+                const items = d.engines.map(eng => ({
+                    value: eng.name,
+                    label: `${eng.name}${eng.gpu ? ' (GPU)' : ' (CPU)'}${eng.name === currentEngine ? ' [Active]' : ''}`
+                }));
+                selectorEl.setItems(items);
+                
+                // Select active engine via NUI method
+                selectorEl.setValue(currentEngine);
+
                 btnSwitch.removeAttribute('disabled');
             })
             .catch(() => {
-                dropdownEl.innerHTML = '<option value="">Failed to load list</option>';
+                selectorEl.setItems([{ value: '', label: 'Failed to load list' }]);
             });
     }
 
@@ -76,7 +76,7 @@ function init(element, params, nui) {
                 loadEnginesList(current);
             });
 
-        fetch('/voices')
+        fetch('/v1/voices')
             .then(r => r.json())
             .then(d => {
                 const count = d.voices ? d.voices.length : 0;

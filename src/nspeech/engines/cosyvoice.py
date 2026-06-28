@@ -80,6 +80,7 @@ class CosyvoiceAdapter:
 
         self._current_voice = None
         self._current_instruct = None
+        self._prompt_wav_path = None
 
     def load_voice(self, voice_name):
         cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.pt"
@@ -91,7 +92,44 @@ class CosyvoiceAdapter:
             if isinstance(v, torch.Tensor):
                 spk_data[k] = v.to(device)
         self.model.frontend.spk2info[voice_name] = spk_data
+        # Restore the original prompt wav path so generate() can locate it
+        if "prompt_wav_path" in spk_data:
+            self._prompt_wav_path = spk_data["prompt_wav_path"]
         self._current_voice = voice_name
+
+    def _transcribe(self, audio_path):
+        """Auto-transcribe reference audio via nVoice STT service.
+
+        Used when no prompt_text is provided to clone(). CosyVoice zero-shot
+        cloning needs an accurate transcript of the reference audio for best
+        quality — a wrong/generic transcript degrades the speaker embedding.
+        """
+        stt_url = os.environ.get("NSPEECH_STT_URL", "")
+        if not stt_url:
+            return ""
+        try:
+            import ssl
+            import urllib.request
+            import json as _json
+            with open(audio_path, "rb") as f:
+                audio_bytes = f.read()
+            url = stt_url.rstrip("/") + "/transcribe"
+            req = urllib.request.Request(
+                url,
+                data=audio_bytes,
+                headers={"Content-Type": "application/octet-stream"},
+            )
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+                result = _json.loads(resp.read())
+            segments = result.get("segments", [])
+            text = " ".join(s.get("text", "") for s in segments).strip()
+            return text
+        except Exception as e:
+            print(f"STT transcription failed: {e}")
+            return ""
 
     def clone(self, audio_path, voice_name, **kwargs):
         start_time = time.time()
@@ -101,24 +139,34 @@ class CosyvoiceAdapter:
             resampler = torchaudio.transforms.Resample(sr, 16000)
             wav = resampler(wav)
 
+        # CosyVoice hard-crashes on audio >30s (assertion in speech token
+        # extraction). Truncate to 30s at 16kHz.
         max_samples = 30 * 16000
         if wav.shape[1] > max_samples:
             wav = wav[:, :max_samples]
+        # Persist a 16kHz copy of the prompt wav so re-loads can locate it
+        prompt_wav_path = self.cache_dir / f"{voice_name}.wav"
+        torchaudio.save(str(prompt_wav_path), wav, 16000)
 
-        import tempfile
-        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        try:
-            torchaudio.save(tmp.name, wav, 16000)
-            prompt_text = "You are a helpful assistant.<|endofprompt|>"
-            self.model.add_zero_shot_spk(prompt_text, tmp.name, voice_name)
-        finally:
-            tmp.close()
-            os.unlink(tmp.name)
+        prompt_text = kwargs.get("prompt_text") or ""
+        # Auto-transcribe via nVoice STT if no prompt_text provided.
+        # CosyVoice zero-shot cloning needs an accurate transcript — without it,
+        # the speaker embedding quality degrades significantly.
+        if not prompt_text:
+            prompt_text = self._transcribe(str(prompt_wav_path))
+        if not prompt_text:
+            prompt_text = "You are a helpful assistant."
+        if not prompt_text.endswith("<|endofprompt|>"):
+            prompt_text = f"{prompt_text}<|endofprompt|>"
+        self.model.add_zero_shot_spk(prompt_text, str(prompt_wav_path), voice_name)
 
         spk_data = self.model.frontend.spk2info[voice_name]
+        # Store prompt_wav_path inside the spk2info dict so load_voice can find it
+        spk_data["prompt_wav_path"] = str(prompt_wav_path)
         cache_path = self.cache_dir / f"{voice_name}.{self.engine_name}.pt"
         torch.save(spk_data, cache_path)
 
+        self._prompt_wav_path = str(prompt_wav_path)
         self._current_voice = voice_name
         clone_time_ms = int((time.time() - start_time) * 1000)
         return {
@@ -170,14 +218,21 @@ class CosyvoiceAdapter:
                     self.model.frontend.spk2info[spk_id]["prompt_text"] = saved_prompt
                     self.model.frontend.spk2info[spk_id]["prompt_text_len"] = saved_prompt_len
 
+    def list_voices(self) -> list:
+        """CosyVoice has no native voice catalog — all voices are user-cloned.
+        Return [] so the worker falls through to its directory-scan fallback."""
+        return []
+
     def _resolve_voice(self, voice_name):
         if voice_name and voice_name != "default":
             if self._current_voice != voice_name:
                 self.load_voice(voice_name)
-            return voice_name, ""
+            prompt_wav = self._prompt_wav_path or self.default_prompt_wav
+            return voice_name, prompt_wav
 
         if self._current_voice:
-            return self._current_voice, ""
+            prompt_wav = self._prompt_wav_path or self.default_prompt_wav
+            return self._current_voice, prompt_wav
 
         if self.default_prompt_wav:
             return "", self.default_prompt_wav

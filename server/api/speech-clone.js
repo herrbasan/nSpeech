@@ -13,7 +13,9 @@
  * the engine from the query string instead of the multipart body.
  */
 import { manager } from '../engine/manager.js';
+import { Readable } from 'node:stream';
 import { resolveEngine, getContentType, normalizeFormat } from './formats.js';
+import { pipePcmToClient } from '../transcode.js';
 
 /**
  * Register the /v1/audio/speech/clone route on a Fastify instance.
@@ -41,25 +43,37 @@ export function registerSpeechCloneRoute(app) {
     }
 
     try {
-      // Forward the raw multipart stream to the worker's preview endpoint
+      // Forward the buffered multipart body (set by Fastify's parser registered
+      // in server/index.js) to the worker's preview endpoint. The worker does
+      // the actual multipart parsing via FastAPI UploadFile/File/Form bindings.
       const contentType = request.headers['content-type'];
+      const body = Buffer.isBuffer(request.body)
+        ? request.body
+        : Buffer.from(request.body || '');
       const resp = await worker.relay('POST', '/v1/voices/preview', {
         headers: { 'content-type': contentType },
-        body: request.raw,
+        body,
       });
-
-      reply.code(resp.status);
-      reply.type(getContentType(outputFormat));
-      reply.header('X-Stream-Mode', 'chunked');
 
       if (resp._stallTimer) clearTimeout(resp._stallTimer);
 
-      if (resp.body) {
-        const buf = Buffer.from(await resp.arrayBuffer());
-        reply.send(buf);
-      } else {
-        reply.send();
+      // Error responses: forward the worker's error body as-is
+      if (resp.status >= 400 || !resp.body) {
+        const errBuf = resp.body ? Buffer.from(await resp.arrayBuffer()) : Buffer.alloc(0);
+        const ct = resp.headers.get('content-type') || 'application/json';
+        return reply.code(resp.status).type(ct).send(errBuf);
       }
+
+      // Worker returns raw PCM — transcode to the client's requested format.
+      reply.hijack();
+      const rawResponse = reply.raw;
+      const pcmStream = Readable.fromWeb(resp.body);
+
+      request.raw.on('close', () => {
+        pcmStream.destroy();
+      });
+
+      pipePcmToClient(pcmStream, rawResponse, outputFormat, { streamMode: 'chunked' });
     } catch (err) {
       sendError(reply, err);
     }

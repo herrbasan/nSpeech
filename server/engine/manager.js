@@ -33,11 +33,12 @@ export class EngineManager {
   }
 
   /**
-   * Initialize: set the default engine from config.
+   * Initialize: set the default engine from config and sweep stale state.
    * Does NOT spawn any workers — lazy loading only.
    */
   init(defaultEngine) {
     this.currentEngine = defaultEngine;
+    WorkerProcess.sweepStalePortFiles();
     log.info('engine manager initialized', { defaultEngine });
   }
 

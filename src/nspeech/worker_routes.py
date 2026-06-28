@@ -30,54 +30,28 @@ import torch
 from nspeech import config
 from nspeech.logger import get as get_logger, info, error
 from nspeech.tts import get_engine
+from nspeech.audio_formats import (
+    normalize_to_wav,
+    encode_stream,
+    get_media_type,
+    is_supported_output_format,
+    generate_wav_header as _generate_wav_header,
+    tensor_to_pcm_bytes as _tensor_to_pcm_bytes,
+)
 
 
-# ── Audio helpers (extracted from server.py, shared logic) ──────────────────
-
-def _generate_wav_header(sample_rate: int = 24000) -> bytes:
-    """44-byte WAV header with unknown/max length for streaming."""
-    header = bytearray(44)
-    header[0:4] = b"RIFF"
-    header[4:8] = b"\xff\xff\xff\xff"
-    header[8:12] = b"WAVE"
-    header[12:16] = b"fmt "
-    header[16:20] = (16).to_bytes(4, "little")
-    header[20:22] = (1).to_bytes(2, "little")
-    header[22:24] = (1).to_bytes(2, "little")
-    header[24:28] = sample_rate.to_bytes(4, "little")
-    header[28:32] = (sample_rate * 2).to_bytes(4, "little")
-    header[32:34] = (2).to_bytes(2, "little")
-    header[34:36] = (16).to_bytes(2, "little")
-    header[36:40] = b"data"
-    header[40:44] = b"\xff\xff\xff\xff"
-    return bytes(header)
-
+# ── Audio helpers — re-exported for backward compat with any callers ──────
 
 def _ensure_wav(audio_bytes: bytes, suffix: str = ".wav") -> bytes:
-    """Convert any audio format to WAV (PCM 16-bit, mono)."""
-    suffix = suffix.lower()
-    if suffix == ".wav":
-        return audio_bytes
+    """Convert any audio format to WAV (PCM 16-bit, mono). Wraps ValueError as HTTP 422."""
     try:
-        import soundfile as sf
-        data, sr = sf.read(io.BytesIO(audio_bytes))
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        buf = io.BytesIO()
-        sf.write(buf, data, sr, format="WAV", subtype="PCM_16")
-        return buf.getvalue()
-    except Exception as e:
-        raise HTTPException(status_code=422, detail=f"Cannot decode audio ({suffix}): {e}")
+        return normalize_to_wav(audio_bytes, suffix)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 def _voice_dir() -> Path:
     return Path(config.NSPEECH_VOICE_DIR)
-
-
-def _tensor_to_pcm_bytes(tensor: torch.Tensor) -> bytes:
-    """Convert a float32 PCM tensor to 16-bit LE bytes."""
-    audio_np = tensor.squeeze().cpu().numpy()
-    return (audio_np * 32767.0).astype("int16").tobytes()
 
 
 # ── Request models ──────────────────────────────────────────────────────────
@@ -154,32 +128,40 @@ def create_app(engine_name: str) -> FastAPI:
             except Exception as e:
                 error(f"list_voices failed: {e}", meta={"engine": engine_name}, category="worker")
 
-        # Fallback: scan voice directory for cloned/blended voices
-        if not voices:
-            voice_dir = _voice_dir()
-            voice_dir.mkdir(parents=True, exist_ok=True)
-            existing = set()
+        # Always scan voice directory for cloned/blended/preview voices and
+        # merge with the native list. Previously this was gated on
+        # `if not voices:` which meant engines with built-in voices (Kokoro's
+        # 54) never showed their blended/cloned voices.
+        voice_dir = _voice_dir()
+        voice_dir.mkdir(parents=True, exist_ok=True)
+        existing = {v.get("voice_id") or v.get("name") for v in voices}
 
-            # .wav files (cloned voices)
-            for wav_path in voice_dir.glob("*.wav"):
-                base = wav_path.stem
-                if base not in existing:
-                    voices.append({"voice_id": base, "name": base, "category": "cloned"})
-                    existing.add(base)
+        # .wav files (cloned voices)
+        for wav_path in voice_dir.glob("*.wav"):
+            base = wav_path.stem
+            if base.startswith("__preview__"):
+                continue
+            if base not in existing:
+                voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
+                existing.add(base)
 
-            # .pt cache files (blended or engine-specific)
-            for pt_path in voice_dir.glob(f"*.{engine_name}.pt"):
-                base = pt_path.stem.rsplit(".", 1)[0]
-                if base not in existing:
-                    voices.append({"voice_id": base, "name": base, "category": "blended"})
-                    existing.add(base)
+        # .pt cache files (blended, engine-specific, or preview)
+        for pt_path in voice_dir.glob(f"*.{engine_name}.pt"):
+            base = pt_path.stem.rsplit(".", 1)[0]
+            if base in existing:
+                continue
+            if base.startswith("__preview__"):
+                voices.append({"voice_id": base, "name": base, "category": "preview", "voice_type": "preview"})
+            else:
+                voices.append({"voice_id": base, "name": base, "category": "blended", "voice_type": "blended"})
+            existing.add(base)
 
-            # dots.tts sidecars
-            for json_path in voice_dir.glob("*.dots.json"):
-                base = json_path.name[:-len(".dots.json")]
-                if base not in existing:
-                    voices.append({"voice_id": base, "name": base, "category": "cloned"})
-                    existing.add(base)
+        # dots.tts sidecars
+        for json_path in voice_dir.glob("*.dots.json"):
+            base = json_path.name[:-len(".dots.json")]
+            if base not in existing:
+                voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
+                existing.add(base)
 
         return {"voices": voices, "engine": engine_name}
 
@@ -232,6 +214,11 @@ def create_app(engine_name: str) -> FastAPI:
             seed=req.seed,
             offline=req.offline,
         )
+        # Engine-specific params (steps, guidance_scale, blend, ...) ride in
+        # extra_body. Merge them into kwargs so each adapter picks what it needs
+        # via **kwargs; unknown keys are ignored.
+        if req.extra_body:
+            gen_kwargs.update(req.extra_body)
 
         # Offline path: buffer all, validate, return single response
         if req.offline:
@@ -239,7 +226,10 @@ def create_app(engine_name: str) -> FastAPI:
             if not audio_bytes:
                 raise HTTPException(status_code=500, detail="TTS engine produced empty audio")
 
-            media_type = _media_type(req.output_format)
+            try:
+                media_type = get_media_type(req.output_format)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
             info(
                 f"offline speech complete: {len(req.text)} chars",
                 meta={"ms": int((time.time() - start_time) * 1000), "bytes": len(audio_bytes)},
@@ -257,7 +247,10 @@ def create_app(engine_name: str) -> FastAPI:
         if first_tensor.numel() == 0:
             raise HTTPException(status_code=500, detail="TTS engine produced empty audio")
 
-        media_type = _media_type(req.output_format)
+        try:
+            media_type = get_media_type(req.output_format)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         return StreamingResponse(
             _stream_audio(req, first_tensor, first_final, gen, request, start_time),
             media_type=media_type,
@@ -290,7 +283,9 @@ def create_app(engine_name: str) -> FastAPI:
             f.write(wav_bytes)
 
         def _do_clone():
-            clone_kwargs = {"exaggeration": exaggeration, "model": model}
+            clone_kwargs = {"exaggeration": exaggeration}
+            if model:
+                clone_kwargs["model"] = model
             if prompt_text:
                 clone_kwargs["prompt_text"] = prompt_text
             return engine.clone(audio_path=str(wav_path), voice_name=name, **clone_kwargs)
@@ -310,12 +305,22 @@ def create_app(engine_name: str) -> FastAPI:
         test_phrase: str = Form(None),
         model: str = Form(None),
         offline: bool = Form(False),
+        output_format: str = Form("pcm"),
     ):
-        """Clone temporarily and stream a test phrase."""
+        """Clone temporarily and stream a test phrase.
+
+        Always emits raw PCM (s16le, 24kHz, mono). Node transcodes to
+        whatever format the browser needs (mp3 for MediaSource). This
+        matches the /v1/audio/speech path where the worker returns PCM
+        and Node owns all codec output.
+        """
         try:
             engine = await asyncio.to_thread(get_engine, engine_name)
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Engine load failed: {e}")
+
+        # Force PCM — Node handles all transcoding via ffmpeg.
+        output_format = "pcm"
 
         import tempfile
         tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
@@ -334,11 +339,13 @@ def create_app(engine_name: str) -> FastAPI:
             previews_dir.mkdir(parents=True, exist_ok=True)
             engine.cache_dir = previews_dir
             try:
-                clone_kwargs = {"model": model}
+                clone_kwargs = {}
+                if model:
+                    clone_kwargs["model"] = model
                 if prompt_text:
                     clone_kwargs["prompt_text"] = prompt_text
                 await asyncio.to_thread(engine.clone, str(Path(tmp_wav.name)), preview_name, **clone_kwargs)
-                await asyncio.to_thread(engine.load_voice, preview_name, model=model)
+                await asyncio.to_thread(engine.load_voice, preview_name)
             finally:
                 if saved_cache is not None:
                     engine.cache_dir = saved_cache
@@ -346,37 +353,39 @@ def create_app(engine_name: str) -> FastAPI:
             os.unlink(tmp_wav.name)
 
         phrase = test_phrase or "This is a preview of the cloned voice."
-        gen = engine.generate(phrase, model=model, offline=offline)
+        gen_kwargs = {}
+        if model:
+            gen_kwargs["model"] = model
+        gen_kwargs["offline"] = offline
+        gen = engine.generate(phrase, **gen_kwargs)
+
+        # Track preview cache files for cleanup after streaming completes.
+        preview_cache_files = []
+        if previews_dir.exists():
+            preview_cache_files = list(previews_dir.glob(f"{preview_name}*"))
 
         def stream_preview():
-            import av
-            output_io = io.BytesIO()
-            container = av.open(output_io, mode="w", format="mp3")
-            stream = container.add_stream("libmp3lame", rate=24000)
-            last_pos = 0
-            for chunk_tensor, is_final in gen:
-                pcm = _tensor_to_pcm_bytes(chunk_tensor)
-                audio_int16 = (chunk_tensor.squeeze().cpu().numpy() * 32767.0).astype("int16")
-                frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format="s16", layout="mono")
-                frame.sample_rate = 24000
-                for packet in stream.encode(frame):
-                    container.mux(packet)
-                current_pos = output_io.tell()
-                output_io.seek(last_pos)
-                data = output_io.read()
-                output_io.seek(current_pos)
-                last_pos = current_pos
-                if data:
-                    yield data
-            for packet in stream.encode():
-                container.mux(packet)
-            container.close()
-            output_io.seek(last_pos)
-            data = output_io.read()
-            if data:
-                yield data
+            try:
+                for chunk in encode_stream(gen, output_format):
+                    yield chunk
+            finally:
+                # Clean up preview cache files — previews are temporary.
+                # This prevents __preview__*.pt and __preview__*.wav files
+                # from accumulating in the voices directory forever.
+                for cache_file in preview_cache_files:
+                    try:
+                        cache_file.unlink()
+                    except Exception:
+                        pass
+                # Also remove the in-memory spk2info entry if present
+                try:
+                    spk = getattr(engine.model, "frontend", None)
+                    if spk is not None and hasattr(spk, "spk2info"):
+                        spk.spk2info.pop(preview_name, None)
+                except Exception:
+                    pass
 
-        return StreamingResponse(stream_preview(), media_type="audio/mpeg")
+        return StreamingResponse(stream_preview(), media_type=get_media_type(output_format))
 
     # ── POST /v1/voices/mix ─────────────────────────────────────────────────
 
@@ -446,110 +455,78 @@ def create_app(engine_name: str) -> FastAPI:
 
 # ── Audio collection / streaming helpers ────────────────────────────────────
 
-def _media_type(output_format: str) -> str:
-    if output_format == "wav":
-        return "audio/wav"
-    if output_format == "pcm":
-        return "audio/pcm"
-    if output_format == "pcm_f32":
-        return "application/octet-stream"
-    return f"audio/{output_format}"
-
-
 def _collect_audio(engine, req: SpeechRequest, gen_kwargs: dict) -> bytes:
-    """Collect all audio into a single buffer for offline mode."""
-    if req.output_format in ("pcm", "pcm_f32"):
-        parts = []
-        for chunk_tensor, is_final in engine.generate(req.text, **gen_kwargs):
-            if req.output_format == "pcm_f32":
-                parts.append(chunk_tensor.squeeze().cpu().numpy().astype("float32").tobytes())
-            else:
-                parts.append(_tensor_to_pcm_bytes(chunk_tensor))
-        return b"".join(parts)
+    """Collect all audio into a single buffer for offline mode.
 
-    if req.output_format == "wav":
-        parts = [_generate_wav_header(24000)]
-        for chunk_tensor, is_final in engine.generate(req.text, **gen_kwargs):
-            parts.append(_tensor_to_pcm_bytes(chunk_tensor))
-        return b"".join(parts)
-
-    # Transcoded formats (mp3, opus, etc.)
-    import av
-    output_io = io.BytesIO()
-    container = av.open(output_io, mode="w", format=req.output_format)
-    codec = "libmp3lame" if req.output_format == "mp3" else ("libopus" if req.output_format in ("ogg", "webm") else "aac")
+    Uses the standardized encode_stream so all formats (wav, pcm, pcm_f32,
+    mp3, opus) go through the same code path. Format errors are converted
+    to HTTP 400 with a clear message.
+    """
+    from nspeech.audio_formats import is_supported_output_format, OUTPUT_FORMATS
+    if not is_supported_output_format(req.output_format):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown output format: {req.output_format}. Supported: {list(OUTPUT_FORMATS.keys())}",
+        )
+    gen = engine.generate(req.text, **gen_kwargs)
     try:
-        stream = container.add_stream(codec, rate=24000)
-        stream.bit_rate = 128000
-    except Exception:
-        stream = container.add_stream("mp3", rate=24000)
-
-    for chunk_tensor, is_final in engine.generate(req.text, **gen_kwargs):
-        audio_int16 = (chunk_tensor.squeeze().cpu().numpy() * 32767.0).astype("int16")
-        frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format="s16", layout="mono")
-        frame.sample_rate = 24000
-        for packet in stream.encode(frame):
-            container.mux(packet)
-
-    for packet in stream.encode():
-        container.mux(packet)
-    container.close()
-    return output_io.getvalue()
+        return b"".join(encode_stream(gen, req.output_format))
+    except (RuntimeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 async def _stream_audio(req, first_tensor, first_final, gen, request: Request, start_time: float):
-    """Stream audio chunks. Checks for client disconnect between chunks."""
+    """Stream audio chunks. Checks for client disconnect between chunks.
+
+    Uses the standardized encode_stream so all formats (wav, pcm, pcm_f32,
+    mp3, opus) go through the same code path. The encoder is built once
+    after the first tensor peek (we know output_format at that point),
+    then fed the remaining tensors incrementally.
+    """
+    from nspeech.audio_formats import get_format_info, AudioEncoder
+
+    # NOTE: do not name this `info` — it shadows the module-level `info` logger
+    # imported from nspeech.logger, which would make the disconnect log calls
+    # below raise `TypeError: 'dict' object is not callable`.
+    fmt = get_format_info(req.output_format)
+    is_raw = fmt.get("is_raw", False)
+    sample_format = fmt.get("sample_format", "s16")
+
+    # Build the compressed encoder once, after the format is known.
+    enc = None
+    if not is_raw:
+        enc = AudioEncoder(req.output_format)
+
     try:
-        if req.output_format in ("pcm", "pcm_f32", "wav"):
-            if req.output_format == "wav":
-                yield _generate_wav_header(24000)
-            for tensor, is_final in _chain(first_tensor, first_final, gen):
-                if await request.is_disconnected():
-                    info("client disconnected mid-stream", meta={"ms": int((time.time() - start_time) * 1000)}, category="worker")
-                    return
-                if req.output_format == "pcm_f32":
-                    yield tensor.squeeze().cpu().numpy().astype("float32").tobytes()
-                else:
-                    yield _tensor_to_pcm_bytes(tensor)
-            return
+        # Yield the WAV header once at the start for raw WAV output
+        if req.output_format == "wav":
+            yield _generate_wav_header(fmt["sample_rate"])
 
-        # Transcoded streaming
-        import av
-        output_io = io.BytesIO()
-        container = av.open(output_io, mode="w", format=req.output_format)
-        codec = "libmp3lame" if req.output_format == "mp3" else ("libopus" if req.output_format in ("ogg", "webm") else "aac")
-        try:
-            stream = container.add_stream(codec, rate=24000)
-            stream.bit_rate = 128000
-        except Exception:
-            stream = container.add_stream("mp3", rate=24000)
-
-        last_pos = 0
         for tensor, is_final in _chain(first_tensor, first_final, gen):
             if await request.is_disconnected():
                 info("client disconnected mid-stream", meta={"ms": int((time.time() - start_time) * 1000)}, category="worker")
-                container.close()
+                if enc is not None:
+                    try:
+                        enc._container.close()
+                    except Exception:
+                        pass
                 return
-            audio_int16 = (tensor.squeeze().cpu().numpy() * 32767.0).astype("int16")
-            frame = av.AudioFrame.from_ndarray(audio_int16.reshape(1, -1), format="s16", layout="mono")
-            frame.sample_rate = 24000
-            for packet in stream.encode(frame):
-                container.mux(packet)
-            current_pos = output_io.tell()
-            output_io.seek(last_pos)
-            data = output_io.read()
-            output_io.seek(current_pos)
-            last_pos = current_pos
-            if data:
-                yield data
 
-        for packet in stream.encode():
-            container.mux(packet)
-        container.close()
-        output_io.seek(last_pos)
-        data = output_io.read()
-        if data:
-            yield data
+            if is_raw:
+                if sample_format == "f32":
+                    yield tensor.squeeze().cpu().numpy().astype("float32").tobytes()
+                else:
+                    yield _tensor_to_pcm_bytes(tensor)
+            else:
+                chunk = enc.encode_chunk(tensor)
+                if chunk:
+                    yield chunk
+
+        # Flush remaining compressed packets
+        if enc is not None:
+            trailer = enc.finish()
+            if trailer:
+                yield trailer
 
     except GeneratorExit:
         info("client disconnected (GeneratorExit)", meta={"ms": int((time.time() - start_time) * 1000)}, category="worker")

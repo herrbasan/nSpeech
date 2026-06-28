@@ -45,11 +45,11 @@ function init(element, params, nui) {
     const textArea = element.querySelector('#kok-text');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
-    const audio = element.querySelector('#kok-audio');
+    let audio = element.querySelector('#kok-audio');
     const statusEl = element.querySelector('#kok-status');
 
     function loadVoices() {
-        fetch('/voices')
+        fetch('/v1/voices')
             .then(r => r.json())
             .then(d => {
                 const allVoices = d.voices || [];
@@ -69,10 +69,12 @@ function init(element, params, nui) {
             abortController.abort();
             abortController = null;
         }
-        audio.pause();
-        audio.removeAttribute('src');
+        if (audio) {
+            audio.pause();
+            audio.src = '';
+        }
         if (mediaSource?.readyState === 'open') {
-            mediaSource.endOfStream();
+            try { mediaSource.endOfStream(); } catch (_) {}
         }
         mediaSource = null;
         statusEl.textContent = '';
@@ -80,7 +82,7 @@ function init(element, params, nui) {
 
     stopBtn.addEventListener('click', stop);
 
-    generateBtn.addEventListener('nui-click', () => {
+    generateBtn.querySelector('button').addEventListener('click', () => {
         const text = textArea.value.trim();
         if (!text) return;
         stop();
@@ -89,10 +91,18 @@ function init(element, params, nui) {
         abortController = new AbortController();
         const startTime = performance.now();
 
-        audio.style.display = 'block';
+        // Create a fresh <audio> element. Reusing a DOM <audio> that previously
+        // errored (even via cloneNode) keeps the error state stuck internally.
+        // A createElement audio starts with a clean slate.
+        const newAudio = document.createElement('audio');
+        newAudio.id = 'kok-audio';
+        newAudio.controls = true;
+        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
+        audio.replaceWith(newAudio);
+        audio = newAudio;
+
         mediaSource = new MediaSource();
         audio.src = URL.createObjectURL(mediaSource);
-        audio.play().catch(() => {});
 
         let firstChunk = false;
 
@@ -101,8 +111,16 @@ function init(element, params, nui) {
             statusEl.textContent = 'Buffering...';
 
             try {
-                const url = `/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voice)}`;
-                const response = await fetch(url, { signal: abortController.signal });
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        input: text,
+                        voice: voice,
+                        response_format: 'mp3',
+                    }),
+                    signal: abortController.signal,
+                });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const reader = response.body.getReader();
 
@@ -118,6 +136,12 @@ function init(element, params, nui) {
                         sourceBuffer.onupdateend = res;
                         sourceBuffer.onerror = rej;
                     });
+                    // Start playback only after the first chunk is buffered.
+                    // Calling play() before any data exists causes a decode
+                    // error (code 4) on some browsers.
+                    if (audio.paused && sourceBuffer.buffered.length > 0) {
+                        audio.play().catch(() => {});
+                    }
                 }
                 if (mediaSource.readyState === 'open') {
                     mediaSource.endOfStream();

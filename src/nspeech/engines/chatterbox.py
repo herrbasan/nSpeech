@@ -166,3 +166,11 @@ class ChatterboxAdapter:
             else:
                 chunk_tensor = model.generate(text=sentence, exaggeration=exaggeration)
             yield chunk_tensor, is_final
+
+    def list_voices(self) -> list:
+        """Chatterbox has no native voice catalog — all voices are user-cloned.
+        Return [] so the worker falls through to its directory-scan fallback."""
+        return []
+
+
+# Module-level helper kept here so existing imports keep working.

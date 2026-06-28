@@ -52,11 +52,14 @@ async function proxyToNVoice(request, reply, path) {
   const contentType = request.headers['content-type'];
 
   try {
+    // Forward the buffered multipart body set by Fastify's parser.
+    const body = Buffer.isBuffer(request.body)
+      ? request.body
+      : Buffer.from(request.body || '');
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'content-type': contentType },
-      body: request.raw,
-      duplex: 'half',
+      body,
       signal: AbortSignal.timeout(120_000),  // 2 min timeout for long audio
     });
 

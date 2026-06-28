@@ -1,14 +1,14 @@
 <div class="page-dots-voices">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>dots.tts — Voices</h1>
-        <p class="lead">Zero-shot voice cloning. Upload reference audio — transcript is auto-generated via STT.</p>
+        <p class="lead">Zero-shot voice cloning. Upload reference audio — transcript is auto-generated via STT or can be typed manually.</p>
     </header>
 
     <nui-card>
         <h3 style="margin-top: 0">Preview Voice</h3>
 
         <nui-input-group>
-            <label for="dots-clone-file">Reference Audio (.wav, ~10s recommended)</label>
+            <label for="dots-clone-file">Reference Audio (.wav, .mp3 — auto-transcribed via STT)</label>
             <nui-input>
                 <input type="file" id="dots-clone-file" accept=".wav,.mp3">
             </nui-input>
@@ -117,8 +117,8 @@ function init(element, params, nui) {
             abortController = null;
         }
         previewAudio.pause();
-        previewAudio.removeAttribute('src');
-        if (mediaSource?.readyState === 'open') mediaSource.endOfStream();
+        // Don't removeAttribute('src') — it fires an async error that corrupts the next playback.
+        if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch (_) {}
         mediaSource = null;
     }
 
@@ -131,7 +131,7 @@ function init(element, params, nui) {
         delBtn.type = 'button';
         delBtn.textContent = 'Delete';
         delBtn.addEventListener('click', async () => {
-            await fetch(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            await fetch(`/v1/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
             row.remove();
             loadAllVoices();
         });
@@ -141,7 +141,7 @@ function init(element, params, nui) {
     }
 
     function loadAllVoices() {
-        fetch('/voices')
+        fetch('/v1/voices')
             .then(r => r.json())
             .then(d => {
                 const voices = d.voices || [];
@@ -159,7 +159,7 @@ function init(element, params, nui) {
             });
     }
 
-    btnPreview.addEventListener('nui-click', () => {
+    btnPreview.querySelector('button').addEventListener('click', () => {
         const file = fileInput.files?.[0];
         if (!file) {
             previewStatusEl.innerHTML = '<nui-badge variant="danger">Select an audio file first.</nui-badge>';
@@ -178,7 +178,6 @@ function init(element, params, nui) {
         previewAudio.style.display = 'block';
         mediaSource = new MediaSource();
         previewAudio.src = URL.createObjectURL(mediaSource);
-        previewAudio.play().catch(() => {});
 
         let firstChunk = false;
         const startTime = performance.now();
@@ -186,12 +185,17 @@ function init(element, params, nui) {
         mediaSource.addEventListener('sourceopen', async () => {
             const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
             try {
-                const res = await fetch('/voices/preview', {
+                const res = await fetch('/v1/voices/preview', {
                     method: 'POST', body: formData, signal: abortController.signal
                 });
                 if (!res.ok) {
-                    const err = await res.json();
-                    previewStatusEl.innerHTML = `<nui-badge variant="danger">${err.detail || 'Preview failed'}</nui-badge>`;
+                    const rawText = await res.text();
+                    let msg = rawText.slice(0, 500);
+                    try {
+                        const parsed = JSON.parse(rawText);
+                        msg = parsed.detail || parsed.error?.message || msg;
+                    } catch (_) { /* not JSON, keep raw text */ }
+                    previewStatusEl.innerHTML = `<nui-badge variant="danger">${msg}</nui-badge>`;
                     return;
                 }
                 const reader = res.body.getReader();
@@ -207,6 +211,9 @@ function init(element, params, nui) {
                         sourceBuffer.onupdateend = resolve;
                         sourceBuffer.onerror = reject;
                     });
+                    if (previewAudio.paused && sourceBuffer.buffered.length > 0) {
+                        previewAudio.play().catch(() => {});
+                    }
                 }
                 if (mediaSource.readyState === 'open') mediaSource.endOfStream();
                 previewStatusEl.innerHTML = `Done (${(performance.now() - startTime).toFixed(0)}ms)`;
@@ -241,7 +248,7 @@ function init(element, params, nui) {
         formData.append('name', name);
 
         try {
-            const res = await fetch('/voices/clone', { method: 'POST', body: formData });
+            const res = await fetch('/v1/voices/clone', { method: 'POST', body: formData });
             const result = await res.json();
             if (res.ok) {
                 saveStatusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved (${result.clone_time_ms}ms).</nui-badge>`;

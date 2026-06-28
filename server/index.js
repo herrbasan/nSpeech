@@ -6,7 +6,6 @@
  */
 import Fastify from 'fastify';
 import fastifyStatic from '@fastify/static';
-import fastifyMultipart from '@fastify/multipart';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
@@ -47,10 +46,24 @@ await app.register(fastifyStatic, {
   decorateReply: false, // avoid double-decorate from the first registration
 });
 
-// Multipart support for file uploads (voice cloning, STT)
-await app.register(fastifyMultipart, {
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-});
+// NOTE: We intentionally do NOT register @fastify/multipart globally.
+// That plugin drains request.raw during its own multipart parsing pass,
+// which would leave the route handler with an empty body when forwarding
+// to the engine worker. Instead, install a parser for multipart that just
+// captures the raw bytes unchanged. parseAs:'buffer' makes Fastify hand us
+// a Buffer (the same bytes that arrived on the socket), which we expose
+// on request.body so route handlers can forward it to the worker via fetch().
+// The downstream worker does the actual multipart parsing (FastAPI UploadFile/
+// File/Form bindings).
+app.addContentTypeParser(
+  /^multipart\/form-data/,
+  { parseAs: 'buffer', bodyLimit: 50 * 1024 * 1024 },
+  (_req, payload, done) => {
+    // For parseAs:'buffer', Fastify has already collected all bytes into
+    // `payload` (a Buffer). Just hand it through.
+    done(null, payload);
+  }
+);
 
 // ── Initialize engine manager ───────────────────────────────────────────────
 
@@ -90,6 +103,45 @@ app.get('/health', async () => {
  */
 app.get('/v1/admin/status', async () => {
   return manager.getStatus();
+});
+
+/**
+ * Return random message snippets from archived LLM arena conversations.
+ */
+app.get('/arena-samples', async (request, reply) => {
+  const { readdir, readFile } = await import('node:fs/promises');
+  try {
+    const archiveDir = resolve(config.projectRoot, 'docs', '_Archive');
+    const files = (await readdir(archiveDir)).filter(f => f.startsWith('arena-') && f.endsWith('.json'));
+    if (!files.length) {
+      return { error: 'No arena archives found' };
+    }
+    const randomFile = files[Math.floor(Math.random() * files.length)];
+    const raw = await readFile(resolve(archiveDir, randomFile), 'utf8');
+    const data = JSON.parse(raw);
+    const messages = (data.messages || []).filter(msg => msg.role === 'assistant' && msg.content);
+    if (!messages.length) {
+      return { error: 'No assistant messages found in archives' };
+    }
+    const chosen = messages[Math.floor(Math.random() * messages.length)];
+    let content = (chosen.content || '').trim();
+    if (content.length > 300) {
+      const truncated = content.slice(0, 300);
+      const lastPeriod = Math.max(truncated.lastIndexOf('. '), truncated.lastIndexOf('? '), truncated.lastIndexOf('! '));
+      if (lastPeriod > 50) {
+        content = truncated.slice(0, lastPeriod + 1);
+      } else {
+        content = truncated + '...';
+      }
+    }
+    return {
+      text: content,
+      speaker: chosen.speaker || 'unknown',
+      topic: data.summary?.title || '',
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
 });
 
 // ── API routes (OpenAI-compatible surface) ──────────────────────────────────

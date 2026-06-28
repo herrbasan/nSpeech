@@ -1,19 +1,22 @@
 """
 nLogger-compatible JSON Lines logger for Python.
 Format: {"ts":"ISO","level":"LEVEL","type":"Category","msg":"text","meta":{},"session":"id"}
+
+Emits to stdout ONLY. The Node management layer is the single disk writer
+(logs/main-0.log); it reads this process's stdout line-by-line and fans every
+JSONL line into the unified combined log, tagged with the engine. This avoids
+two processes rotating the same file and gives one place to look across all
+engines. Engine-internal noise (loguru/torch/onnx) lands on stderr and is
+wrapped by Node as engine.<name>.stderr entries.
 """
 import json
 import logging
 import sys
-import os
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
 
 
 _session_id = uuid.uuid4().hex[:8]
-_logs_dir = Path(os.environ.get("NSPEECH_LOG_DIR", "logs"))
 _current_process = "main"
 
 
@@ -36,9 +39,9 @@ _root_logger = None
 
 
 def init(logs_dir=None, process_name="main"):
+    # logs_dir is accepted for backward compatibility but ignored: this process
+    # no longer writes log files. Node aggregates stdout into the combined log.
     global _root_logger, _current_process
-    dir_path = Path(logs_dir) if logs_dir else _logs_dir
-    dir_path.mkdir(parents=True, exist_ok=True)
     _current_process = process_name
 
     logger = logging.getLogger("nspeech")
@@ -47,17 +50,12 @@ def init(logs_dir=None, process_name="main"):
 
     formatter = JsonFormatter()
 
+    # stdout is the single log channel. Node parses these JSONL lines and
+    # forwards them into the unified combined log (logs/main-0.log).
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.INFO)
     console.setFormatter(formatter)
     logger.addHandler(console)
-
-    file_handler = RotatingFileHandler(
-        dir_path / "nspeech.log", maxBytes=10 * 1024 * 1024, backupCount=5
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
 
     _root_logger = logger
     return logger

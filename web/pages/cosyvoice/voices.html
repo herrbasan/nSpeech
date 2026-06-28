@@ -8,17 +8,29 @@
         <h3 style="margin-top: 0">Preview Voice</h3>
 
         <nui-input-group>
-            <label for="cv-clone-file">Reference Audio (.wav, max 30s)</label>
+            <label for="cv-clone-file">Reference Audio (.wav, .mp3 — auto-transcribed via STT)</label>
             <nui-input>
-                <input type="file" id="cv-clone-file" accept=".wav">
+                <input type="file" id="cv-clone-file" accept=".wav,.mp3">
             </nui-input>
         </nui-input-group>
 
         <nui-input-group>
             <label for="cv-test-phrase">Test Phrase</label>
             <nui-textarea auto-resize max-rows="4" min-rows="2">
-                <textarea id="cv-test-phrase">This is a preview of the cloned voice. The quick brown fox jumps over the lazy dog. How does it sound to you? The generated speech should closely match the tone, pitch, and cadence of the original speaker. Listen carefully to assess the quality before saving.</textarea>
+                <textarea id="cv-test-phrase">This is a preview of the cloned voice. The quick brown fox jumps over the lazy dog. How does it sound to you?</textarea>
             </nui-textarea>
+        </nui-input-group>
+
+        <nui-button id="btn-arena-sample">
+            <button type="button">Random Arena Sample</button>
+        </nui-button>
+        <p id="cv-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
+
+        <nui-input-group>
+            <nui-input>
+                <input type="checkbox" id="cv-preview-offline">
+                <label for="cv-preview-offline">Offline mode (no streaming — best quality)</label>
+            </nui-input>
         </nui-input-group>
 
         <nui-button-container gap="medium">
@@ -72,11 +84,37 @@ function init(element, params, nui) {
     const btnPreview = element.querySelector('#btn-preview');
     const btnPreviewStop = element.querySelector('#btn-preview-stop');
     const btnSave = element.querySelector('#btn-save');
+    const arenaBtn = element.querySelector('#btn-arena-sample');
+    const arenaInfo = element.querySelector('#cv-arena-info');
+    const previewOfflineEl = element.querySelector('#cv-preview-offline');
     const previewStatusEl = element.querySelector('#cv-preview-status');
     const saveStatusEl = element.querySelector('#cv-save-status');
     const savedListEl = element.querySelector('#cv-saved-list');
     const previewListEl = element.querySelector('#cv-preview-list');
     const previewAudio = element.querySelector('#cv-preview-audio');
+
+    // Manual auto-resize fallback
+    function autoResize(ta) {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    }
+    testPhraseEl.addEventListener('input', () => autoResize(testPhraseEl));
+    autoResize(testPhraseEl);
+
+    arenaBtn.addEventListener('nui-click', () => {
+        fetch('/arena-samples')
+            .then(r => r.json())
+            .then(d => {
+                if (d.text) {
+                    testPhraseEl.value = d.text;
+                    autoResize(testPhraseEl);
+                    arenaInfo.textContent = `From: ${d.speaker} — "${d.topic}"`;
+                }
+            })
+            .catch(() => {
+                arenaInfo.textContent = 'No arena samples available.';
+            });
+    });
 
     let mediaSource = null;
     let abortController = null;
@@ -87,8 +125,8 @@ function init(element, params, nui) {
             abortController = null;
         }
         previewAudio.pause();
-        previewAudio.removeAttribute('src');
-        if (mediaSource?.readyState === 'open') mediaSource.endOfStream();
+        // Don't removeAttribute('src') — it fires an async error that corrupts the next playback.
+        if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch (_) {}
         mediaSource = null;
     }
 
@@ -102,7 +140,7 @@ function init(element, params, nui) {
         delBtn.textContent = 'Delete';
         delBtn.setAttribute('data-action', `delete-voice:${name}`);
         delBtn.addEventListener('click', async () => {
-            await fetch(`/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            await fetch(`/v1/voices/${encodeURIComponent(name)}`, { method: 'DELETE' });
             row.remove();
             if (!isPreview) refreshAllVoices();
         });
@@ -112,7 +150,7 @@ function init(element, params, nui) {
     }
 
     function loadAllVoices() {
-        fetch('/voices')
+        fetch('/v1/voices')
             .then(r => r.json())
             .then(d => {
                 const voices = d.voices || [];
@@ -142,7 +180,7 @@ function init(element, params, nui) {
         loadAllVoices();
     }
 
-    btnPreview.addEventListener('nui-click', () => {
+    btnPreview.querySelector('button').addEventListener('click', () => {
         const file = fileInput.files?.[0];
         if (!file) {
             previewStatusEl.innerHTML = '<nui-badge variant="danger">Select a .wav file first.</nui-badge>';
@@ -156,11 +194,13 @@ function init(element, params, nui) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('test_phrase', testPhraseEl.value || 'This is a preview of the cloned voice.');
+        if (previewOfflineEl.checked) {
+            formData.append('offline', 'true');
+        }
 
         previewAudio.style.display = 'block';
         mediaSource = new MediaSource();
         previewAudio.src = URL.createObjectURL(mediaSource);
-        previewAudio.play().catch(() => {});
 
         let firstChunk = false;
         const startTime = performance.now();
@@ -168,12 +208,19 @@ function init(element, params, nui) {
         mediaSource.addEventListener('sourceopen', async () => {
             const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
             try {
-                const res = await fetch('/voices/preview', {
+                const res = await fetch('/v1/voices/preview', {
                     method: 'POST', body: formData, signal: abortController.signal
                 });
                 if (!res.ok) {
-                    const err = await res.json();
-                    previewStatusEl.innerHTML = `<nui-badge variant="danger">${err.detail || 'Preview failed'}</nui-badge>`;
+                    // Worker may return plain text on 5xx (e.g. "Internal Server Error").
+                    // Don't assume JSON — read as text first, then try to parse.
+                    const rawText = await res.text();
+                    let msg = rawText.slice(0, 500);
+                    try {
+                        const parsed = JSON.parse(rawText);
+                        msg = parsed.detail || parsed.error?.message || msg;
+                    } catch (_) { /* not JSON, keep raw text */ }
+                    previewStatusEl.innerHTML = `<nui-badge variant="danger">${msg}</nui-badge>`;
                     return;
                 }
                 const reader = res.body.getReader();
@@ -189,6 +236,9 @@ function init(element, params, nui) {
                         sourceBuffer.onupdateend = resolve;
                         sourceBuffer.onerror = reject;
                     });
+                    if (previewAudio.paused && sourceBuffer.buffered.length > 0) {
+                        previewAudio.play().catch(() => {});
+                    }
                 }
                 if (mediaSource.readyState === 'open') mediaSource.endOfStream();
                 previewStatusEl.innerHTML = `Done (${(performance.now() - startTime).toFixed(0)}ms)`;
@@ -224,14 +274,17 @@ function init(element, params, nui) {
         formData.append('name', name);
 
         try {
-            const res = await fetch('/voices/clone', { method: 'POST', body: formData });
-            const result = await res.json();
+            const res = await fetch('/v1/voices/clone', { method: 'POST', body: formData });
+            const rawText = await res.text();
+            let result = {};
+            try { result = JSON.parse(rawText); } catch (_) { /* not JSON */ }
             if (res.ok) {
-                saveStatusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved (${result.clone_time_ms}ms).</nui-badge>`;
+                saveStatusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved (${result.clone_time_ms || 0}ms).</nui-badge>`;
                 nameInput.value = '';
                 loadAllVoices();
             } else {
-                saveStatusEl.innerHTML = `<nui-badge variant="danger">${result.detail || 'Save failed'}</nui-badge>`;
+                const msg = result.detail || rawText.slice(0, 500) || 'Save failed';
+                saveStatusEl.innerHTML = `<nui-badge variant="danger">${msg}</nui-badge>`;
             }
         } catch (e) {
             saveStatusEl.innerHTML = `<nui-badge variant="danger">Error: ${e}</nui-badge>`;

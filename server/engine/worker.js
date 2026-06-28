@@ -11,10 +11,10 @@
  *   - Clean shutdown: kill the process group, delete the port file.
  */
 import { spawn } from 'node:child_process';
+import * as readline from 'node:readline/promises';
 import { readFileSync, unlinkSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join, delimiter } from 'node:path';
-import { tmpdir, hostname } from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 
 import { logger } from '../logger.js';
 
@@ -83,8 +83,25 @@ export class WorkerProcess {
       '--host', '127.0.0.1',
     ];
 
+    // Build the worker env. Per-engine voice/model dirs override whatever the
+    // Node parent process inherited — otherwise a hot-swap to a different engine
+    // would launch the new engine with the old engine's NSPEECH_MODEL_DIR,
+    // causing the Python config to look in the wrong venv and 503 on first
+    // request. See src/nspeech/config.py for the required env vars.
+    const engineVoiceDir = resolve(
+      this.projectRoot,
+      `venv/${this.engineName}/voices`
+    );
+    const engineModelDir = resolve(
+      this.projectRoot,
+      `venv/${this.engineName}/models`
+    );
+
     const env = {
       ...process.env,
+      NSPEECH_ENGINE: this.engineName,
+      NSPEECH_VOICE_DIR: engineVoiceDir,
+      NSPEECH_MODEL_DIR: engineModelDir,
       PYTHONPATH: this.srcDir + (process.env.PYTHONPATH ? delimiter + process.env.PYTHONPATH : ''),
     };
 
@@ -96,16 +113,14 @@ export class WorkerProcess {
       windowsHide: true,
     });
 
-    // Collect stderr for error reporting
-    this.proc.stderr.on('data', (chunk) => {
-      this._stderrBuffer += chunk.toString();
-      if (this._stderrBuffer.length > 10_000) this._stderrBuffer = this._stderrBuffer.slice(-10_000);
-    });
-
-    // Track stdout for fallback port discovery
-    this.proc.stdout.on('data', (chunk) => {
-      this._stdoutBuffer += chunk.toString();
-    });
+    // ── Forward worker logs into the unified combined log ───────────────────
+    // The worker emits nLogger-format JSONL on stdout (its own logger) plus
+    // engine-internal noise on stderr (loguru/torch/onnx). We read both
+    // line-by-line and fan every line into logs/main-0.log via the unified
+    // logger, tagged with the engine. This is the single disk write — the
+    // worker itself writes no log files — so every engine's output lands in
+    // one stream, attributable and greppable.
+    this._attachLogForwarding();
 
     // Crash detection
     this.proc.on('exit', (code, signal) => {
@@ -155,45 +170,140 @@ export class WorkerProcess {
   }
 
   /**
+   * Forward the worker's stdout/stderr into the unified combined log.
+   *
+   * stdout carries nLogger JSONL lines from the worker's own logger, plus the
+   * two NSPEECH_WORKER_PORT= discovery lines. stderr carries engine-internal
+   * output (loguru, torch, onnxruntime) as plain text.
+   *
+   * Each JSONL stdout line is re-emitted through the unified logger with its
+   * original level/type, tagged with this engine. Plain lines (stderr, or
+   * non-JSON stdout) are wrapped as engine.<name>.<stream> entries. The
+   * stdout buffer is still kept for fallback port discovery (strategy 3),
+   * and a trimmed stderr buffer for crash dumps.
+   */
+  _attachLogForwarding() {
+    const engine = this.engineName;
+    const engineType = `engine.${engine}`;
+
+    // stdout: discovery lines + JSONL worker logs
+    const stdoutRl = readline.createInterface({ input: this.proc.stdout });
+    stdoutRl.on('line', (line) => {
+      this._stdoutBuffer += line + '\n';
+
+      // Discovery markers — not log lines.
+      if (line.startsWith('NSPEECH_WORKER_PORT')) return;
+
+      const parsed = this._tryParseLogLine(line);
+      if (parsed) {
+        this._forwardLog(parsed.level, parsed.type, parsed.msg, { ...parsed.meta, engine });
+      } else {
+        // Non-JSON stdout (unexpected, but capture it).
+        this._forwardLog('INFO', `${engineType}.stdout`, line, { engine });
+      }
+    });
+
+    // stderr: engine noise (loguru/torch/onnx). Wrap each line.
+    const stderrRl = readline.createInterface({ input: this.proc.stderr });
+    stderrRl.on('line', (line) => {
+      this._stderrBuffer += line + '\n';
+      if (this._stderrBuffer.length > 10_000) {
+        this._stderrBuffer = this._stderrBuffer.slice(-10_000);
+      }
+      const trimmed = line.trim();
+      if (trimmed) {
+        this._forwardLog('WARN', `${engineType}.stderr`, trimmed, { engine });
+      }
+    });
+  }
+
+  _tryParseLogLine(line) {
+    if (!line || line[0] !== '{') return null;
+    let obj;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      return null;
+    }
+    if (typeof obj !== 'object' || obj === null) return null;
+    if (typeof obj.msg !== 'string') return null;
+    const level = String(obj.level || 'INFO').toUpperCase();
+    return {
+      level: ['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(level) ? level : 'INFO',
+      type: typeof obj.type === 'string' && obj.type ? obj.type : `engine.${this.engineName}`,
+      msg: obj.msg,
+      meta: (obj.meta && typeof obj.meta === 'object') ? obj.meta : {},
+    };
+  }
+
+  _forwardLog(level, type, msg, meta) {
+    switch (level) {
+      case 'ERROR':
+        logger.error(msg, meta, type);
+        break;
+      case 'WARN':
+        logger.warn(msg, meta, type);
+        break;
+      case 'DEBUG':
+        logger.debug(msg, meta, type);
+        break;
+      default:
+        logger.info(msg, meta, type);
+    }
+  }
+
+  /**
    * Discover the worker's bound port by scanning for the temp file.
    * The worker writes %TEMP%/nspeech-<engine>-<pid>.port.
+   *
+   * On Windows, the spawned Python process may have a different OS PID than
+   * the one Node sees (uvicorn/torch subprocesses), so we can't rely on
+   * PID-matching. Instead we scan for ANY nspeech-<engine>-*.port file.
+   * This is safe because GPU exclusion ensures only one worker per engine
+   * runs at a time, and CPU engines (kokoro) don't conflict.
+   *
+   * Stale port files from crashed workers are swept at startup (see sweep()).
+   * We also validate the port by checking stdout as a cross-reference.
    */
   async _discoverPort() {
     const startTime = Date.now();
     const tempDir = tmpdir();
-    const targetPid = this.proc.pid;
-    const targetFileName = `nspeech-${this.engineName}-${targetPid}.port`;
-    const targetFilePath = join(tempDir, targetFileName);
+    const spawnedPid = this.proc.pid;
+    const expectedFileName = `nspeech-${this.engineName}-${spawnedPid}.port`;
 
-    log.info(`discovering port for worker pid ${targetPid}, looking for file ${targetFileName}`);
+    log.info(`discovering port for worker pid ${spawnedPid}, engine ${this.engineName}`);
 
     while (Date.now() - startTime < PORT_DISCOVERY_TIMEOUT_MS) {
       if (this.state === 'dead') {
         throw new Error('worker died during port discovery');
       }
 
-      // Check specifically for our spawned worker's port file
-      if (existsSync(targetFilePath)) {
-        try {
-          const content = readFileSync(targetFilePath, 'utf8').trim();
-          if (content) {
-            this.port = parseInt(content, 10);
-            this.portFile = targetFilePath;
-            this.baseUrl = `http://127.0.0.1:${this.port}`;
-            log.info(`discovered port via PID-matched file: ${this.engineName} is on port ${this.port}`);
-            return;
-          }
-        } catch (err) {
-          log.warn(`error reading port file: ${err.message}, will retry`);
+      // Strategy 1: exact PID match (works when the spawned PID == writer PID)
+      const exactPath = join(tempDir, expectedFileName);
+      if (existsSync(exactPath)) {
+        const port = this._tryReadPortFile(exactPath);
+        if (port !== null) {
+          log.info(`discovered port via exact PID file: ${this.engineName} on port ${port}`);
+          return;
         }
       }
 
-      // Fallback: check stdout for NSPEECH_WORKER_PORT=
+      // Strategy 2: scan for any nspeech-<engine>-*.port file.
+      // The worker may write with a child PID (Windows uvicorn/torch fork).
+      const scanned = this._scanForPortFile(tempDir);
+      if (scanned) {
+        log.info(`discovered port via engine scan: ${this.engineName} on port ${scanned.port} (file PID mismatch: spawned=${spawnedPid})`, {
+          engine: this.engineName, port: scanned.port, file: scanned.file,
+        });
+        return;
+      }
+
+      // Strategy 3: stdout fallback (last resort — fragile but functional)
       const match = this._stdoutBuffer?.match?.(/NSPEECH_WORKER_PORT=(\d+)/);
       if (match) {
         this.port = parseInt(match[1], 10);
         this.baseUrl = `http://127.0.0.1:${this.port}`;
-        log.warn(`port discovered via stdout fallback (temp file not found): ${this.engineName}`, {
+        log.warn(`port discovered via stdout fallback (no port file found): ${this.engineName}`, {
           engine: this.engineName, port: this.port,
         });
         return;
@@ -203,6 +313,68 @@ export class WorkerProcess {
     }
 
     throw new Error('timed out waiting for port file');
+  }
+
+  /**
+   * Try to read a port number from a port file.
+   * Returns the port number or null if the file is empty/invalid.
+   * Sets this.port, this.portFile, this.baseUrl on success.
+   */
+  _tryReadPortFile(filePath) {
+    try {
+      const content = readFileSync(filePath, 'utf8').trim();
+      if (content) {
+        const port = parseInt(content, 10);
+        if (port > 0 && port < 65536) {
+          this.port = port;
+          this.portFile = filePath;
+          this.baseUrl = `http://127.0.0.1:${port}`;
+          return port;
+        }
+      }
+    } catch (err) {
+      log.warn(`error reading port file ${filePath}: ${err.message}`);
+    }
+    return null;
+  }
+
+  /**
+   * Scan the temp directory for any nspeech-<engine>-*.port file.
+   * Returns { port, file } or null if none found.
+   * Sets this.port, this.portFile, this.baseUrl on success.
+   */
+  _scanForPortFile(tempDir) {
+    const prefix = `nspeech-${this.engineName}-`;
+    const suffix = '.port';
+    let entries;
+    try {
+      entries = readdirSync(tempDir);
+    } catch {
+      return null;
+    }
+
+    // Only consider files modified recently (within the last 60 seconds).
+    // Stale port files from crashed workers must be ignored — otherwise we
+    // connect to a dead port while the actual current worker tries to bind
+    // to a different port and we never find it.
+    const maxAgeMs = 60_000;
+    const now = Date.now();
+
+    for (const name of entries) {
+      if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
+      const filePath = join(tempDir, name);
+      try {
+        const stat = statSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) continue;
+      } catch {
+        continue;
+      }
+      const port = this._tryReadPortFile(filePath);
+      if (port !== null) {
+        return { port, file: filePath };
+      }
+    }
+    return null;
   }
 
   /**
@@ -394,6 +566,44 @@ export class WorkerProcess {
       exitSignal: this.exitSignal,
       gpu: this.entry.gpu,
     };
+  }
+
+  /**
+   * Sweep stale port files from the temp directory.
+   * Called at startup to clean up files left by crashed workers.
+   * Only removes files matching nspeech-<engine>-<pid>.port that are
+   * older than 5 minutes (to avoid racing with a concurrent startup).
+   */
+  static sweepStalePortFiles() {
+    const tempDir = tmpdir();
+    const maxAgeMs = 5 * 60 * 1000;  // 5 minutes
+    const now = Date.now();
+    let swept = 0;
+
+    let entries;
+    try {
+      entries = readdirSync(tempDir);
+    } catch {
+      return;
+    }
+
+    for (const name of entries) {
+      if (!name.startsWith('nspeech-') || !name.endsWith('.port')) continue;
+      const filePath = join(tempDir, name);
+      try {
+        const stat = statSync(filePath);
+        if (now - stat.mtimeMs > maxAgeMs) {
+          unlinkSync(filePath);
+          swept++;
+        }
+      } catch {
+        // file may have been removed between readdir and stat — ignore
+      }
+    }
+
+    if (swept > 0) {
+      log.info(`swept ${swept} stale port file(s) from temp dir`);
+    }
   }
 }
 

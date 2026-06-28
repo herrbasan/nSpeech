@@ -52,6 +52,16 @@ function loadConfigJson(path) {
 const envFile = parseEnv(resolve(PROJECT_ROOT, '.env'));
 const configJson = loadConfigJson(resolve(PROJECT_ROOT, 'config.json'));
 
+// Apply .env values to process.env so they propagate to spawned children
+// (engine workers). Without this, NSPEECH_STT_URL and similar .env-only
+// settings never reach the Python workers. process.env takes precedence
+// (already-set values are NOT overwritten).
+for (const [key, value] of Object.entries(envFile)) {
+  if (process.env[key] === undefined || process.env[key] === '') {
+    process.env[key] = value;
+  }
+}
+
 /** Pick the first defined value from the given sources. */
 function pick(key, ...sources) {
   for (const src of sources) {
@@ -85,6 +95,10 @@ export const config = {
   // Static dirs
   webDir: resolve(PROJECT_ROOT, 'web'),
   libDir: resolve(PROJECT_ROOT, 'lib'),
+
+  // nVideo / FFmpeg — for PCM→MP3 transcoding in the relay layer.
+  // The ffmpeg binary ships with the nVideo submodule.
+  ffmpegPath: resolve(PROJECT_ROOT, 'lib', 'nvideo', 'deps', 'win', 'bin', 'ffmpeg.exe'),
 };
 
 // ── Validate required paths ─────────────────────────────────────────────────

@@ -12,15 +12,17 @@
  *   DELETE /v1/voices/:voiceId  — delete a voice
  */
 import { manager } from '../engine/manager.js';
+import { Readable } from 'node:stream';
+import { pipePcmToClient } from '../transcode.js';
 
 /**
  * Register all voice management routes on a Fastify instance.
  */
 export function registerVoiceRoutes(app) {
 
-  // ── GET /v1/voices ───────────────────────────────────────────────────────
+  // ── GET /v1/voices & /voices ─────────────────────────────────────────────
 
-  app.get('/v1/voices', async (request, reply) => {
+  const getVoicesHandler = async (request, reply) => {
     const engineName = request.query.engine || manager.currentEngine;
 
     let worker;
@@ -40,6 +42,7 @@ export function registerVoiceRoutes(app) {
           voice_id: v.voice_id ?? v.name,
           name: v.name ?? v.voice_id,
           category: v.category ?? 'cloned',
+          voice_type: v.voice_type ?? v.category ?? 'cloned',
           engine: v.engine ?? engineName,
           ...v,  // preserve any extra fields
         }));
@@ -49,13 +52,13 @@ export function registerVoiceRoutes(app) {
     } catch (err) {
       sendError(reply, err);
     }
-  });
+  };
 
-  // ── POST /v1/voices/clone ────────────────────────────────────────────────
+  app.get('/v1/voices', getVoicesHandler);
 
-  app.post('/v1/voices/clone', {
-    config: { rawBody: false },
-  }, async (request, reply) => {
+  // ── POST /v1/voices/clone ──────────────────────────────────────────────
+
+  const cloneVoiceHandler = async (request, reply) => {
     const engineName = request.query.engine || manager.currentEngine;
 
     let worker;
@@ -67,9 +70,12 @@ export function registerVoiceRoutes(app) {
 
     try {
       const contentType = request.headers['content-type'];
+      const body = Buffer.isBuffer(request.body)
+        ? request.body
+        : Buffer.from(request.body || '');
       const resp = await worker.relay('POST', '/v1/voices/clone', {
         headers: { 'content-type': contentType },
-        body: request.raw,
+        body,
       });
 
       if (resp._stallTimer) clearTimeout(resp._stallTimer);
@@ -78,13 +84,13 @@ export function registerVoiceRoutes(app) {
     } catch (err) {
       sendError(reply, err);
     }
-  });
+  };
 
-  // ── POST /v1/voices/preview ──────────────────────────────────────────────
+  app.post('/v1/voices/clone', { config: { rawBody: false } }, cloneVoiceHandler);
 
-  app.post('/v1/voices/preview', {
-    config: { rawBody: false },
-  }, async (request, reply) => {
+  // ── POST /v1/voices/preview ────────────────────────────────────────────
+
+  const previewVoiceHandler = async (request, reply) => {
     const engineName = request.query.engine || manager.currentEngine;
 
     let worker;
@@ -96,30 +102,48 @@ export function registerVoiceRoutes(app) {
 
     try {
       const contentType = request.headers['content-type'];
+      // Fastify's addContentTypeParser (registered in server/index.js) gives
+      // us the buffered multipart body as a Buffer on request.body. We forward
+      // it to the worker, which does the actual multipart parsing via FastAPI.
+      const body = Buffer.isBuffer(request.body)
+        ? request.body
+        : Buffer.from(request.body || '');
       const resp = await worker.relay('POST', '/v1/voices/preview', {
         headers: { 'content-type': contentType },
-        body: request.raw,
+        body,
       });
-
-      reply.code(resp.status);
-      if (resp.headers.get('content-type')) reply.type(resp.headers.get('content-type'));
 
       if (resp._stallTimer) clearTimeout(resp._stallTimer);
 
-      if (resp.body) {
-        const buf = Buffer.from(await resp.arrayBuffer());
-        reply.send(buf);
-      } else {
-        reply.send();
+      // Error responses: forward the worker's error body as-is
+      if (resp.status >= 400 || !resp.body) {
+        const errBuf = resp.body ? Buffer.from(await resp.arrayBuffer()) : Buffer.alloc(0);
+        const ct = resp.headers.get('content-type') || 'application/json';
+        return reply.code(resp.status).type(ct).send(errBuf);
       }
+
+      // Worker returns raw PCM (s16le, 24kHz, mono). Transcode to MP3 via
+      // ffmpeg — same path as /v1/audio/speech. The browser's MediaSource
+      // needs audio/mpeg; raw PCM or PyAV-encoded opus won't play.
+      reply.hijack();
+      const rawResponse = reply.raw;
+      const pcmStream = Readable.fromWeb(resp.body);
+
+      request.raw.on('close', () => {
+        pcmStream.destroy();
+      });
+
+      pipePcmToClient(pcmStream, rawResponse, 'mp3', { streamMode: 'native' });
     } catch (err) {
       sendError(reply, err);
     }
-  });
+  };
 
-  // ── POST /v1/voices/mix ──────────────────────────────────────────────────
+  app.post('/v1/voices/preview', { config: { rawBody: false } }, previewVoiceHandler);
 
-  app.post('/v1/voices/mix', async (request, reply) => {
+  // ── POST /v1/voices/mix ────────────────────────────────────────────────
+
+  const mixVoicesHandler = async (request, reply) => {
     const engineName = manager.currentEngine;
 
     let worker;
@@ -141,11 +165,13 @@ export function registerVoiceRoutes(app) {
     } catch (err) {
       sendError(reply, err);
     }
-  });
+  };
 
-  // ── DELETE /v1/voices/:voiceId ───────────────────────────────────────────
+  app.post('/v1/voices/mix', mixVoicesHandler);
 
-  app.delete('/v1/voices/:voiceId', async (request, reply) => {
+  // ── DELETE /v1/voices/:voiceId ─────────────────────────────────────────
+
+  const deleteVoiceHandler = async (request, reply) => {
     const engineName = request.query.engine || manager.currentEngine;
     const { voiceId } = request.params;
 
@@ -165,7 +191,9 @@ export function registerVoiceRoutes(app) {
     } catch (err) {
       sendError(reply, err);
     }
-  });
+  };
+
+  app.delete('/v1/voices/:voiceId', deleteVoiceHandler);
 }
 
 function sendError(reply, err) {

@@ -136,7 +136,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        fetch('/voices')
+        fetch('/v1/voices')
             .then(r => r.json())
             .then(d => {
                 const allVoices = d.voices || [];
@@ -158,9 +158,9 @@ function init(element, params, nui) {
             abortController = null;
         }
         audio.pause();
-        audio.removeAttribute('src');
+        // Don't removeAttribute('src') — it fires an async error that corrupts the next playback.
         if (mediaSource?.readyState === 'open') {
-            mediaSource.endOfStream();
+            try { mediaSource.endOfStream(); } catch (_) {}
         }
         mediaSource = null;
         statusEl.textContent = '';
@@ -168,7 +168,7 @@ function init(element, params, nui) {
 
     stopBtn.addEventListener('click', stop);
 
-    generateBtn.addEventListener('nui-click', () => {
+    generateBtn.querySelector('button').addEventListener('click', () => {
         const text = textArea.value.trim();
         if (!text) return;
         stop();
@@ -180,7 +180,6 @@ function init(element, params, nui) {
         audio.style.display = 'block';
         mediaSource = new MediaSource();
         audio.src = URL.createObjectURL(mediaSource);
-        audio.play().catch(() => {});
 
         let firstChunk = false;
 
@@ -188,23 +187,26 @@ function init(element, params, nui) {
             const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
             statusEl.textContent = 'Buffering...';
 
-            const params = new URLSearchParams();
-            params.set('text', text);
-            params.set('output_format', 'mp3');
-            params.set('voice_name', voice);
-
-            const lang = languageEl.value;
-            if (lang) params.set('language', lang);
-            const seed = seedEl.value;
-            if (seed) params.set('seed', seed);
-            const numSteps = stepsEl.value;
-            if (numSteps) params.set('num_steps', numSteps);
-            const guidance = guidanceEl.value;
-            if (guidance) params.set('guidance_scale', guidance);
-            if (offlineEl.checked) params.set('offline', 'true');
+            const body = {
+                input: text,
+                voice: voice,
+                response_format: 'mp3',
+                extra_body: {
+                    offline: offlineEl.checked,
+                    language: languageEl.value || undefined,
+                    seed: seedEl.value ? Number(seedEl.value) : undefined,
+                    steps: stepsEl.value ? Number(stepsEl.value) : undefined,
+                    guidance_scale: guidanceEl.value ? Number(guidanceEl.value) : undefined,
+                },
+            };
 
             try {
-                const response = await fetch(`/tts?${params.toString()}`, { signal: abortController.signal });
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: abortController.signal,
+                });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const reader = response.body.getReader();
 
@@ -220,6 +222,9 @@ function init(element, params, nui) {
                         sourceBuffer.onupdateend = res;
                         sourceBuffer.onerror = rej;
                     });
+                    if (audio.paused && sourceBuffer.buffered.length > 0) {
+                        audio.play().catch(() => {});
+                    }
                 }
                 if (mediaSource.readyState === 'open') {
                     mediaSource.endOfStream();

@@ -98,9 +98,9 @@ function init(element, params, nui) {
             previewAbortController = null;
         }
         audioEl.pause();
-        audioEl.removeAttribute('src');
+        // Don't removeAttribute('src') — it fires an async error that corrupts the next playback.
         if (previewMediaSource?.readyState === 'open') {
-            previewMediaSource.endOfStream();
+            try { previewMediaSource.endOfStream(); } catch (_) {}
         }
         previewMediaSource = null;
     }
@@ -135,15 +135,22 @@ function init(element, params, nui) {
         audioEl.style.display = 'block';
         previewMediaSource = new MediaSource();
         audioEl.src = URL.createObjectURL(previewMediaSource);
-        audioEl.play().catch(() => {});
 
         statusEl.innerHTML = `<nui-progress type="busy"></nui-preview> Previewing ${label}...`;
 
         previewMediaSource.addEventListener('sourceopen', async () => {
             const sb = previewMediaSource.addSourceBuffer('audio/mpeg');
             try {
-                const url = `/tts?text=${encodeURIComponent(PREVIEW_TEXT)}&output_format=mp3&voice_name=${encodeURIComponent(voiceName)}`;
-                const response = await fetch(url, { signal: previewAbortController.signal });
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        input: PREVIEW_TEXT,
+                        voice: voiceName,
+                        response_format: 'mp3',
+                    }),
+                    signal: previewAbortController.signal,
+                });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const reader = response.body.getReader();
 
@@ -155,6 +162,9 @@ function init(element, params, nui) {
                         sb.onupdateend = res;
                         sb.onerror = rej;
                     });
+                    if (audioEl.paused && sb.buffered.length > 0) {
+                        audioEl.play().catch(() => {});
+                    }
                 }
                 if (previewMediaSource.readyState === 'open') {
                     previewMediaSource.endOfStream();
@@ -168,8 +178,8 @@ function init(element, params, nui) {
         }, { once: true });
     }
 
-    btnPlayA.addEventListener('nui-click', () => playVoice(voiceAEl.value, 'Voice A'));
-    btnPlayB.addEventListener('nui-click', () => playVoice(voiceBEl.value, 'Voice B'));
+    btnPlayA.querySelector('button').addEventListener('click', () => playVoice(voiceAEl.value, 'Voice A'));
+    btnPlayB.querySelector('button').addEventListener('click', () => playVoice(voiceBEl.value, 'Voice B'));
 
     async function generatePreview(voiceName) {
         stopPreview();
@@ -181,15 +191,22 @@ function init(element, params, nui) {
         audioEl.style.display = 'block';
         previewMediaSource = new MediaSource();
         audioEl.src = URL.createObjectURL(previewMediaSource);
-        audioEl.play().catch(() => {});
 
         statusEl.innerHTML = '<nui-progress type="busy"></nui-preview> Generating preview...';
 
         previewMediaSource.addEventListener('sourceopen', async () => {
             const sb = previewMediaSource.addSourceBuffer('audio/mpeg');
             try {
-                const url = `/tts?text=${encodeURIComponent(text)}&output_format=mp3&voice_name=${encodeURIComponent(voiceName)}`;
-                const response = await fetch(url, { signal: previewAbortController.signal });
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        input: text,
+                        voice: voiceName,
+                        response_format: 'mp3',
+                    }),
+                    signal: previewAbortController.signal,
+                });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 const reader = response.body.getReader();
 
@@ -201,6 +218,9 @@ function init(element, params, nui) {
                         sb.onupdateend = res;
                         sb.onerror = rej;
                     });
+                    if (audioEl.paused && sb.buffered.length > 0) {
+                        audioEl.play().catch(() => {});
+                    }
                 }
                 if (previewMediaSource.readyState === 'open') {
                     previewMediaSource.endOfStream();
@@ -231,7 +251,7 @@ function init(element, params, nui) {
         statusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Mixing...';
 
         try {
-            const res = await fetch('/voices/mix', {
+            const res = await fetch('/v1/voices/mix', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name, voice_a: a, voice_b: b, ratio })
@@ -248,7 +268,7 @@ function init(element, params, nui) {
         }
     });
 
-    btnPreview.addEventListener('nui-click', async () => {
+    btnPreview.querySelector('button').addEventListener('click', async () => {
         const a = voiceAEl.value;
         const b = voiceBEl.value;
         if (!a || !b) {
@@ -261,7 +281,7 @@ function init(element, params, nui) {
         statusEl.innerHTML = '<nui-progress type="busy"></nui-preview> Creating blend preview...';
 
         try {
-            const res = await fetch('/voices/mix', {
+            const res = await fetch('/v1/voices/mix', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: tmpName, voice_a: a, voice_b: b, ratio })
@@ -278,7 +298,7 @@ function init(element, params, nui) {
     });
 
     element.show = () => {
-        fetch('/voices')
+        fetch('/v1/voices')
             .then(r => r.json())
             .then(d => {
                 allVoices = d.voices || [];

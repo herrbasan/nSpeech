@@ -24,12 +24,49 @@ load_env_file(project_root / ".env")
 
 # ── Core Settings ────────────────────────────────────────────────────────────
 
-try:
-    NSPEECH_ENGINE = os.environ["NSPEECH_ENGINE"]
-    NSPEECH_VOICE_DIR = os.environ["NSPEECH_VOICE_DIR"]
-    NSPEECH_MODEL_DIR = os.environ["NSPEECH_MODEL_DIR"]
-except KeyError as e:
-    raise RuntimeError(f"Missing required explicitly configured environment variable: {e}")
+REQUIRED_ENV_VARS = ("NSPEECH_ENGINE", "NSPEECH_VOICE_DIR", "NSPEECH_MODEL_DIR")
+
+missing = [name for name in REQUIRED_ENV_VARS if not os.environ.get(name)]
+if missing:
+    engine_hint = os.environ.get("NSPEECH_ENGINE", "<unset>")
+    raise RuntimeError(
+        f"Worker cannot start: missing required env vars {missing}. "
+        f"NSPEECH_ENGINE={engine_hint!r}. "
+        f"The Node gateway is responsible for setting these per-engine "
+        f"(venv/<engine>/voices, venv/<engine>/models). "
+        f"Check server/engine/worker.js if you see this from a Node-spawned worker."
+    )
+
+NSPEECH_ENGINE = os.environ["NSPEECH_ENGINE"]
+NSPEECH_VOICE_DIR = os.environ["NSPEECH_VOICE_DIR"]
+NSPEECH_MODEL_DIR = os.environ["NSPEECH_MODEL_DIR"]
+
+
+def _validate_engine_paths():
+    """Best-effort check that voice/model dirs look right for the engine.
+    Surfaces a clear error early instead of letting adapters raise FileNotFoundError
+    deep inside model loading."""
+    voice_path = Path(NSPEECH_VOICE_DIR)
+    model_path = Path(NSPEECH_MODEL_DIR)
+
+    # Voice dir must be inside venv/<engine>/voices
+    expected_voice_suffix = f"venv{os.sep}{NSPEECH_ENGINE}{os.sep}voices"
+    if expected_voice_suffix.lower() not in str(voice_path).lower():
+        # Soft warning only — operators may have custom layouts.
+        print(
+            f"[config] warning: NSPEECH_VOICE_DIR={voice_path} "
+            f"does not contain expected {expected_voice_suffix!r}. "
+            f"If this is intentional, ignore."
+        )
+
+    if not voice_path.exists():
+        raise RuntimeError(
+            f"NSPEECH_VOICE_DIR does not exist: {voice_path}. "
+            f"Create it or fix the env var."
+        )
+
+
+_validate_engine_paths()
 
 NSPEECH_HOST = os.environ.get("NSPEECH_HOST", "127.0.0.1")
 NSPEECH_PORT = int(os.environ.get("NSPEECH_PORT", "8000"))

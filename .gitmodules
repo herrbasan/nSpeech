@@ -1,3 +1,9 @@
 [submodule "lib/nui_wc2"]
 	path = lib/nui_wc2
 	url = https://github.com/herrbasan/nui_wc2.git
+[submodule "lib/nvideo"]
+	path = lib/nvideo
+	url = https://github.com/herrbasan/nVideo.git
+[submodule "lib/nlogger"]
+	path = lib/nlogger
+	url = https://github.com/herrbasan/nLogger.git
