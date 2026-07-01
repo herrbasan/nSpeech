@@ -16,6 +16,8 @@ output format.
 """
 import io
 
+import numpy
+
 
 # ── Input format support (for clone/preview uploads) ────────────────────────
 
@@ -157,6 +159,10 @@ def tensor_to_pcm_bytes(tensor, sample_format: str = "s16") -> bytes:
     """Convert a float32 PCM tensor to bytes in the requested sample format."""
     audio_np = tensor.squeeze().cpu().numpy()
     if sample_format == "s16":
+        # Clip before scaling — TTS models routinely emit values outside [-1, 1].
+        # Without this, values >1.0 * 32767 overflow int16 and WRAP, producing
+        # harsh digital clicks instead of soft saturation.
+        audio_np = numpy.clip(audio_np, -1.0, 1.0)
         return (audio_np * 32767.0).astype("int16").tobytes()
     elif sample_format == "f32":
         return audio_np.astype("float32").tobytes()
@@ -221,7 +227,8 @@ class AudioEncoder:
         """Encode one PCM tensor chunk. Returns encoded bytes (may be empty)."""
         import av
 
-        audio_int16 = (tensor.squeeze().cpu().numpy() * 32767.0).astype("int16")
+        audio_np = numpy.clip(tensor.squeeze().cpu().numpy(), -1.0, 1.0)
+        audio_int16 = (audio_np * 32767.0).astype("int16")
         frame = av.AudioFrame.from_ndarray(
             audio_int16.reshape(1, -1), format="s16", layout="mono"
         )
