@@ -188,6 +188,8 @@ function init(element, params, nui) {
                 const res = await fetch('/v1/voices/preview', {
                     method: 'POST', body: formData, signal: abortController.signal
                 });
+                const stt = res.headers.get('X-STT-Transcript');
+                if (stt) console.log('[preview] STT:', stt);
                 if (!res.ok) {
                     const rawText = await res.text();
                     let msg = rawText.slice(0, 500);
@@ -251,6 +253,7 @@ function init(element, params, nui) {
             const res = await fetch('/v1/voices/clone', { method: 'POST', body: formData });
             const result = await res.json();
             if (res.ok) {
+                console.log('[clone] STT:', result.prompt_text);
                 saveStatusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved (${result.clone_time_ms}ms).</nui-badge>`;
                 nameInput.value = '';
                 loadAllVoices();

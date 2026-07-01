@@ -338,13 +338,22 @@ def create_app(engine_name: str) -> FastAPI:
             previews_dir = _voice_dir() / "previews"
             previews_dir.mkdir(parents=True, exist_ok=True)
             engine.cache_dir = previews_dir
+            # Capture the transcript used for cloning (either user-provided
+            # or auto-transcribed). Exposed via X-STT-Transcript header so
+            # the dashboard can show what Whisper heard.
+            stt_transcript = prompt_text or ""
             try:
                 clone_kwargs = {}
                 if model:
                     clone_kwargs["model"] = model
                 if prompt_text:
                     clone_kwargs["prompt_text"] = prompt_text
-                await asyncio.to_thread(engine.clone, str(Path(tmp_wav.name)), preview_name, **clone_kwargs)
+                clone_meta = await asyncio.to_thread(
+                    engine.clone, str(Path(tmp_wav.name)), preview_name, **clone_kwargs
+                )
+                # If clone returned a transcript (CosyVoice/dots do), use it.
+                if isinstance(clone_meta, dict) and clone_meta.get("prompt_text"):
+                    stt_transcript = clone_meta["prompt_text"]
                 await asyncio.to_thread(engine.load_voice, preview_name)
             finally:
                 if saved_cache is not None:
@@ -356,7 +365,6 @@ def create_app(engine_name: str) -> FastAPI:
         gen_kwargs = {}
         if model:
             gen_kwargs["model"] = model
-        gen_kwargs["offline"] = offline
         gen = engine.generate(phrase, **gen_kwargs)
 
         # Track preview cache files for cleanup after streaming completes.
@@ -364,28 +372,54 @@ def create_app(engine_name: str) -> FastAPI:
         if previews_dir.exists():
             preview_cache_files = list(previews_dir.glob(f"{preview_name}*"))
 
+        def _cleanup_preview():
+            """Clean up preview cache files — previews are temporary."""
+            for cache_file in preview_cache_files:
+                try:
+                    cache_file.unlink()
+                except Exception:
+                    pass
+            # Also remove the in-memory spk2info entry if present
+            try:
+                spk = getattr(engine.model, "frontend", None)
+                if spk is not None and hasattr(spk, "spk2info"):
+                    spk.spk2info.pop(preview_name, None)
+            except Exception:
+                pass
+
+        # Build headers exposing the STT transcript (if any) for the dashboard.
+        preview_headers = {}
+        if stt_transcript:
+            preview_headers["X-STT-Transcript"] = stt_transcript
+
+        # Offline path: buffer all audio, return single response.
+        # Matches the /v1/audio/speech offline behavior.
+        if offline:
+            try:
+                audio_bytes = b"".join(encode_stream(gen, output_format))
+            finally:
+                _cleanup_preview()
+            if not audio_bytes:
+                raise HTTPException(status_code=500, detail="TTS engine produced empty audio")
+            return Response(
+                content=audio_bytes,
+                media_type=get_media_type(output_format),
+                headers=preview_headers,
+            )
+
+        # Streaming path
         def stream_preview():
             try:
                 for chunk in encode_stream(gen, output_format):
                     yield chunk
             finally:
-                # Clean up preview cache files — previews are temporary.
-                # This prevents __preview__*.pt and __preview__*.wav files
-                # from accumulating in the voices directory forever.
-                for cache_file in preview_cache_files:
-                    try:
-                        cache_file.unlink()
-                    except Exception:
-                        pass
-                # Also remove the in-memory spk2info entry if present
-                try:
-                    spk = getattr(engine.model, "frontend", None)
-                    if spk is not None and hasattr(spk, "spk2info"):
-                        spk.spk2info.pop(preview_name, None)
-                except Exception:
-                    pass
+                _cleanup_preview()
 
-        return StreamingResponse(stream_preview(), media_type=get_media_type(output_format))
+        return StreamingResponse(
+            stream_preview(),
+            media_type=get_media_type(output_format),
+            headers=preview_headers,
+        )
 
     # ── POST /v1/voices/mix ─────────────────────────────────────────────────
 

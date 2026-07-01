@@ -8,3 +8,4 @@
 # PyTorch CUDA is installed separately by install.py (cu128 nightly for RTX 5090 Blackwell).
 # transformers/torch pins come from dots.tts's own constraints file.
 soundfile>=0.12.1
+openai-whisper>=20231117

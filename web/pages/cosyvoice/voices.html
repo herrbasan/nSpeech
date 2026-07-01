@@ -211,6 +211,8 @@ function init(element, params, nui) {
                 const res = await fetch('/v1/voices/preview', {
                     method: 'POST', body: formData, signal: abortController.signal
                 });
+                const stt = res.headers.get('X-STT-Transcript');
+                if (stt) console.log('[preview] STT:', stt);
                 if (!res.ok) {
                     // Worker may return plain text on 5xx (e.g. "Internal Server Error").
                     // Don't assume JSON — read as text first, then try to parse.
@@ -279,6 +281,7 @@ function init(element, params, nui) {
             let result = {};
             try { result = JSON.parse(rawText); } catch (_) { /* not JSON */ }
             if (res.ok) {
+                console.log('[clone] STT:', result.prompt_text);
                 saveStatusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved (${result.clone_time_ms || 0}ms).</nui-badge>`;
                 nameInput.value = '';
                 loadAllVoices();

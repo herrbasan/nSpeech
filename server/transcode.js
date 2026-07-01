@@ -104,6 +104,7 @@ export function createTranscoder(outputFormat, opts = {}) {
  */
 export function pipePcmToClient(pcmStream, rawResponse, outputFormat, opts = {}) {
   const streamMode = opts.streamMode ?? 'native';
+  const extraHeaders = opts.extraHeaders ?? {};
 
   let ff;
   try {
@@ -138,6 +139,7 @@ export function pipePcmToClient(pcmStream, rawResponse, outputFormat, opts = {})
     'Content-Type': FORMAT_CONTENT_TYPES[outputFormat] ?? 'application/octet-stream',
     'X-Stream-Mode': streamMode,
     'Cache-Control': 'no-cache',
+    ...extraHeaders,
   });
 
   ff.stdout.on('data', (chunk) => {

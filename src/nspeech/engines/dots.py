@@ -16,6 +16,12 @@ Three checkpoints share the same backbone:
 
 Output is 48 kHz. Adapter resamples to 24 kHz mono float32 to match nSpeech standard.
 
+Precision: float32 (not bfloat16). The streaming generate_stream() path has a
+dtype bug in bfloat16 — TimestepEmbedder hardcodes float32 timestep embeddings
+and attention layers mix float32/bfloat16, crashing the AR loop after 0-1
+patches. The non-streaming generate() path works in bfloat16, but float32 is
+required for reliable streaming. RTF ~0.85-0.91 at 4 NFE on RTX 5090 — realtime.
+
 Adapter conventions:
 - generate(): yields (pcm_tensor, is_final) per sentence chunk
 - clone(): saves reference wav + transcript as JSON sidecar voice cache
@@ -89,7 +95,7 @@ class DotsAdapter:
             _optimize = platform.system() == "Linux"
             self._runtime = DotsTtsRuntime.from_pretrained(
                 self._repo_id,
-                precision="bfloat16",
+                precision="float32",
                 optimize=_optimize,
             )
             self.native_sample_rate = self.runtime_sample_rate
@@ -123,36 +129,9 @@ class DotsAdapter:
         self._prompt_text = voice_data.get("prompt_text")
 
     def _transcribe(self, audio_path):
-        """Auto-transcribe reference audio via nVoice STT service."""
-        stt_url = os.environ.get("NSPEECH_STT_URL", "")
-        if not stt_url:
-            print("No STT_URL configured — skipping transcription.")
-            return ""
-        try:
-            import ssl
-            import urllib.request
-            with open(audio_path, "rb") as f:
-                audio_bytes = f.read()
-            url = stt_url.rstrip("/") + "/transcribe"
-            req = urllib.request.Request(
-                url,
-                data=audio_bytes,
-                headers={"Content-Type": "application/octet-stream"},
-            )
-            # Allow self-signed certs for local STT service
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            import json as _json
-            with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-                result = _json.loads(resp.read())
-            segments = result.get("segments", [])
-            text = " ".join(s.get("text", "") for s in segments).strip()
-            print(f"STT transcription: {text[:80]}...")
-            return text
-        except Exception as e:
-            print(f"STT transcription failed: {e}")
-            return ""
+        """Auto-transcribe reference audio via local Whisper."""
+        from nspeech.transcribe import transcribe
+        return transcribe(audio_path)
 
     def clone(self, audio_path, voice_name, **kwargs):
         start_time = time.time()

@@ -129,11 +129,19 @@ export function registerVoiceRoutes(app) {
       const rawResponse = reply.raw;
       const pcmStream = Readable.fromWeb(resp.body);
 
+      // Forward worker's metadata headers (e.g. X-STT-Transcript from Whisper)
+      const extraHeaders = {};
+      const stt = resp.headers.get('x-stt-transcript');
+      if (stt) extraHeaders['X-STT-Transcript'] = stt;
+
       request.raw.on('close', () => {
         pcmStream.destroy();
       });
 
-      pipePcmToClient(pcmStream, rawResponse, 'mp3', { streamMode: 'native' });
+      pipePcmToClient(pcmStream, rawResponse, 'mp3', {
+        streamMode: 'native',
+        extraHeaders,
+      });
     } catch (err) {
       sendError(reply, err);
     }

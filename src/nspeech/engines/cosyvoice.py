@@ -98,38 +98,14 @@ class CosyvoiceAdapter:
         self._current_voice = voice_name
 
     def _transcribe(self, audio_path):
-        """Auto-transcribe reference audio via nVoice STT service.
+        """Auto-transcribe reference audio via local Whisper.
 
         Used when no prompt_text is provided to clone(). CosyVoice zero-shot
         cloning needs an accurate transcript of the reference audio for best
         quality — a wrong/generic transcript degrades the speaker embedding.
         """
-        stt_url = os.environ.get("NSPEECH_STT_URL", "")
-        if not stt_url:
-            return ""
-        try:
-            import ssl
-            import urllib.request
-            import json as _json
-            with open(audio_path, "rb") as f:
-                audio_bytes = f.read()
-            url = stt_url.rstrip("/") + "/transcribe"
-            req = urllib.request.Request(
-                url,
-                data=audio_bytes,
-                headers={"Content-Type": "application/octet-stream"},
-            )
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-                result = _json.loads(resp.read())
-            segments = result.get("segments", [])
-            text = " ".join(s.get("text", "") for s in segments).strip()
-            return text
-        except Exception as e:
-            print(f"STT transcription failed: {e}")
-            return ""
+        from nspeech.transcribe import transcribe
+        return transcribe(audio_path)
 
     def clone(self, audio_path, voice_name, **kwargs):
         start_time = time.time()
@@ -173,6 +149,7 @@ class CosyvoiceAdapter:
             "voice_name": voice_name,
             "engine": self.engine_name,
             "cache_file": str(cache_path),
+            "prompt_text": prompt_text,
             "clone_time_ms": clone_time_ms,
         }
 
@@ -192,9 +169,13 @@ class CosyvoiceAdapter:
             _prompt = "You are a helpful assistant.<|endofprompt|>"
 
         for sentence in sentences:
+            # Always override the speaker's prompt_text with the instruct
+            # prompt. Without this, CosyVoice uses the cloned voice's original
+            # transcript (from Whisper) as conditioning — and speaks it as a
+            # prefix before the actual input text.
             saved_prompt = None
             saved_prompt_len = None
-            if spk_id and (instruct_text or (language and language != "en")):
+            if spk_id:
                 spk = self.model.frontend.spk2info[spk_id]
                 saved_prompt = spk.get("prompt_text")
                 saved_prompt_len = spk.get("prompt_text_len")
