@@ -46,6 +46,14 @@ await app.register(fastifyStatic, {
   decorateReply: false, // avoid double-decorate from the first registration
 });
 
+// /docs → docs/ (serves API_REFERENCE.md for the dashboard Docs page's nui-markdown src)
+await app.register(fastifyStatic, {
+  root: resolve(config.projectRoot, 'docs'),
+  prefix: '/docs/',
+  decorateReply: false,
+  serveDotFiles: false, // don't expose docs/.git etc. if docs is ever a submodule root
+});
+
 // NOTE: We intentionally do NOT register @fastify/multipart globally.
 // That plugin drains request.raw during its own multipart parsing pass,
 // which would leave the route handler with an empty body when forwarding

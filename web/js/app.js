@@ -26,7 +26,7 @@ document.addEventListener('click', (e) => {
 function buildNavigation(engine) {
     const nav = [
         { label: 'Home', href: '#page=home', icon: 'home' },
-        { label: 'Docs', href: '/docs', icon: 'book' }
+        { label: 'Docs', href: '#page=docs', icon: 'book' }
     ];
 
     if (engine === 'kokoro') {
@@ -63,15 +63,6 @@ function buildNavigation(engine) {
             items: [
                 { label: 'Generate', href: '#page=dots/generate' },
                 { label: 'Voices', href: '#page=dots/voices' }
-            ]
-        });
-    } else if (engine === 'chatterbox') {
-        nav.push({
-            label: 'Chatterbox',
-            icon: 'headphones',
-            items: [
-                { label: 'Generate', href: '#page=chatterbox/generate' },
-                { label: 'Voices', href: '#page=chatterbox/voices' }
             ]
         });
     }
