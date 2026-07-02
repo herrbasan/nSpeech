@@ -133,7 +133,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        fetch('/v1/voices')
+        fetch('/v1/voices?engine=chatterbox')
             .then(r => r.json())
             .then(d => {
                 const allVoices = d.voices || [];

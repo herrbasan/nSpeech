@@ -84,7 +84,7 @@ function init(element, params, nui) {
     const statusEl = element.querySelector('#cv-status');
 
     function loadVoices() {
-        fetch('/v1/voices')
+        fetch('/v1/voices?engine=cosyvoice')
             .then(r => r.json())
             .then(d => {
                 const allVoices = d.voices || [];

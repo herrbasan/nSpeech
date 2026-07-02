@@ -218,7 +218,7 @@ class DotsAdapter:
         # verification (nVoice STT) is available and trusted.
         prompt_text = None
 
-        if offline:
+        if batch:
             # Non-streaming mode: generate the entire audio in one pass.
             result = self.runtime.generate(
                 text=text,

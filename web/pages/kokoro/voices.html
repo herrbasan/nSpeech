@@ -298,7 +298,7 @@ function init(element, params, nui) {
     });
 
     element.show = () => {
-        fetch('/v1/voices')
+        fetch('/v1/voices?engine=kokoro')
             .then(r => r.json())
             .then(d => {
                 allVoices = d.voices || [];

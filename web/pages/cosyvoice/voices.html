@@ -150,7 +150,7 @@ function init(element, params, nui) {
     }
 
     function loadAllVoices() {
-        fetch('/v1/voices')
+        fetch('/v1/voices?engine=cosyvoice')
             .then(r => r.json())
             .then(d => {
                 const voices = d.voices || [];
