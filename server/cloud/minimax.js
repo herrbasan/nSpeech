@@ -113,12 +113,12 @@ export class MiniMaxAdapter {
   async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body, model }) {
     const apiKey = this._getApiKey();
     const eb = mapExtraBody(extra_body);
+    const isBatch = (extra_body?.batch) ?? false;
 
     const body = {
       model: model || 'speech-2.8-turbo',
       text,
-      stream: true,
-      stream_options: { exclude_aggregated_audio: true },
+      stream: !isBatch,
       output_format: 'hex',
       voice_setting: {
         voice_id: voice_name || 'English_expressive_narrator',
@@ -134,6 +134,11 @@ export class MiniMaxAdapter {
       },
     };
 
+    // Streaming: skip the aggregated final chunk
+    if (!isBatch) {
+      body.stream_options = { exclude_aggregated_audio: true };
+    }
+
     if (eb.emotion) body.voice_setting.emotion = eb.emotion;
     if (eb.language_boost) body.language_boost = eb.language_boost;
     if (eb.pronunciation_dict) body.pronunciation_dict = eb.pronunciation_dict;
@@ -143,12 +148,9 @@ export class MiniMaxAdapter {
     }
 
     log.info('MiniMax generate', {
-      model: body.model,
-      voice: body.voice_setting.voice_id,
-      textLen: text.length,
+      model: body.model, batch: isBatch,
+      voice: body.voice_setting.voice_id, textLen: text.length,
       textPreview: (text || '').slice(0, 200) + ((text || '').length > 200 ? '...' : ''),
-      format: body.audio_setting.format,
-      sampleRate: body.audio_setting.sample_rate,
     });
 
     const resp = await fetch(`${BASE_URL}/v1/t2a_v2`, {
@@ -166,7 +168,16 @@ export class MiniMaxAdapter {
       throw new Error(`MiniMax T2A failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
     }
 
-    // Parse SSE stream: each data: line → JSON → data.audio (hex) → Buffer
+    // ── Batch: non-streaming, single hex blob → Buffer ───────────────────
+    if (isBatch) {
+      const data = await resp.json();
+      const audio = data?.data?.audio;
+      if (!audio) throw new Error('MiniMax batch: no audio in response');
+      const pcmBuf = Buffer.from(audio, 'hex');
+      return Readable.from([pcmBuf]);
+    }
+
+    // ── Streaming: SSE hex chunks → progressive Readable ─────────────────
     const decoder = new TextDecoder();
     const reader = resp.body.getReader();
     let buffer = '';

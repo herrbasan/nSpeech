@@ -39,6 +39,22 @@
 | `/v1/files/retrieve_content` | GET | Download generated audio files |
 | `/v1/get_voice` | POST | List voices (system, cloned, generated) |
 | `/v1/delete_voice` | POST | Delete a cloned/generated voice |
+| `/v1/token_plan/remains` | GET | Token Plan quota remaining |
+
+---
+
+## Usage — `GET /v1/token_plan/remains` (Token Plan only)
+
+Token Plan users (`sk-cp-` keys) can query remaining quota. Note: this endpoint uses the **www** host, not **api**:
+
+```
+GET https://www.minimax.io/v1/token_plan/remains
+Authorization: Bearer <SUBSCRIPTION_KEY>
+```
+
+Response includes remaining quota across the unified pool (speech + LLM + video + music share one bucket). Quota resets on 5-hour rolling + weekly windows.
+
+> **Verified 2026-07-02:** The Token Plan key returned `1004 login fail` against this endpoint — may require a different host or endpoint path. Standard `sk-api-` keys are not supported (only `sk-cp-`).
 
 ---
 

@@ -59,8 +59,10 @@ export class EngineManager {
    * @returns {Promise<WorkerProcess|CloudAdapter>}
    */
   async getEngine(model) {
-    // ── Cloud providers ───────────────────────────────────────────────────
-    const cloud = resolveCloud(model);
+    const engineName = model || this.currentEngine;
+
+    // ── Cloud providers — check both model prefix AND bare engine name ─────
+    const cloud = resolveCloud(engineName);
     if (cloud) {
       const health = cloud.adapter.health();
       if (health.status === 'dead') {
@@ -70,7 +72,6 @@ export class EngineManager {
     }
 
     // ── Local engines ─────────────────────────────────────────────────────
-    const engineName = model || this.currentEngine;
     return this.getWorker(engineName);
   }
 

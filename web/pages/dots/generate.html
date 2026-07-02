@@ -67,8 +67,8 @@
 
         <nui-input-group>
             <nui-input>
-                <input type="checkbox" id="dots-offline">
-                <label for="dots-offline">Offline mode (no streaming — best quality, no TTFA)</label>
+                <input type="checkbox" id="dots-batch">
+                <label for="dots-batch">Batch mode (full render — best quality, no TTFA)</label>
             </nui-input>
         </nui-input-group>
 
@@ -100,7 +100,7 @@ function init(element, params, nui) {
     const stepsValEl = element.querySelector('#dots-steps-val');
     const guidanceEl = element.querySelector('#dots-guidance');
     const guidanceValEl = element.querySelector('#dots-guidance-val');
-    const offlineEl = element.querySelector('#dots-offline');
+    const batchEl = element.querySelector('#dots-batch');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
     const arenaBtn = element.querySelector('#btn-arena-sample');
@@ -192,7 +192,7 @@ function init(element, params, nui) {
                 voice: voice,
                 response_format: 'mp3',
                 extra_body: {
-                    offline: offlineEl.checked,
+                    batch: batchEl.checked,
                     language: languageEl.value || undefined,
                     seed: seedEl.value ? Number(seedEl.value) : undefined,
                     inference_steps: stepsEl.value ? Number(stepsEl.value) : undefined,

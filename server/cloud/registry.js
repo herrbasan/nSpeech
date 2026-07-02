@@ -15,6 +15,7 @@
  */
 
 import { MiniMaxAdapter } from './minimax.js';
+import { ElevenLabsAdapter } from './elevenlabs.js';
 import { logger } from '../logger.js';
 
 const log = logger.child('cloud');
@@ -39,6 +40,14 @@ _register('minimax', MiniMaxAdapter, [
   'minimax_speech_2_8_turbo',
   'minimax_speech_2_6_hd',
   'minimax_speech_2_6_turbo',
+]);
+
+_register('elevenlabs', ElevenLabsAdapter, [
+  'elevenlabs',
+  'elevenlabs_turbo_v2',
+  'elevenlabs_turbo_v2_5',
+  'elevenlabs_multilingual_v2',
+  'elevenlabs_flash_v2_5',
 ]);
 
 /**

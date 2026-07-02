@@ -46,7 +46,7 @@ Clients always speak one API. The backend translates that API into engine-specif
     "inference_steps": 4,
     "guidance_scale": 1.2,
     "seed": 42,
-    "offline": false,
+    "batch": false,
     "model": "speech-2.8-turbo",
     "blend": [{"voice_id": "af_heart", "weight": 30}, {"voice_id": "af_bella", "weight": 70}],
     "pronunciation": {"tone": ["omg/oh my god"]},
@@ -90,7 +90,7 @@ PlayHT, Cartesia) can find natural homes for their features.
     "inference_steps": 4,
     "guidance_scale": 1.2,
     "seed": 42,
-    "offline": false,
+    "batch": false,
     "model": "speech-2.8-turbo",
     "blend": [{"voice_id": "af_heart", "weight": 30}, {"voice_id": "af_bella", "weight": 70}],
     "pronunciation": {"tone": ["omg/oh my god"]},
@@ -120,7 +120,7 @@ PlayHT, Cartesia) can find natural homes for their features.
 | `inference_steps` | int | 1..32 | 4 | Diffusion/flow NFE. More steps = higher quality, slower generation. |
 | `guidance_scale` | number | 0..3 | 1.2 | Voice reference adherence. Higher = stick closer to the voice clone. |
 | `seed` | int | any | — | Random seed. Same seed + same input = reproducible output. |
-| `offline` | boolean | — | false | `true` = render full audio before first byte. `false` = stream progressively. |
+| `batch` | boolean | — | false | `true` = render full audio before first byte. `false` = stream progressively. Formerly `offline`. |
 
 #### Model Selection
 
@@ -167,7 +167,7 @@ PlayHT, Cartesia) can find natural homes for their features.
 | `inference_steps` | — | — | — | ✅ `steps` | — | — | — |
 | `guidance_scale` | — | — | — | ✅ `guidance_scale` | — | — | `similarity_boost` |
 | `seed` | — | — | — | ✅ `seed` | — | — | `seed` |
-| `offline` | — | — | ✅ (via old `extra_body`) | ✅ (via old `extra_body`) | — | — | — |
+| `batch` | — | — | ✅ | ✅ | — | — | — |
 | `model` | — | — | ✅ `model` | — | ✅ maps to request `model` | `tts-1`/`tts-1-hd` | model slug |
 | `blend` | ✅ (via mix endpoint) | — | — | — | ✅ `timbre_weights` | — | — |
 | `pronunciation` | — | — | — | — | ✅ `pronunciation_dict` | — | — |

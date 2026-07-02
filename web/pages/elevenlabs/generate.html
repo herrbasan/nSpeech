@@ -1,0 +1,222 @@
+<div class="page-elevenlabs-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>ElevenLabs — Generate</h1>
+        <p class="lead">Cloud TTS with 10,000+ voices across 29 languages. <code>eleven_turbo_v2_5</code> by default.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="el-voice">Voice</label>
+            <nui-select id="el-voice-select">
+                <select id="el-voice">
+                    <option value="" disabled selected>Loading voices...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="el-text">Text</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="5">
+                <textarea id="el-text" placeholder="Text to synthesize...">The first move is what sets everything in motion. This is a test of ElevenLabs cloud speech synthesis through nSpeech.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="el-stability">Stability</label>
+            <nui-input type="range" min="0" max="1" step="0.05" value="0.5">
+                <input type="range" id="el-stability" min="0" max="1" step="0.05" value="0.5">
+            </nui-input>
+            <span id="el-stability-val" style="margin-left: var(--nui-space-half)">0.50</span>
+            <span style="color: var(--color-shade6); font-size: 0.85em; margin-left: var(--nui-space)">Lower = more expressive</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="el-style">Style Exaggeration</label>
+            <nui-input type="range" min="0" max="1" step="0.05" value="0">
+                <input type="range" id="el-style" min="0" max="1" step="0.05" value="0">
+            </nui-input>
+            <span id="el-style-val" style="margin-left: var(--nui-space-half)">0.00</span>
+            <span style="color: var(--color-shade6); font-size: 0.85em; margin-left: var(--nui-space)">Amplifies voice character</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="el-similarity">Voice Similarity</label>
+            <nui-input type="range" min="0" max="1" step="0.05" value="0.75">
+                <input type="range" id="el-similarity" min="0" max="1" step="0.05" value="0.75">
+            </nui-input>
+            <span id="el-similarity-val" style="margin-left: var(--nui-space-half)">0.75</span>
+            <span style="color: var(--color-shade6); font-size: 0.85em; margin-left: var(--nui-space)">Stick to original voice</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="el-speed">Speed</label>
+            <nui-input type="range" min="0.7" max="1.2" step="0.05" value="1">
+                <input type="range" id="el-speed" min="0.7" max="1.2" step="0.05" value="1">
+            </nui-input>
+            <span id="el-speed-val" style="margin-left: var(--nui-space-half)">1.00</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <nui-input>
+                <input type="checkbox" id="el-batch">
+                <label for="el-batch">Batch mode (full render — best quality, no streaming)</label>
+            </nui-input>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+            <nui-button id="btn-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="el-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="el-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let mediaSource = null;
+    let abortController = null;
+
+    const voiceSelect = element.querySelector('#el-voice-select');
+    const selectEl = element.querySelector('#el-voice');
+    const textArea = element.querySelector('#el-text');
+    const stabilityEl = element.querySelector('#el-stability');
+    const stabilityValEl = element.querySelector('#el-stability-val');
+    const styleEl = element.querySelector('#el-style');
+    const styleValEl = element.querySelector('#el-style-val');
+    const similarityEl = element.querySelector('#el-similarity');
+    const similarityValEl = element.querySelector('#el-similarity-val');
+    const speedEl = element.querySelector('#el-speed');
+    const speedValEl = element.querySelector('#el-speed-val');
+    const batchEl = element.querySelector('#el-batch');
+    const generateBtn = element.querySelector('#btn-generate');
+    const stopBtn = element.querySelector('#btn-stop');
+    let audio = element.querySelector('#el-audio');
+    const statusEl = element.querySelector('#el-status');
+
+    stabilityEl.addEventListener('input', function() { stabilityValEl.textContent = parseFloat(this.value).toFixed(2); });
+    styleEl.addEventListener('input', function() { styleValEl.textContent = parseFloat(this.value).toFixed(2); });
+    similarityEl.addEventListener('input', function() { similarityValEl.textContent = parseFloat(this.value).toFixed(2); });
+    speedEl.addEventListener('input', function() { speedValEl.textContent = parseFloat(this.value).toFixed(2); });
+
+    function loadVoices() {
+        statusEl.textContent = 'Loading voices...';
+        fetch('/v1/voices?engine=elevenlabs')
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                var voices = d.voices || [];
+                var cloned = [], langMap = {};
+                for (var i = 0; i < voices.length; i++) {
+                    var v = voices[i];
+                    if (v.category === 'cloned') {
+                        cloned.push({ value: v.voice_id, label: '\u2605 ' + v.name });
+                        continue;
+                    }
+                    var lang = (v.language || 'ZZ').toUpperCase();
+                    if (!langMap[lang]) langMap[lang] = [];
+                    langMap[lang].push({ value: v.voice_id, label: v.name });
+                }
+                var groups = [];
+                if (cloned.length) groups.push({ group: 'Cloned', options: cloned });
+                var langKeys = Object.keys(langMap).sort(function(a, b) { return a === 'EN' ? -1 : b === 'EN' ? 1 : a.localeCompare(b); });
+                for (var k = 0; k < langKeys.length; k++) {
+                    groups.push({ group: langKeys[k], options: langMap[langKeys[k]] });
+                }
+                voiceSelect.setItems(groups);
+                if (selectEl.options.length <= 1 && cloned.length > 0) selectEl.value = cloned[0].value;
+                else if (selectEl.options.length <= 1 && groups.length > 0) {
+                    var en = groups.find(function(g) { return g.group === 'EN'; }) || groups[0];
+                    if (en.options.length > 0) selectEl.value = en.options[0].value;
+                }
+                statusEl.textContent = voices.length + ' voices loaded';
+            })
+            .catch(function() { statusEl.textContent = 'Failed to load voices'; });
+    }
+
+    function stop() {
+        if (abortController) { abortController.abort(); abortController = null; }
+        if (audio) { audio.pause(); audio.src = ''; }
+        if (mediaSource && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch(e) {} }
+        mediaSource = null;
+        statusEl.textContent = '';
+    }
+
+    stopBtn.addEventListener('click', stop);
+
+    generateBtn.querySelector('button').addEventListener('click', function() {
+        var text = textArea.value.trim();
+        if (!text) return;
+        stop();
+
+        var voice = selectEl.value;
+        abortController = new AbortController();
+        var startTime = performance.now();
+
+        var newAudio = document.createElement('audio');
+        newAudio.id = 'el-audio';
+        newAudio.controls = true;
+        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
+        audio.replaceWith(newAudio);
+        audio = newAudio;
+
+        mediaSource = new MediaSource();
+        audio.src = URL.createObjectURL(mediaSource);
+
+        var firstChunk = false;
+
+        mediaSource.addEventListener('sourceopen', function() {
+            var sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            statusEl.textContent = 'Buffering...';
+
+            fetch('/v1/audio/speech', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                    model: 'elevenlabs',
+                    input: text,
+                    voice: voice,
+                    response_format: 'mp3',
+                    speed: parseFloat(speedEl.value),
+                    extra_body: {
+                        stability: parseFloat(stabilityEl.value),
+                        expressiveness: parseFloat(styleEl.value),
+                        guidance_scale: parseFloat(similarityEl.value),
+                        language: 'en',
+                        batch: batchEl.checked,
+                    },
+                }),
+                signal: abortController.signal,
+            })
+            .then(async function(response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                var reader = response.body.getReader();
+
+                while (true) {
+                    var r = await reader.read();
+                    if (r.done) break;
+                    if (!firstChunk && r.value && r.value.length) {
+                        firstChunk = true;
+                        statusEl.textContent = 'TTFB: ' + (performance.now() - startTime).toFixed(0) + 'ms';
+                    }
+                    await new Promise(function(res, rej) { sourceBuffer.appendBuffer(r.value); sourceBuffer.onupdateend = res; sourceBuffer.onerror = rej; });
+                    if (audio.paused && sourceBuffer.buffered.length > 0) { audio.play().catch(function() {}); }
+                }
+                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                statusEl.textContent = 'Done in ' + (performance.now() - startTime).toFixed(0) + 'ms';
+            })
+            .catch(function(err) {
+                if (err.name === 'AbortError') statusEl.textContent = 'Stopped.';
+                else statusEl.textContent = 'Error: ' + err.message;
+            });
+        }, { once: true });
+    });
+
+    element.show = function() { loadVoices(); };
+    element.hide = function() { stop(); };
+}
+</script>

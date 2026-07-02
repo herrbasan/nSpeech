@@ -28,8 +28,8 @@
 
         <nui-input-group>
             <nui-input>
-                <input type="checkbox" id="cv-preview-offline">
-                <label for="cv-preview-offline">Offline mode (no streaming — best quality)</label>
+                <input type="checkbox" id="cv-preview-batch">
+                <label for="cv-preview-batch">Batch mode (full render — best quality)</label>
             </nui-input>
         </nui-input-group>
 
@@ -86,7 +86,7 @@ function init(element, params, nui) {
     const btnSave = element.querySelector('#btn-save');
     const arenaBtn = element.querySelector('#btn-arena-sample');
     const arenaInfo = element.querySelector('#cv-arena-info');
-    const previewOfflineEl = element.querySelector('#cv-preview-offline');
+    const previewBatchEl = element.querySelector('#cv-preview-batch');
     const previewStatusEl = element.querySelector('#cv-preview-status');
     const saveStatusEl = element.querySelector('#cv-save-status');
     const savedListEl = element.querySelector('#cv-saved-list');
@@ -194,8 +194,8 @@ function init(element, params, nui) {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('test_phrase', testPhraseEl.value || 'This is a preview of the cloned voice.');
-        if (previewOfflineEl.checked) {
-            formData.append('offline', 'true');
+        if (previewBatchEl.checked) {
+            formData.append('batch', 'true');
         }
 
         previewAudio.style.display = 'block';

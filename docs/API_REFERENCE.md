@@ -58,7 +58,7 @@ voice-management endpoints act on the active engine unless overridden with
   "speed": 1.0,
   "instructions": "Speak clearly and warmly.",
   "extra_body": {
-    "offline": false,
+    "batch": false,
     "exaggeration": 0.5,
     "steps": 4,
     "guidance_scale": 1.2,
@@ -84,7 +84,7 @@ voice-management endpoints act on the active engine unless overridden with
 
 | Field | Applies to | Notes |
 |-------|-----------|-------|
-| `offline` | all | `true` = buffer full audio before responding (`X-Stream-Mode: chunked`). `false` (default) = stream as generated (`X-Stream-Mode: native`). |
+| `batch` | all | `true` = buffer full audio before responding (`X-Stream-Mode: chunked`). `false` (default) = stream as generated (`X-Stream-Mode: native`). Formerly `offline`. |
 | `exaggeration` | Chatterbox, Kokoro | Expressiveness. Default `0.5`. |
 | `steps` | dots (AR) | Diffusion NFE. Default `4`. |
 | `guidance_scale` | dots | Classifier-free guidance. Default `1.2`. |

@@ -74,6 +74,15 @@ function buildNavigation(engine) {
                 { label: 'Voices', href: '#page=minimax/voices' }
             ]
         });
+    } else if (engine === 'elevenlabs') {
+        nav.push({
+            label: 'ElevenLabs',
+            icon: 'cloud',
+            items: [
+                { label: 'Generate', href: '#page=elevenlabs/generate' },
+                { label: 'Voices', href: '#page=elevenlabs/voices' }
+            ]
+        });
     }
 
     return nav;

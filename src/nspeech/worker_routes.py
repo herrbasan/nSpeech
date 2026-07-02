@@ -66,7 +66,7 @@ class SpeechRequest(BaseModel):
     language: Optional[str] = None
     model: Optional[str] = None
     seed: Optional[int] = None
-    offline: bool = False
+    offline: bool = Field(False, alias="batch")  # deprecated: use 'batch' in extra_body instead
     extra_body: dict = {}
 
 

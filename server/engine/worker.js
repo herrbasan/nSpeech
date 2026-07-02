@@ -515,7 +515,7 @@ export class WorkerProcess {
       voice_name: voice_name || 'default',
       output_format: 'pcm',
       speed: speed ?? 1.0,
-      offline: eb.offline ?? false,
+      offline: eb.batch ?? false,
       extra_body: eb,
     };
     if (instruct_text) workerBody.instruct_text = instruct_text;

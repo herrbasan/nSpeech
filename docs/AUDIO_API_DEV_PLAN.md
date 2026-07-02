@@ -454,7 +454,7 @@ Engine-native request body:
   "output_format": "mp3",
   "speed": 1.0,
   "extra_body": {
-    "offline": false,
+    "batch": false,
     "exaggeration": 0.5
   }
 }

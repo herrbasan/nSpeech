@@ -71,20 +71,14 @@ function init(element, params, nui) {
         fetch('/engine')
             .then(r => r.json())
             .then(d => {
-                const current = d.engine || 'unknown';
-                nameEl.textContent = current;
-                loadEnginesList(current);
-            });
-
-        fetch('/v1/voices')
-            .then(r => r.json())
-            .then(d => {
-                const count = d.voices ? d.voices.length : 0;
-                statusEl.textContent = `Online — ${count} voices loaded`;
+                const engine = d.engine || 'unknown';
+                nameEl.textContent = engine;
+                loadEnginesList(engine);
+                statusEl.textContent = 'Online';
                 statusEl.style.color = 'var(--color-success)';
             })
             .catch(() => {
-                statusEl.textContent = 'Offline / Warming Up';
+                statusEl.textContent = 'Offline';
                 statusEl.style.color = 'var(--color-danger)';
             });
     };

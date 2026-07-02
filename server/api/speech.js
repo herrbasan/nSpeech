@@ -74,10 +74,10 @@ export async function relaySpeech(request, reply, body) {
   }
 
   // ── Set response headers ────────────────────────────────────────────────
-  const isOffline = extraBody.offline ?? false;
+  const isBatch = extraBody.batch ?? false;
   reply.code(200);
   reply.type(getContentType(clientFormat));
-  reply.header('X-Stream-Mode', isOffline ? 'chunked' : 'native');
+  reply.header('X-Stream-Mode', isBatch ? 'chunked' : 'native');
 
   // ── Raw passthrough (wav, pcm, pcm_f32) ─────────────────────────────────
   if (RAW_FORMATS.has(clientFormat)) {
@@ -107,7 +107,7 @@ export async function relaySpeech(request, reply, body) {
   });
 
   pipePcmToClient(pcmStream, rawResponse, clientFormat, {
-    streamMode: isOffline ? 'chunked' : 'native',
+    streamMode: isBatch ? 'chunked' : 'native',
   });
 }
 

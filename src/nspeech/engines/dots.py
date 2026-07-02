@@ -200,7 +200,7 @@ class DotsAdapter:
         num_steps = kwargs.get("steps", kwargs.get("num_steps", 4))
         guidance_scale = kwargs.get("guidance_scale", 1.2)
         seed = kwargs.get("seed", 42)
-        offline = kwargs.get("offline", False)
+        batch = kwargs.get("batch", kwargs.get("offline", False))
 
         # Set seed for deterministic prosody variation
         if seed is not None:
