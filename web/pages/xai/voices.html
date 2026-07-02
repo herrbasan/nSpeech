@@ -161,8 +161,12 @@ function init(element, params, nui) {
                     method: 'POST', body: formData, signal: abortController.signal
                 });
                 if (!res.ok) {
-                    const errText = await res.text();
-                    previewStatusEl.innerHTML = `<nui-badge variant="danger">Preview failed: HTTP ${res.status}</nui-badge>`;
+                    let detail = `HTTP ${res.status}`;
+                    try {
+                        const errJson = JSON.parse(await res.text());
+                        detail = errJson?.error?.message || errJson?.detail || detail;
+                    } catch {}
+                    previewStatusEl.innerHTML = `<nui-badge variant="danger">${detail}</nui-badge>`;
                     previewAudio.style.display = 'none';
                     return;
                 }
