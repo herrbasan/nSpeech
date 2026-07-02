@@ -1,0 +1,235 @@
+<div class="page-xai-voices">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>xAI / Grok — Voices</h1>
+        <p class="lead">Clone a voice from reference audio. Voices live on xAI's servers.</p>
+    </header>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Preview Voice</h3>
+        <nui-input-group>
+            <label for="xai-clone-file">Reference Audio (.wav, .mp3, .m4a)</label>
+            <nui-input>
+                <input type="file" id="xai-clone-file" accept=".wav,.mp3,.m4a">
+            </nui-input>
+        </nui-input-group>
+        <nui-input-group>
+            <label for="xai-test-phrase">Test Phrase</label>
+            <nui-textarea max-rows="4" min-rows="2">
+                <textarea id="xai-test-phrase">This is a preview of the cloned voice. How does it sound?</textarea>
+            </nui-textarea>
+        </nui-input-group>
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-preview">
+                <button type="button">Preview</button>
+            </nui-button>
+            <nui-button id="btn-preview-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+        <audio id="xai-preview-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+        <div id="xai-preview-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Save Voice</h3>
+        <nui-input-group>
+            <label for="xai-clone-name">Voice Name</label>
+            <nui-input>
+                <input type="text" id="xai-clone-name" placeholder="my_voice">
+            </nui-input>
+        </nui-input-group>
+        <nui-input-group>
+            <label for="xai-clone-desc">Description (optional)</label>
+            <nui-input>
+                <input type="text" id="xai-clone-desc" placeholder="Natural and pleasant voice.">
+            </nui-input>
+        </nui-input-group>
+        <nui-button id="btn-save" disabled>
+            <button type="button">Save Voice</button>
+        </nui-button>
+        <div id="xai-save-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Cloned Voices</h3>
+        <div id="xai-cloned-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    customElements.whenDefined('nui-button').then(function() { _bindAll(); });
+
+    let fileInput, nameInput, descInput, testPhraseEl, btnPreview, btnPreviewStop, btnSave;
+    let previewStatusEl, saveStatusEl, clonedListEl, previewAudio;
+    let abortController = null, mediaSource = null;
+
+    function _bindAll() {
+        fileInput = element.querySelector('#xai-clone-file');
+        nameInput = element.querySelector('#xai-clone-name');
+        descInput = element.querySelector('#xai-clone-desc');
+        testPhraseEl = element.querySelector('#xai-test-phrase');
+        btnPreview = element.querySelector('#btn-preview');
+        btnPreviewStop = element.querySelector('#btn-preview-stop');
+        btnSave = element.querySelector('#btn-save');
+        previewStatusEl = element.querySelector('#xai-preview-status');
+        saveStatusEl = element.querySelector('#xai-save-status');
+        clonedListEl = element.querySelector('#xai-cloned-list');
+        previewAudio = element.querySelector('#xai-preview-audio');
+
+        btnPreviewStop.addEventListener('click', stop);
+
+        btnPreview.querySelector('button').addEventListener('click', doPreview);
+        btnSave.querySelector('button').addEventListener('click', doSave);
+
+        element.addEventListener('nui-action', onAction);
+
+        loadClonedVoices();
+    }
+
+    function stop() {
+        if (abortController) { abortController.abort(); abortController = null; }
+        if (previewAudio) { previewAudio.pause(); previewAudio.src = ''; }
+        if (mediaSource?.readyState === 'open') { try { mediaSource.endOfStream(); } catch (_) {} }
+        mediaSource = null;
+    }
+
+    function loadClonedVoices() {
+        fetch('/v1/voices?engine=xai').then(r => r.json()).then(d => {
+            const voices = (d.voices || []).filter(v => v.category === 'cloned');
+            if (!voices.length) {
+                clonedListEl.innerHTML = '<p style="color: var(--color-shade6)">No cloned voices yet.</p>';
+                return;
+            }
+            clonedListEl.innerHTML = '';
+            for (const v of voices) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);';
+                const label = document.createElement('span');
+                label.textContent = v.name;
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.textContent = 'Delete';
+                delBtn.addEventListener('click', async () => {
+                    await fetch(`/v1/voices/${encodeURIComponent(v.voice_id)}?engine=xai`, { method: 'DELETE' });
+                    loadClonedVoices();
+                });
+                row.appendChild(label);
+                row.appendChild(delBtn);
+                clonedListEl.appendChild(row);
+            }
+        }).catch(() => {
+            clonedListEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load voices.</p>';
+        });
+    }
+
+    function onAction(e) {
+        const { action, data } = e.detail || {};
+        if (action === 'delete-cloned') {
+            fetch(`/v1/voices/${encodeURIComponent(data.id)}?engine=xai`, { method: 'DELETE' })
+                .then(() => loadClonedVoices())
+                .catch(err => { previewStatusEl.innerHTML = `<nui-badge variant="danger">Delete failed: ${err.message}</nui-badge>`; });
+        }
+    }
+
+    async function doPreview() {
+        const file = fileInput.files?.[0];
+        if (!file) {
+            previewStatusEl.innerHTML = '<nui-badge variant="danger">Select a reference audio file first.</nui-badge>';
+            return;
+        }
+        stop();
+
+        abortController = new AbortController();
+        const startTime = performance.now();
+
+        previewAudio.style.display = 'block';
+        mediaSource = new MediaSource();
+        previewAudio.src = URL.createObjectURL(mediaSource);
+
+        previewStatusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Previewing...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        const phrase = testPhraseEl.value || 'This is a preview of the cloned voice.';
+        formData.append('test_phrase', phrase);
+
+        mediaSource.addEventListener('sourceopen', async () => {
+            const sb = mediaSource.addSourceBuffer('audio/mpeg');
+            try {
+                const res = await fetch('/v1/voices/preview?engine=xai', {
+                    method: 'POST', body: formData, signal: abortController.signal
+                });
+                if (!res.ok) {
+                    const errText = await res.text();
+                    previewStatusEl.innerHTML = `<nui-badge variant="danger">Preview failed: HTTP ${res.status}</nui-badge>`;
+                    previewAudio.style.display = 'none';
+                    return;
+                }
+                const reader = res.body.getReader();
+                let firstChunk = false;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!firstChunk && value?.length) {
+                        firstChunk = true;
+                    }
+                    await new Promise((resolve, reject) => {
+                        sb.appendBuffer(value);
+                        sb.onupdateend = resolve;
+                        sb.onerror = reject;
+                    });
+                    if (previewAudio.paused && sb.buffered.length > 0) {
+                        previewAudio.play().catch(() => {});
+                    }
+                }
+                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                previewStatusEl.innerHTML = `<span style="color: var(--color-success)">Preview done in ${(performance.now() - startTime).toFixed(0)}ms</span>`;
+                btnSave.removeAttribute('disabled');
+            } catch (err) {
+                if (err.name !== 'AbortError') {
+                    previewStatusEl.innerHTML = `<nui-badge variant="danger">Error: ${err.message}</nui-badge>`;
+                }
+            }
+        }, { once: true });
+    }
+
+    async function doSave() {
+        const file = fileInput.files?.[0];
+        if (!file) {
+            saveStatusEl.innerHTML = '<nui-badge variant="danger">Select a reference audio file first.</nui-badge>';
+            return;
+        }
+        const name = nameInput.value.trim();
+        if (!name) {
+            saveStatusEl.innerHTML = '<nui-badge variant="danger">Provide a voice name.</nui-badge>';
+            return;
+        }
+
+        saveStatusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Saving...';
+
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', name);
+        if (descInput.value.trim()) formData.append('description', descInput.value.trim());
+
+        try {
+            const res = await fetch('/v1/voices/clone?engine=xai', { method: 'POST', body: formData });
+            if (res.ok) {
+                saveStatusEl.innerHTML = `<nui-badge variant="success">Voice "${name}" saved.</nui-badge>`;
+                nameInput.value = '';
+                descInput.value = '';
+                loadClonedVoices();
+            } else {
+                const err = await res.json();
+                saveStatusEl.innerHTML = `<nui-badge variant="danger">${err.detail || 'Save failed'}</nui-badge>`;
+            }
+        } catch (err) {
+            saveStatusEl.innerHTML = `<nui-badge variant="danger">Error: ${err.message}</nui-badge>`;
+        }
+    }
+
+    element.show = () => loadClonedVoices();
+    element.hide = () => stop();
+}
+</script>

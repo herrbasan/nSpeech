@@ -1,0 +1,197 @@
+<div class="page-xai-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>xAI / Grok — Generate</h1>
+        <p class="lead">Cloud TTS with 5 expressive voices, speech tags, and 20 languages. Returns full audio (no streaming from HTTP endpoint).</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="xai-voice">Voice</label>
+            <nui-select id="xai-voice-select">
+                <select id="xai-voice">
+                    <option value="" disabled selected>Loading voices...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="xai-text">Text</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="5">
+                <textarea id="xai-text" placeholder="Text to synthesize...">This is a test of xAI Grok speech synthesis through nSpeech. Five expressive voices are available, each with a distinct personality — from energetic Eve to authoritative Leo. Speech tags like [pause] and [laugh] give you fine-grained delivery control.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="xai-language">Language</label>
+            <nui-select id="xai-language-select">
+                <select id="xai-language">
+                    <option value="auto">Auto-detect</option>
+                    <option value="en" selected>English</option>
+                    <option value="zh">Chinese (Simplified)</option>
+                    <option value="de">German</option>
+                    <option value="fr">French</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="es-ES">Spanish (Spain)</option>
+                    <option value="es-MX">Spanish (Mexico)</option>
+                    <option value="pt-BR">Portuguese (Brazil)</option>
+                    <option value="ru">Russian</option>
+                    <option value="ar-SA">Arabic (Saudi Arabia)</option>
+                    <option value="hi">Hindi</option>
+                    <option value="it">Italian</option>
+                    <option value="id">Indonesian</option>
+                    <option value="bn">Bengali</option>
+                    <option value="tr">Turkish</option>
+                    <option value="vi">Vietnamese</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="xai-speed">Speed: <span id="xai-speed-val">1.0</span></label>
+            <nui-input>
+                <input type="range" id="xai-speed" min="0.7" max="1.5" step="0.1" value="1.0">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <nui-input>
+                <input type="checkbox" id="xai-normalize">
+                <label for="xai-normalize">Text normalization (expand numbers/abbreviations to spoken form)</label>
+            </nui-input>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+            <nui-button id="btn-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="xai-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="xai-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let abortController = null;
+
+    const voiceSelect = element.querySelector('#xai-voice-select');
+    const selectEl = element.querySelector('#xai-voice');
+    const textArea = element.querySelector('#xai-text');
+    const languageEl = element.querySelector('#xai-language');
+    const speedEl = element.querySelector('#xai-speed');
+    const speedValEl = element.querySelector('#xai-speed-val');
+    const normalizeEl = element.querySelector('#xai-normalize');
+    const generateBtn = element.querySelector('#btn-generate');
+    const stopBtn = element.querySelector('#btn-stop');
+    const statusEl = element.querySelector('#xai-status');
+    let audio = element.querySelector('#xai-audio');
+
+    speedEl.addEventListener('input', () => {
+        speedValEl.textContent = speedEl.value;
+    });
+
+    function loadVoices() {
+        statusEl.textContent = 'Loading voices...';
+        fetch('/v1/voices?engine=xai')
+            .then(r => r.json())
+            .then(d => {
+                const voices = d.voices || [];
+                const byType = { builtin: [], cloned: [] };
+                for (const v of voices) {
+                    const bucket = v.category === 'cloned' ? 'cloned' : 'builtin';
+                    byType[bucket].push({ value: v.voice_id, label: v.name });
+                }
+                const groups = [];
+                if (byType.cloned.length) groups.push({ group: 'My Voices', options: byType.cloned });
+                if (byType.builtin.length) groups.push({ group: 'Built-in', options: byType.builtin });
+                voiceSelect.setItems(groups);
+                if (selectEl.options.length <= 1 && groups.length > 0) {
+                    const first = groups[0].options[0];
+                    if (first) selectEl.value = first.value;
+                }
+                statusEl.textContent = `${voices.length} voices loaded`;
+            })
+            .catch(() => {
+                statusEl.textContent = 'Failed to load voices';
+            });
+    }
+
+    function stop() {
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
+        }
+        if (audio) {
+            audio.pause();
+            audio.src = '';
+        }
+        statusEl.textContent = '';
+    }
+
+    stopBtn.addEventListener('click', stop);
+
+    generateBtn.querySelector('button').addEventListener('click', () => {
+        const text = textArea.value.trim();
+        if (!text) return;
+        stop();
+
+        const voice = selectEl.value;
+        abortController = new AbortController();
+        const startTime = performance.now();
+
+        const newAudio = document.createElement('audio');
+        newAudio.id = 'xai-audio';
+        newAudio.controls = true;
+        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
+        audio.replaceWith(newAudio);
+        audio = newAudio;
+
+        statusEl.textContent = 'Generating...';
+
+        const extraBody = {};
+        if (normalizeEl.checked) extraBody.text_normalization = true;
+
+        fetch('/v1/audio/speech', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+                model: 'xai',
+                input: text,
+                voice: voice,
+                response_format: 'mp3',
+                speed: parseFloat(speedEl.value),
+                extra_body: {
+                    language: languageEl.value,
+                    ...extraBody,
+                },
+            }),
+            signal: abortController.signal,
+        })
+        .then(async (response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            audio.src = url;
+            audio.style.display = 'block';
+            audio.addEventListener('ended', () => URL.revokeObjectURL(url));
+            statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms (${(blob.size / 1024).toFixed(1)} KB)`;
+            audio.play().catch(() => {});
+        })
+        .catch((err) => {
+            if (err.name !== 'AbortError') {
+                statusEl.textContent = `Error: ${err.message}`;
+            }
+        });
+    });
+
+    element.show = () => {
+        loadVoices();
+    };
+    element.hide = () => stop();
+}
+</script>

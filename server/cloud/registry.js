@@ -16,6 +16,7 @@
 
 import { MiniMaxAdapter } from './minimax.js';
 import { ElevenLabsAdapter } from './elevenlabs.js';
+import { XaiAdapter } from './xai.js';
 import { logger } from '../logger.js';
 
 const log = logger.child('cloud');
@@ -48,6 +49,12 @@ _register('elevenlabs', ElevenLabsAdapter, [
   'elevenlabs_turbo_v2_5',
   'elevenlabs_multilingual_v2',
   'elevenlabs_flash_v2_5',
+]);
+
+_register('xai', XaiAdapter, [
+  'xai',
+  'xai_grok_tts_1',
+  'xai_grok_tts_1_hd',
 ]);
 
 /**

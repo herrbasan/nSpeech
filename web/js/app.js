@@ -83,6 +83,15 @@ function buildNavigation(engine) {
                 { label: 'Voices', href: '#page=elevenlabs/voices' }
             ]
         });
+    } else if (engine === 'xai') {
+        nav.push({
+            label: 'xAI / Grok',
+            icon: 'cloud',
+            items: [
+                { label: 'Generate', href: '#page=xai/generate' },
+                { label: 'Voices', href: '#page=xai/voices' }
+            ]
+        });
     }
 
     return nav;
