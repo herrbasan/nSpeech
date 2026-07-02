@@ -234,7 +234,13 @@ export class XaiAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`xAI clone failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      let detail = errText;
+      try {
+        const errJson = JSON.parse(errText);
+        detail = errJson.error || errJson.message || errText;
+      } catch {}
+      log.error('xAI clone failed', { status: resp.status, body: errText.slice(0, 300) });
+      throw new Error(`xAI clone failed: HTTP ${resp.status} — ${detail}`);
     }
 
     const data = await resp.json();
