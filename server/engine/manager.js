@@ -13,6 +13,7 @@ import { resolve } from 'node:path';
 
 import { getEntry, listEngines, venvExists, PROJECT_ROOT } from './registry.js';
 import { WorkerProcess, WorkerError } from './worker.js';
+import { resolveCloud, listCloudEngines } from '../cloud/registry.js';
 import { logger } from '../logger.js';
 
 const log = logger.child('manager');
@@ -40,6 +41,37 @@ export class EngineManager {
     this.currentEngine = defaultEngine;
     WorkerProcess.sweepStalePortFiles();
     log.info('engine manager initialized', { defaultEngine });
+  }
+
+  /**
+   * Resolve an engine from a model string — checks cloud first, then local.
+   *
+   * Returns an object implementing:
+   *   generatePcmStream(params) → Readable
+   *   listVoices() → { voices: [...] }
+   *   cloneVoice({audio, voice_name, ...}) → { voice_id, ... }
+   *   previewVoice({audio, voice_name, ...}) → { pcmStream: Readable, extraHeaders: {} }
+   *   deleteVoice(voiceId) → { success }
+   *   mixVoices({name, voice_a, voice_b, ratio}) → { voice_id, ... }
+   *   health() → { status: 'ready'|'warming'|'dead' }
+   *
+   * @param {string} model — model selector (e.g. "minimax", "kokoro", "cosyvoice_0.5b")
+   * @returns {Promise<WorkerProcess|CloudAdapter>}
+   */
+  async getEngine(model) {
+    // ── Cloud providers ───────────────────────────────────────────────────
+    const cloud = resolveCloud(model);
+    if (cloud) {
+      const health = cloud.adapter.health();
+      if (health.status === 'dead') {
+        throw new WorkerError(503, 'cloud_unavailable', health.error || 'Cloud adapter is not available');
+      }
+      return cloud.adapter;
+    }
+
+    // ── Local engines ─────────────────────────────────────────────────────
+    const engineName = model || this.currentEngine;
+    return this.getWorker(engineName);
   }
 
   /**

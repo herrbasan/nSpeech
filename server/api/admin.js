@@ -33,6 +33,7 @@
  */
 import { manager } from '../engine/manager.js';
 import { getEntry } from '../engine/registry.js';
+import { resolveCloud } from '../cloud/registry.js';
 
 /**
  * Register the engine switch route on a Fastify instance.
@@ -54,6 +55,55 @@ export function registerAdminRoutes(app) {
           param: 'engine',
         },
       });
+    }
+
+    // ── Resolve engine: cloud or local ────────────────────────────────────────
+    const cloud = resolveCloud(engineName);
+
+    if (cloud) {
+      // Cloud engines — stateless, no worker lifecycle. Still need SSE
+      // because the dashboard expects event streams for every switch.
+      const health = cloud.adapter.health();
+      if (health.status === 'dead') {
+        return reply.code(503).send({
+          error: {
+            message: health.error || 'Cloud adapter is not available',
+            type: 'service_unavailable',
+            code: 'cloud_unavailable',
+          },
+        });
+      }
+
+      // Check busy local workers (won't block cloud, but let the user know)
+      const currentWorker = manager.workers.get(manager.currentEngine);
+      if (currentWorker && currentWorker.inFlight > 0) {
+        return reply.code(409).send({
+          error: {
+            message: `Cannot switch: ${currentWorker.inFlight} request(s) active on ${manager.currentEngine}`,
+            type: 'invalid_request_error',
+            code: 'engine_busy',
+          },
+        });
+      }
+
+      // Emit SSE with a single status event, then result
+      reply.raw.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+
+      function sendEvent(event, data) {
+        reply.raw.write(`event: ${event}\n`);
+        reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      }
+
+      sendEvent('status', { stage: 'switch_done', engine: engineName });
+      manager.currentEngine = engineName;
+      sendEvent('result', { engine: engineName, status: 'switched' });
+      reply.raw.end();
+      return;
     }
 
     const entry = getEntry(engineName);
@@ -125,7 +175,9 @@ export function registerAdminRoutes(app) {
 
   app.get('/v1/admin/engines', async () => {
     const { listEngines, getEntry, venvExists } = await import('../engine/registry.js');
-    const engines = listEngines().map(name => {
+    const { listCloudEngines } = await import('../cloud/registry.js');
+
+    const localEngines = listEngines().map(name => {
       const entry = getEntry(name);
       return {
         name,
@@ -135,6 +187,19 @@ export function registerAdminRoutes(app) {
         is_loaded: manager.workers.has(name) && manager.workers.get(name).state === 'ready',
       };
     });
-    return { engines, current: manager.currentEngine };
+
+    const cloudEngines = listCloudEngines().map(c => ({
+      name: c.name,
+      type: 'cloud',
+      models: c.models,
+      health: c.health.status,
+      is_current: false,
+      is_loaded: c.health.status === 'ready',
+    }));
+
+    return {
+      engines: [...localEngines, ...cloudEngines],
+      current: manager.currentEngine,
+    };
   });
 }

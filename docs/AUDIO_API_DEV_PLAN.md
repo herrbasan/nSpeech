@@ -317,29 +317,99 @@ Verify:
 
 ### Phase 8: Cloud provider adapters
 
-Goal: treat OpenAI, ElevenLabs, Azure, etc. as engines.
+Goal: implement cloud TTS providers as Node-native adapters that implement the same
+streaming PCM contract as Python workers.
 
-Cloud adapters only need an HTTP client — no model weights, no GPU, no venv. Spawning
-a Python process per cloud provider is heavyweight and pointless. Cloud adapters run
-**directly in Node** as native fetch-based modules, not as Python workers.
+#### 8.0: Finalize extra_body schema
+
+**Date: 2026-07-02.** The `extra_body` schema is now frozen in `AUDIO_API_PLAN.md` §3.
+It covers 17 optional fields organized into 6 categories (Voice Character, Quality,
+Model Selection, Voice Blending, Text Processing, Audio Output, Effects) with an
+engine support matrix showing exactly what maps where.
+
+Renames from the draft:
+- `exaggeration` → `expressiveness` (0..1, same meaning, less Chatterbox-specific)
+- `steps` → `inference_steps` (more descriptive, avoids ambiguity)
+
+Retired fields:
+- `text_frontend` (CosyVoice internal, not a user-facing control)
+- `emotion_tags` (replaced by top-level `emotion`)
+
+New fields covering MiniMax + future providers: `pitch`, `emotion`, `stability`,
+`pronunciation`, `ssml`, `sample_rate`, `channel`, `bitrate`, `sound_effects`.
+
+Web dashboard files that need updating (names changed):
+- `web/pages/chatterbox/generate.html` — `exaggeration` → `expressiveness`
+- `web/pages/dots/generate.html` — `steps` → `inference_steps`
+- `web/pages/cosyvoice/generate.html` — `text_frontend`/`emotion_tags` removed (cosyvoice adapter reads `emotion` from extra_body now)
+
+#### 8.1: Engine interface abstraction
 
 Files:
-- `server/cloud/openai_tts.js` — calls OpenAI `/v1/audio/speech`, streams response.
-- `server/cloud/elevenlabs.js` — calls ElevenLabs API.
-- `server/cloud/registry.js` — maps `model` prefix to cloud adapter (e.g. `openai_*` → openai_tts).
+- `server/engine/interface.js` — shared contract (generatePcmStream, listVoices, etc.)
+- `server/engine/manager.js` — `getWorker()` → `getEngine()`, checks cloud registry first
 
-Cloud adapters implement the same relay contract as worker forwarding:
-- Accept the OpenAI-compatible request body (minimal translation needed).
-- Stream the provider's response back to the client.
-- Set `X-Stream-Mode: chunked` header (see §11) since cloud TTS returns complete files.
-- Read API keys from `.env` at startup; fail fast if missing.
+The current handlers (`speech.js`, `voices.js`) call `worker.relay()` directly. This
+ties the API layer to the HTTP worker transport. Refactor to call engine methods instead:
 
-The registry in `server/engine/manager.js` checks cloud first: if `model` matches a
-cloud prefix, route to the Node cloud adapter. Otherwise route to the Python worker.
+```js
+// BEFORE: speech.js
+worker = await manager.getWorker(engineName);
+resp = await worker.relay('POST', '/v1/audio/speech', { headers, body });
+pcmStream = Readable.fromWeb(resp.body);
 
-Verify:
-- Request with `model: openai_tts_1` calls OpenAI and returns audio through Node.
-- No Python process is spawned for cloud models.
+// AFTER: speech.js
+engine = await manager.getEngine(engineName);
+pcmStream = await engine.generatePcmStream({ text, voice_name, speed, instruct_text, extra_body });
+```
+
+`WorkerProcess.generatePcmStream()` wraps the existing relay internally.
+`MiniMaxAdapter.generatePcmStream()` calls the MiniMax HTTP API, hex-decodes PCM,
+and returns a `Readable`. The handler never knows which path was taken.
+
+#### 8.2: MiniMax adapter
+
+Files:
+- `server/cloud/minimax.js` — MiniMax adapter (first cloud provider)
+- `server/cloud/registry.js` — maps `model` prefix `minimax_*` → MiniMax adapter
+
+Cloud adapters are plain JS modules. No Python venv, no child process.
+
+Adapter responsibilities:
+- Accept the OpenAI-compatible request body (minimal translation).
+- Map `extra_body` fields to MiniMax-native params (see `AUDIO_API_PLAN.md` §3 matrix).
+- Request `format: pcm, sample_rate: 24000` from MiniMax HTTP API.
+- Hex-decode the response into raw `s16le` PCM bytes.
+- Return a Node `Readable` stream of PCM bytes.
+- Read `MINIMAX_API_KEY` from `.env` at startup; fail fast if missing.
+
+The registry in `manager.js` checks cloud first: if `model` matches `minimax_*`,
+route to the MiniMax adapter. Otherwise fall through to Python worker.
+
+Voice management:
+- `listVoices()`: calls `POST /v1/get_voice` → returns MiniMax's 332 system voices
+  (and any cloned voices). Tagged `voice_type: "minimax_system"`.
+- `cloneVoice()`: upload audio → `POST /v1/voice_clone` → returns `voice_id`.
+  No local `.pt` cache — voice lives on MiniMax's servers (7-day inactivity TTL).
+- `/v1/voices/mix`: NOT supported natively. Two options when it's time to implement:
+  (A) return 400 with "engine does not support voice mixing", or (B) store a JSON
+  blend recipe locally and apply `timbre_weights` per-request.
+- `deleteVoice()`: `POST /v1/delete_voice` → done.
+
+#### 8.3: Future cloud providers
+
+The `extra_body` schema was designed with these in mind:
+
+| Provider | Key mapping challenge | Status |
+|----------|----------------------|--------|
+| OpenAI TTS | `model` → `tts-1`/`tts-1-hd`, voice → alloy/echo/etc. Trivial. | ❓ |
+| ElevenLabs | `stability`, `expressiveness`→`style`, `guidance_scale`→`similarity_boost`. Natural fit. | ❓ |
+| Azure Speech | SSML support, `sound_effects` maps to SSML effects. | ❓ |
+| Google Cloud | SSML, audio profile effects. | ❓ |
+| Cartesia | Streaming-first, speed control. | ❓ |
+| PlayHT | Voice cloning, emotion. | ❓ |
+
+No API changes expected for any of these — the schema covers all their parameters.
 
 ### Phase 9: Decommission old Python server
 

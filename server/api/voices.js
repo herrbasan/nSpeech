@@ -1,8 +1,8 @@
 /**
  * Voice management routes — /v1/voices/*
  *
- * All routes forward to the active engine worker. Node may normalize
- * response shapes for OpenAI compatibility.
+ * All routes resolve the engine via manager.getEngine() and call engine
+ * methods directly. Works identically for Python workers and cloud adapters.
  *
  * Routes:
  *   GET    /v1/voices           — list voices
@@ -12,29 +12,28 @@
  *   DELETE /v1/voices/:voiceId  — delete a voice
  */
 import { manager } from '../engine/manager.js';
-import { Readable } from 'node:stream';
 import { pipePcmToClient } from '../transcode.js';
+import { logger } from '../logger.js';
 
 /**
  * Register all voice management routes on a Fastify instance.
  */
 export function registerVoiceRoutes(app) {
 
-  // ── GET /v1/voices & /voices ─────────────────────────────────────────────
+  // ── GET /v1/voices ────────────────────────────────────────────────────────
 
   const getVoicesHandler = async (request, reply) => {
-    const engineName = request.query.engine || manager.currentEngine;
+    const model = request.query.engine || request.query.model;
 
-    let worker;
+    let engine;
     try {
-      worker = await manager.getWorker(engineName);
+      engine = await manager.getEngine(model);
     } catch (err) {
       return sendError(reply, err);
     }
 
     try {
-      const resp = await worker.relay('GET', '/v1/voices');
-      const data = await resp.json();
+      const data = await engine.listVoices();
 
       // Normalize: ensure each voice has voice_id and engine fields
       if (data.voices) {
@@ -43,12 +42,12 @@ export function registerVoiceRoutes(app) {
           name: v.name ?? v.voice_id,
           category: v.category ?? 'cloned',
           voice_type: v.voice_type ?? v.category ?? 'cloned',
-          engine: v.engine ?? engineName,
-          ...v,  // preserve any extra fields
+          engine: v.engine ?? (typeof engine.engineName === 'string' ? engine.engineName : 'cloud'),
+          ...v,
         }));
       }
 
-      reply.code(resp.status).send(data);
+      reply.send(data);
     } catch (err) {
       sendError(reply, err);
     }
@@ -56,31 +55,37 @@ export function registerVoiceRoutes(app) {
 
   app.get('/v1/voices', getVoicesHandler);
 
-  // ── POST /v1/voices/clone ──────────────────────────────────────────────
+  // ── POST /v1/voices/clone ─────────────────────────────────────────────────
 
   const cloneVoiceHandler = async (request, reply) => {
-    const engineName = request.query.engine || manager.currentEngine;
+    const model = request.query.engine || request.query.model;
 
-    let worker;
+    let engine;
     try {
-      worker = await manager.getWorker(engineName);
+      engine = await manager.getEngine(model);
     } catch (err) {
       return sendError(reply, err);
     }
 
     try {
-      const contentType = request.headers['content-type'];
+      // Fastify addContentTypeParser gives us the raw multipart buffer.
+      // Parse the name and audio fields from the body.
       const body = Buffer.isBuffer(request.body)
         ? request.body
         : Buffer.from(request.body || '');
-      const resp = await worker.relay('POST', '/v1/voices/clone', {
-        headers: { 'content-type': contentType },
-        body,
+
+      // Simple multipart parse — just get name + audio
+      const contentType = request.headers['content-type'] || '';
+      const data = _parseMultipart(body, contentType);
+
+      const result = await engine.cloneVoice({
+        audio: data.audio,
+        voice_name: data.name || data.voice_name || `clone_${Date.now()}`,
+        prompt_text: data.prompt_text,
+        model: data.model,
       });
 
-      if (resp._stallTimer) clearTimeout(resp._stallTimer);
-      const text = await resp.text();
-      reply.code(resp.status).send(text);
+      reply.send(result);
     } catch (err) {
       sendError(reply, err);
     }
@@ -88,57 +93,51 @@ export function registerVoiceRoutes(app) {
 
   app.post('/v1/voices/clone', { config: { rawBody: false } }, cloneVoiceHandler);
 
-  // ── POST /v1/voices/preview ────────────────────────────────────────────
+  // ── POST /v1/voices/preview ───────────────────────────────────────────────
 
   const previewVoiceHandler = async (request, reply) => {
-    const engineName = request.query.engine || manager.currentEngine;
+    const model = request.query.engine || request.query.model;
 
-    let worker;
+    let engine;
     try {
-      worker = await manager.getWorker(engineName);
+      engine = await manager.getEngine(model);
     } catch (err) {
       return sendError(reply, err);
     }
 
     try {
-      const contentType = request.headers['content-type'];
-      // Fastify's addContentTypeParser (registered in server/index.js) gives
-      // us the buffered multipart body as a Buffer on request.body. We forward
-      // it to the worker, which does the actual multipart parsing via FastAPI.
       const body = Buffer.isBuffer(request.body)
         ? request.body
         : Buffer.from(request.body || '');
-      const resp = await worker.relay('POST', '/v1/voices/preview', {
-        headers: { 'content-type': contentType },
-        body,
+
+      const contentType = request.headers['content-type'] || '';
+      const data = _parseMultipart(body, contentType);
+
+      logger.info('preview multipart parsed', {
+        hasAudio: !!data.audio,
+        audioLen: data.audio?.length || 0,
+        voiceName: data.name || data.voice_name,
+        keys: Object.keys(data),
       });
 
-      if (resp._stallTimer) clearTimeout(resp._stallTimer);
+      const result = await engine.previewVoice({
+        audio: data.audio,
+        voice_name: data.name || data.voice_name,
+        prompt_text: data.prompt_text,
+        preview_text: data.preview_text,
+        model: data.model,
+      });
 
-      // Error responses: forward the worker's error body as-is
-      if (resp.status >= 400 || !resp.body) {
-        const errBuf = resp.body ? Buffer.from(await resp.arrayBuffer()) : Buffer.alloc(0);
-        const ct = resp.headers.get('content-type') || 'application/json';
-        return reply.code(resp.status).type(ct).send(errBuf);
-      }
-
-      // Worker returns raw PCM (s16le, 24kHz, mono). Transcode to MP3 via
-      // ffmpeg — same path as /v1/audio/speech. The browser's MediaSource
-      // needs audio/mpeg; raw PCM or PyAV-encoded opus won't play.
+      // Engine returns { pcmStream, extraHeaders }. Transcode to MP3.
       reply.hijack();
       const rawResponse = reply.raw;
-      const pcmStream = Readable.fromWeb(resp.body);
 
-      // Forward worker's metadata headers (e.g. X-STT-Transcript from Whisper)
-      const extraHeaders = {};
-      const stt = resp.headers.get('x-stt-transcript');
-      if (stt) extraHeaders['X-STT-Transcript'] = stt;
-
+      const extraHeaders = result.extraHeaders || {};
       request.raw.on('close', () => {
-        pcmStream.destroy();
+        result.pcmStream.destroy();
       });
 
-      pipePcmToClient(pcmStream, rawResponse, 'mp3', {
+      pipePcmToClient(result.pcmStream, rawResponse, 'mp3', {
         streamMode: 'native',
         extraHeaders,
       });
@@ -149,27 +148,26 @@ export function registerVoiceRoutes(app) {
 
   app.post('/v1/voices/preview', { config: { rawBody: false } }, previewVoiceHandler);
 
-  // ── POST /v1/voices/mix ────────────────────────────────────────────────
+  // ── POST /v1/voices/mix ───────────────────────────────────────────────────
 
   const mixVoicesHandler = async (request, reply) => {
-    const engineName = manager.currentEngine;
+    const model = manager.currentEngine;
 
-    let worker;
+    let engine;
     try {
-      worker = await manager.getWorker(engineName);
+      engine = await manager.getEngine(model);
     } catch (err) {
       return sendError(reply, err);
     }
 
     try {
-      const resp = await worker.relay('POST', '/v1/voices/mix', {
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(request.body),
+      const result = await engine.mixVoices({
+        name: request.body.name,
+        voice_a: request.body.voice_a,
+        voice_b: request.body.voice_b,
+        ratio: request.body.ratio ?? 0.5,
       });
-
-      if (resp._stallTimer) clearTimeout(resp._stallTimer);
-      const text = await resp.text();
-      reply.code(resp.status).send(text);
+      reply.send(result);
     } catch (err) {
       sendError(reply, err);
     }
@@ -177,31 +175,87 @@ export function registerVoiceRoutes(app) {
 
   app.post('/v1/voices/mix', mixVoicesHandler);
 
-  // ── DELETE /v1/voices/:voiceId ─────────────────────────────────────────
+  // ── DELETE /v1/voices/:voiceId ────────────────────────────────────────────
 
   const deleteVoiceHandler = async (request, reply) => {
-    const engineName = request.query.engine || manager.currentEngine;
+    const model = request.query.engine || manager.currentEngine;
     const { voiceId } = request.params;
 
-    let worker;
+    let engine;
     try {
-      worker = await manager.getWorker(engineName);
+      engine = await manager.getEngine(model);
     } catch (err) {
       return sendError(reply, err);
     }
 
     try {
-      const resp = await worker.relay('DELETE', `/v1/voices/${encodeURIComponent(voiceId)}`);
-
-      if (resp._stallTimer) clearTimeout(resp._stallTimer);
-      const text = await resp.text();
-      reply.code(resp.status).send(text);
+      const result = await engine.deleteVoice(voiceId);
+      reply.send(result);
     } catch (err) {
       sendError(reply, err);
     }
   };
 
   app.delete('/v1/voices/:voiceId', deleteVoiceHandler);
+}
+
+/**
+ * Parse multipart form-data buffer. Extracts text fields and file fields.
+ */
+function _parseMultipart(buffer, contentType) {
+  // Extract boundary from the HTTP Content-Type header (NOT from the body).
+  const boundaryMatch = contentType.match(/boundary=(.+?)(?:;|$)/);
+  if (!boundaryMatch) return { audio: buffer };
+
+  const boundary = boundaryMatch[1].trim().replace(/^["']|["']$/g, '');
+  const delim = Buffer.from('--' + boundary);
+  const result = {};
+
+  // Split on each occurrence of the boundary marker
+  let pos = buffer.indexOf(delim);
+  let prevEnd = pos + delim.length;
+
+  while (pos !== -1) {
+    // Find next boundary
+    const nextPos = buffer.indexOf(delim, pos + delim.length);
+    const partEnd = nextPos !== -1 ? nextPos : buffer.length;
+
+    // Skip boundary line itself (--boundary\r\n or --boundary\n)
+    let partStart = pos + delim.length;
+    if (buffer[partStart] === 13) partStart++;  // \r
+    if (buffer[partStart] === 10) partStart++;  // \n
+
+    if (partStart < partEnd && nextPos !== -1) { // skip the final boundary (--boundary--)
+      const part = buffer.slice(partStart, partEnd);
+      const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'));
+      if (headerEnd !== -1) {
+        const header = part.slice(0, headerEnd).toString('utf8');
+        let body = part.slice(headerEnd + 4);
+
+        // Trim trailing \r\n
+        if (body.length >= 2 && body[body.length - 2] === 13 && body[body.length - 1] === 10) {
+          body = body.slice(0, -2);
+        }
+
+        const nameMatch = header.match(/name="([^"]+)"/);
+        const filenameMatch = header.match(/filename="([^"]+)"/);
+
+        if (nameMatch) {
+          const name = nameMatch[1];
+          result[name] = filenameMatch ? Buffer.from(body) : body.toString('utf8');
+        }
+      }
+    }
+
+    pos = nextPos;
+  }
+
+  // Fallback: if no audio key but large buffer, use raw bytes
+  if (!result.audio && buffer.length > 1000) {
+    result.audio = buffer;
+  }
+
+  return result;
 }
 
 function sendError(reply, err) {

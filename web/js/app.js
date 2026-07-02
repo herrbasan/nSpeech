@@ -65,6 +65,15 @@ function buildNavigation(engine) {
                 { label: 'Voices', href: '#page=dots/voices' }
             ]
         });
+    } else if (engine === 'minimax') {
+        nav.push({
+            label: 'MiniMax',
+            icon: 'cloud',
+            items: [
+                { label: 'Generate', href: '#page=minimax/generate' },
+                { label: 'Voices', href: '#page=minimax/voices' }
+            ]
+        });
     }
 
     return nav;

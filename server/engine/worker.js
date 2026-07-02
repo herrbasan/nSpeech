@@ -12,6 +12,7 @@
  */
 import { spawn } from 'node:child_process';
 import * as readline from 'node:readline/promises';
+import { Readable } from 'node:stream';
 import { readFileSync, unlinkSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { resolve, join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -495,6 +496,156 @@ export class WorkerProcess {
     } finally {
       this.inFlight--;
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  Engine interface methods — wraps relay() so API handlers call
+  //  engine.generatePcmStream() instead of worker.relay() directly.
+  //  Same surface as cloud adapters; handlers don't know the difference.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  health() {
+    return { status: this.state, engine: this.engineName };
+  }
+
+  async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body, model }) {
+    const eb = extra_body || {};
+    const workerBody = {
+      text,
+      voice_name: voice_name || 'default',
+      output_format: 'pcm',
+      speed: speed ?? 1.0,
+      offline: eb.offline ?? false,
+      extra_body: eb,
+    };
+    if (instruct_text) workerBody.instruct_text = instruct_text;
+    if (model) workerBody.model = model;
+    // Carry engine-specific top-level fields for older adapters
+    if (eb.expressiveness !== undefined) workerBody.exaggeration = eb.expressiveness;
+    if (eb.seed !== undefined) workerBody.seed = eb.seed;
+    if (eb.inference_steps !== undefined) workerBody.extra_body.steps = eb.inference_steps;
+    if (eb.guidance_scale !== undefined) workerBody.extra_body.guidance_scale = eb.guidance_scale;
+    if (eb.language) workerBody.language = eb.language;
+
+    const resp = await this.relay('POST', '/v1/audio/speech', {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(workerBody),
+    });
+
+    if (resp._stallTimer) clearTimeout(resp._stallTimer);
+
+    if (resp.status >= 400) {
+      const errText = await resp.text();
+      throw new WorkerError(resp.status, 'worker_error', errText);
+    }
+
+    return Readable.fromWeb(resp.body);
+  }
+
+  async listVoices() {
+    const resp = await this.relay('GET', '/v1/voices');
+    if (resp._stallTimer) clearTimeout(resp._stallTimer);
+    const data = await resp.json();
+    return data;
+  }
+
+  async cloneVoice({ audio, voice_name, prompt_text, model }) {
+    // Build multipart body — same thing the Node relay does in voices.js
+    const boundary = `----nSpeechClone${Date.now()}`;
+    const parts = [];
+    const add = (name, value, filename) => {
+      parts.push(`--${boundary}`);
+      const cd = filename
+        ? `Content-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: application/octet-stream`
+        : `Content-Disposition: form-data; name="${name}"`;
+      parts.push(cd);
+      parts.push('');
+      if (Buffer.isBuffer(value)) {
+        parts.push(value);
+      } else {
+        parts.push(value);
+      }
+    };
+
+    add('name', voice_name);
+    if (prompt_text) add('prompt_text', prompt_text);
+    if (model) add('model', model);
+    add('audio', audio, `${voice_name}.wav`);
+
+    parts.push(`--${boundary}--`);
+    const body = parts.map(p => Buffer.isBuffer(p) ? p : Buffer.from(p + '\r\n')).reduce((a, b) => Buffer.concat([a, b]));
+
+    const resp = await this.relay('POST', '/v1/voices/clone', {
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+
+    if (resp._stallTimer) clearTimeout(resp._stallTimer);
+    const data = await resp.json();
+    return data;
+  }
+
+  async previewVoice({ audio, voice_name, prompt_text, preview_text, model }) {
+    const boundary = `----nSpeechPreview${Date.now()}`;
+    const parts = [];
+    const add = (name, value, filename) => {
+      parts.push(Buffer.from(`--${boundary}\r\n`));
+      const cd = filename
+        ? `Content-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+        : `Content-Disposition: form-data; name="${name}"\r\n\r\n`;
+      parts.push(Buffer.from(cd));
+      parts.push(Buffer.isBuffer(value) ? value : Buffer.from(String(value)));
+      parts.push(Buffer.from('\r\n'));
+    };
+
+    add('name', voice_name || `__preview__${Date.now()}`);
+    if (prompt_text) add('prompt_text', prompt_text);
+    if (preview_text) add('preview_text', preview_text);
+    if (model) add('model', model);
+    add('audio', audio, `${voice_name || 'preview'}.wav`);
+
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
+
+    const resp = await this.relay('POST', '/v1/voices/preview', {
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      body,
+    });
+
+    if (resp._stallTimer) clearTimeout(resp._stallTimer);
+
+    if (resp.status >= 400 || !resp.body) {
+      const errBuf = resp.body ? Buffer.from(await resp.arrayBuffer()) : Buffer.alloc(0);
+      throw new WorkerError(resp.status, 'worker_error', errBuf.toString());
+    }
+
+    // Collect STT transcript header if present
+    const extraHeaders = {};
+    const stt = resp.headers.get('x-stt-transcript');
+    if (stt) extraHeaders['X-STT-Transcript'] = stt;
+
+    return {
+      pcmStream: Readable.fromWeb(resp.body),
+      extraHeaders,
+    };
+  }
+
+  async deleteVoice(voiceId) {
+    const resp = await this.relay('DELETE', `/v1/voices/${encodeURIComponent(voiceId)}`);
+    if (resp._stallTimer) clearTimeout(resp._stallTimer);
+    const text = await resp.text();
+    const ct = resp.headers.get('content-type') || '';
+    return ct.includes('json') ? JSON.parse(text) : { success: resp.ok };
+  }
+
+  async mixVoices({ name, voice_a, voice_b, ratio }) {
+    const resp = await this.relay('POST', '/v1/voices/mix', {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name, voice_a, voice_b, ratio }),
+    });
+    if (resp._stallTimer) clearTimeout(resp._stallTimer);
+    const text = await resp.text();
+    return JSON.parse(text);
   }
 
   /**

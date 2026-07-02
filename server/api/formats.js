@@ -55,8 +55,8 @@ export function resolveEngine(model) {
   const prefix = model.split('_')[0];
   if (KNOWN_ENGINES.includes(prefix)) return prefix;
 
-  // Cloud models (openai_*, elevenlabs_*, etc.) — handled in Phase 8
-  if (model.startsWith('openai_') || model.startsWith('elevenlabs_')) {
+  // Cloud models (minimax, openai_*, elevenlabs_*, etc.) — handled in Phase 8
+  if (model.startsWith('minimax') || model.startsWith('openai_') || model.startsWith('elevenlabs_')) {
     return null;  // Cloud adapter territory
   }
 

@@ -1,0 +1,217 @@
+<div class="page-minimax-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>MiniMax — Generate</h1>
+        <p class="lead">Cloud TTS with 332+ voices across 13 languages. <code>speech-2.8-turbo</code> by default.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="mm-voice">Voice</label>
+            <nui-select id="mm-voice-select">
+                <select id="mm-voice">
+                    <option value="" disabled selected>Loading voices...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-text">Text</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="5">
+                <textarea id="mm-text" placeholder="Text to synthesize...">This is a test of MiniMax cloud speech synthesis through nSpeech. All 332 system voices are available, covering English, Chinese, Japanese, Korean, Spanish, Portuguese, and many more.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-speed">Speed</label>
+            <nui-input type="range" min="0.5" max="2" step="0.1" value="1">
+                <input type="range" id="mm-speed" min="0.5" max="2" step="0.1" value="1">
+            </nui-input>
+            <span id="mm-speed-val" style="margin-left: var(--nui-space-half)">1.0</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-emotion">Emotion</label>
+            <nui-select id="mm-emotion-select">
+                <select id="mm-emotion">
+                    <option value="">Auto (recommended)</option>
+                    <option value="happy">Happy</option>
+                    <option value="sad">Sad</option>
+                    <option value="angry">Angry</option>
+                    <option value="fearful">Fearful</option>
+                    <option value="disgusted">Disgusted</option>
+                    <option value="surprised">Surprised</option>
+                    <option value="calm">Calm</option>
+                    <option value="whisper">Whisper</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+            <nui-button id="btn-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="mm-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="mm-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let mediaSource = null;
+    let abortController = null;
+
+    const voiceSelect = element.querySelector('#mm-voice-select');
+    const selectEl = element.querySelector('#mm-voice');
+    const textArea = element.querySelector('#mm-text');
+    const speedEl = element.querySelector('#mm-speed');
+    const speedValEl = element.querySelector('#mm-speed-val');
+    const emotionEl = element.querySelector('#mm-emotion');
+    const generateBtn = element.querySelector('#btn-generate');
+    const stopBtn = element.querySelector('#btn-stop');
+    let audio = element.querySelector('#mm-audio');
+    const statusEl = element.querySelector('#mm-status');
+
+    speedEl.addEventListener('input', () => {
+        speedValEl.textContent = speedEl.value;
+    });
+
+    function loadVoices() {
+        statusEl.textContent = 'Loading voices...';
+        fetch('/v1/voices?engine=minimax')
+            .then(r => r.json())
+            .then(d => {
+                const voices = d.voices || [];
+                const cloned = [];
+                const langMap = {};
+                for (const v of voices) {
+                    if (v.category === 'cloned') {
+                        cloned.push({ value: v.voice_id, label: `★ ${v.name}` });
+                        continue;
+                    }
+                    const lang = (v.language || 'ZZ').toUpperCase();
+                    if (!langMap[lang]) langMap[lang] = [];
+                    langMap[lang].push({ value: v.voice_id, label: v.name });
+                }
+                const groups = [];
+                if (cloned.length) groups.push({ group: 'Cloned', options: cloned });
+                const langGroups = Object.entries(langMap)
+                    .sort(([a], [b]) => a === 'EN' ? -1 : b === 'EN' ? 1 : a.localeCompare(b))
+                    .map(([lang, options]) => ({ group: lang, options }));
+                groups.push(...langGroups);
+                voiceSelect.setItems(groups);
+                if (selectEl.options.length <= 1 && cloned.length > 0) {
+                    selectEl.value = cloned[0].value;
+                } else if (selectEl.options.length <= 1 && groups.length > 0) {
+                    const en = groups.find(g => g.group === 'EN') || groups[0];
+                    if (en.options.length > 0) selectEl.value = en.options[0].value;
+                }
+                statusEl.textContent = `${voices.length} voices loaded`;
+            })
+            .catch(() => {
+                statusEl.textContent = 'Failed to load voices';
+            });
+    }
+
+    function stop() {
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
+        }
+        if (audio) {
+            audio.pause();
+            audio.src = '';
+        }
+        if (mediaSource?.readyState === 'open') {
+            try { mediaSource.endOfStream(); } catch (_) {}
+        }
+        mediaSource = null;
+        statusEl.textContent = '';
+    }
+
+    stopBtn.addEventListener('click', stop);
+
+    generateBtn.querySelector('button').addEventListener('click', () => {
+        const text = textArea.value.trim();
+        if (!text) return;
+        stop();
+
+        const voice = selectEl.value;
+        const emotion = emotionEl.value;
+        abortController = new AbortController();
+        const startTime = performance.now();
+
+        const newAudio = document.createElement('audio');
+        newAudio.id = 'mm-audio';
+        newAudio.controls = true;
+        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
+        audio.replaceWith(newAudio);
+        audio = newAudio;
+
+        mediaSource = new MediaSource();
+        audio.src = URL.createObjectURL(mediaSource);
+
+        let firstChunk = false;
+
+        mediaSource.addEventListener('sourceopen', async () => {
+            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            statusEl.textContent = 'Buffering...';
+
+            const extraBody = { language: 'en' };
+            if (emotion) extraBody.emotion = emotion;
+
+            try {
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'minimax',
+                        input: text,
+                        voice: voice,
+                        response_format: 'mp3',
+                        speed: parseFloat(speedEl.value),
+                        extra_body: extraBody,
+                    }),
+                    signal: abortController.signal,
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const reader = response.body.getReader();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!firstChunk && value?.length) {
+                        firstChunk = true;
+                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
+                    }
+                    await new Promise((res, rej) => {
+                        sourceBuffer.appendBuffer(value);
+                        sourceBuffer.onupdateend = res;
+                        sourceBuffer.onerror = rej;
+                    });
+                    if (audio.paused && sourceBuffer.buffered.length > 0) {
+                        audio.play().catch(() => {});
+                    }
+                }
+                if (mediaSource.readyState === 'open') {
+                    mediaSource.endOfStream();
+                }
+                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    statusEl.textContent = 'Stopped.';
+                } else {
+                    statusEl.textContent = `Error: ${err.message}`;
+                }
+            }
+        }, { once: true });
+    });
+
+    element.show = () => loadVoices();
+    element.hide = () => stop();
+}
+</script>

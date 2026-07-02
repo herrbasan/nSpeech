@@ -20,6 +20,7 @@ Never run long-lived commands without a timeout. Always set explicit timeouts on
 - **Vanilla Python:** Code must stay as close to the bare platform as possible for easy optimization and debugging. No type annotations at runtime. Standard library first; dependencies only when truly necessary.
 - **Zero Dependencies:** If we can build it ourselves using raw standard libraries, we build it. Avoid external third-party packages. Evaluate per-case if a dependency is truly necessary.
 - **Fail Fast, Always:** No defensive coding. No mock data. No fallback defaults. No silencing `try/catch`. No optional chaining (`?.`) for required values. Configuration must be explicit - missing required config must throw immediately at startup. When something breaks, let it crash and fix the root cause.
+- **.env is NEVER committed:** The `.env` file contains API keys (MiniMax, nVoice, etc) and is in `.gitignore`. Before EVERY push, verify: `git status` must NOT show `.env` as staged or tracked. If you're adding a new secret to `.env`, confirm `.gitignore` still covers it.
 
 ## Project-Specific Conventions
 

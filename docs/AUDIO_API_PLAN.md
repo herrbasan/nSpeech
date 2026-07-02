@@ -40,11 +40,22 @@ Clients always speak one API. The backend translates that API into engine-specif
   "speed": 1.0,
   "instructions": "Speak clearly and warmly.",
   "extra_body": {
-    "offline": false,
-    "exaggeration": 0.5,
-    "steps": 4,
+    "pitch": 2,
+    "emotion": "happy",
+    "expressiveness": 0.7,
+    "inference_steps": 4,
     "guidance_scale": 1.2,
-    "blend": ["af_heart", "af_bella:0.7"]
+    "seed": 42,
+    "offline": false,
+    "model": "speech-2.8-turbo",
+    "blend": [{"voice_id": "af_heart", "weight": 30}, {"voice_id": "af_bella", "weight": 70}],
+    "pronunciation": {"tone": ["omg/oh my god"]},
+    "ssml": false,
+    "language": "en",
+    "sample_rate": 24000,
+    "channel": 1,
+    "bitrate": 128000,
+    "sound_effects": null
   }
 }
 ```
@@ -62,16 +73,110 @@ Clients always speak one API. The backend translates that API into engine-specif
 
 ### nSpeech extensions in `extra_body`
 
-| Field | Type | Applies to | Description |
-|-------|------|------------|-------------|
-| `offline` | boolean | local engines | `true` = buffer and validate full audio before responding; `false` = stream chunks as generated. |
-| `exaggeration` | float | some engines | Chatterbox-style expressiveness. |
-| `steps` | int | AR engines | Diffusion/flow NFE steps, e.g. dots.tts. |
-| `guidance_scale` | float | some engines | Classifier-free guidance. |
-| `blend` | array of strings | Kokoro | Voice blending recipe, e.g. `["af_heart", "af_bella:0.7"]`. |
-| `language` | string | multilingual engines | ISO-639-1 hint, e.g. `de`, `zh`. |
-| `text_frontend` | boolean | CosyVoice | Enable/disable internal text normalization. Default `false`. |
-| `emotion_tags` | boolean | CosyVoice | Allow inline tags like `<|sad|>`, `[breath]`. |
+All fields are **optional**. Engines ignore unsupported fields silently. This is
+a "if you support it, use it; if not, pass" contract. Providers that support a
+given feature read it from `extra_body`; providers that don't, don't.
+
+Fields are organized by category so future providers (ElevenLabs, Azure, Google,
+PlayHT, Cartesia) can find natural homes for their features.
+
+```json
+{
+  "extra_body": {
+    "pitch": 0,
+    "emotion": "calm",
+    "expressiveness": 0.5,
+    "stability": 0.5,
+    "inference_steps": 4,
+    "guidance_scale": 1.2,
+    "seed": 42,
+    "offline": false,
+    "model": "speech-2.8-turbo",
+    "blend": [{"voice_id": "af_heart", "weight": 30}, {"voice_id": "af_bella", "weight": 70}],
+    "pronunciation": {"tone": ["omg/oh my god"]},
+    "ssml": false,
+    "language": "en",
+    "sample_rate": 24000,
+    "channel": 1,
+    "bitrate": 128000,
+    "sound_effects": "spacious_echo"
+  }
+}
+```
+
+#### Voice Character
+
+| Field | Type | Range | Default | Description |
+|-------|------|-------|---------|-------------|
+| `pitch` | number | -12..12 | 0 | Semitone pitch shift. -12 = deeper, +12 = brighter. |
+| `emotion` | string | enum | — | `happy`, `sad`, `angry`, `fearful`, `disgusted`, `surprised`, `calm`, `whisper`, `fluent`. |
+| `expressiveness` | number | 0..1 | 0.5 | Delivery intensity. 0 = flat/monotone, 1 = highly dramatic/stylized. |
+| `stability` | number | 0..1 | 0.5 | Voice consistency. 0 = variable/prosodic, 1 = steady/monotone. Inverse of variation. |
+
+#### Quality / Generation Control
+
+| Field | Type | Range | Default | Description |
+|-------|------|-------|---------|-------------|
+| `inference_steps` | int | 1..32 | 4 | Diffusion/flow NFE. More steps = higher quality, slower generation. |
+| `guidance_scale` | number | 0..3 | 1.2 | Voice reference adherence. Higher = stick closer to the voice clone. |
+| `seed` | int | any | — | Random seed. Same seed + same input = reproducible output. |
+| `offline` | boolean | — | false | `true` = render full audio before first byte. `false` = stream progressively. |
+
+#### Model Selection
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | string | Engine sub-model variant. e.g. `speech-2.8-turbo` (MiniMax), `turbo` (Chatterbox), `mf` (dots). Overrides the top-level `model` field for sub-model selection. |
+
+#### Voice Blending
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `blend` | array | Up to 4 `{voice_id, weight}` pairs. Weight: 1..100. Higher weight = more of that voice's character. When present, the top-level `voice` field is ignored. |
+
+#### Text Processing
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pronunciation` | object | `{tone: ["original/replacement"]}`. Replacement can be IPA, pinyin, jyutping, kana, or plain text. |
+| `ssml` | boolean | Interpret `input` as SSML markup. Providers that don't support SSML strip tags and read the text. |
+| `language` | string | ISO-639-1 language hint. `auto` for automatic detection. |
+
+#### Audio Output
+
+| Field | Type | Range | Default | Description |
+|-------|------|-------|---------|-------------|
+| `sample_rate` | int | 8000..44100 | engine-default | Audio sample rate in Hz. |
+| `channel` | int | 1, 2 | 1 | Mono or stereo output. |
+| `bitrate` | int | 32000..256000 | — | Encoded bitrate. Only used with `mp3` format. |
+
+#### Effects
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `sound_effects` | string | `spacious_echo`, `auditorium_echo`, `lofi_telephone`, `robotic`. One at a time. |
+
+### Engine support matrix
+
+| Field | Kokoro | CosyVoice | Chatterbox | dots | MiniMax | OpenAI | ElevenLabs |
+|-------|--------|-----------|------------|------|---------|--------|------------|
+| `pitch` | — | — | — | — | ✅ `voice_setting.pitch` | — | — |
+| `emotion` | — | inline `[breath]` | — | — | ✅ `voice_setting.emotion` | — | — |
+| `expressiveness` | — | — | ✅ `exaggeration` | — | emotion map | — | `style_exaggeration` |
+| `stability` | — | — | — | — | — | — | ✅ `stability` |
+| `inference_steps` | — | — | — | ✅ `steps` | — | — | — |
+| `guidance_scale` | — | — | — | ✅ `guidance_scale` | — | — | `similarity_boost` |
+| `seed` | — | — | — | ✅ `seed` | — | — | `seed` |
+| `offline` | — | — | ✅ (via old `extra_body`) | ✅ (via old `extra_body`) | — | — | — |
+| `model` | — | — | ✅ `model` | — | ✅ maps to request `model` | `tts-1`/`tts-1-hd` | model slug |
+| `blend` | ✅ (via mix endpoint) | — | — | — | ✅ `timbre_weights` | — | — |
+| `pronunciation` | — | — | — | — | ✅ `pronunciation_dict` | — | — |
+| `ssml` | — | — | — | — | — | — | Azure/Google |
+| `language` | — | ✅ `language` | ✅ `language` | ✅ `language` | ✅ `language_boost` | — | `language_code` |
+| `sample_rate` | — (fixed 24k) | — (fixed 24k) | — (fixed 24k) | — (fixed 24k) | ✅ `audio_setting.sample_rate` | — (fixed 24k) | `output_format.sample_rate` |
+| `channel` | — (fixed mono) | — (fixed mono) | — (fixed mono) | — (fixed mono) | ✅ `audio_setting.channel` | — | — |
+| `bitrate` | — | — | — | — | ✅ `audio_setting.bitrate` | — | — |
+| `sound_effects` | — | — | — | — | ✅ `voice_modify.sound_effects` | — | — |
 
 ### Response
 
@@ -329,30 +434,30 @@ Remove a persisted cloned or blended voice.
 
 ## 8. Adapter contract for cloud providers
 
-Each cloud TTS/STT provider is implemented as an adapter in `src/nspeech/engines/<provider>.py`, just like a local engine.
+Cloud providers run **directly in Node** as fetch-based modules under `server/cloud/`. No Python venv, no child process, no GPU.
 
-The adapter must implement the same duck-typed interface:
+Each cloud adapter implements this contract (same duck-typed surface as `WorkerProcess`, but without the HTTP relay — the adapter IS the implementation):
 
-```python
-class CloudProviderAdapter:
-    def generate(self, text: str, **kwargs):
-        """Yield (pcm_bytes_or_tensor, is_final) tuples."""
-
-    def transcribe(self, audio_bytes: bytes, **kwargs) -> dict:
-        """Return OpenAI-shaped verbose_json result."""
-
-    def clone(self, audio_path: str, voice_name: str, **kwargs) -> dict:
-        """Persist or return a voice ID."""
-
-    def list_voices(self) -> list:
-        """Return voice catalog."""
+```js
+class CloudAdapter {
+  async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body }) → Readable
+  async listVoices() → [{ voice_id, name, category, engine, ... }]
+  async cloneVoice({ audio, voice_name, ... }) → { voice_id, ... }
+  async deleteVoice(voice_id) → { success }
+  async health() → { status: 'ready' }
+}
 ```
 
 Cloud adapters are responsible for:
-- Mapping `model` and `voice` to provider-native IDs.
-- Converting output audio to the nSpeech PCM contract.
-- Translating provider-native options from `extra_body`.
-- Handling provider authentication via environment variables (e.g. `OPENAI_API_KEY`, `ELEVENLABS_API_KEY`).
+- Mapping `extra_body` fields to provider-native request parameters.
+- Requesting raw PCM from the provider (or decoding hex/mpeg to PCM).
+- Returning a Node `Readable` stream of `s16le 24kHz mono` PCM bytes.
+- Node's existing `pipePcmToClient` handles the PCM→MP3/Opus/AAC transcode.
+- Reading API keys from `.env` at startup; failing fast if missing.
+
+The EngineManager checks the cloud registry first. If `model` matches a cloud
+prefix (e.g. `minimax_*` → MiniMax adapter), it routes there. Otherwise it
+falls through to a Python worker.
 
 ## 9. Gateway integration
 
@@ -403,9 +508,9 @@ Common error types:
 HTTP status codes: 400 (invalid request), 404 (voice/model not found), 409 (engine
 switch conflict), 429 (rate limit), 500 (engine error), 503 (worker unavailable).
 
-## 11. Open questions / next steps
+## 11. Revision history
 
-1. Research cloud TTS provider option sets (OpenAI, ElevenLabs, Azure, Google, Amazon, PlayHT, Cartesia) to confirm `extra_body` can express their key parameters.
-2. Decide whether STT should be a separate nVoice service or merged into nSpeech.
-3. ~~Define error code mapping to OpenAI-compatible `error` objects.~~ → Done, see §10.
-4. ~~Decide `pcm` default: OpenAI 16-bit LE or nSpeech native float32.~~ → Decided: `pcm` is OpenAI 16-bit LE; `pcm_f32` is the native opt-in.
+| Date | Change |
+|------|--------|
+| 2026-06-25 | Initial draft. |
+| 2026-07-02 | Finalized `extra_body` schema. Renamed `exaggeration`→`expressiveness`, `steps`→`inference_steps`. Added `pitch`, `emotion`, `stability`, `pronunciation`, `ssml`, `sample_rate`, `channel`, `bitrate`, `sound_effects`. Cloud adapters moved from Python to Node. |
