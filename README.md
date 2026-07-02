@@ -1,209 +1,149 @@
-# nSpeech - Text-to-Speech Service
+# nSpeech — Pluggable Text-to-Speech Service V3
 
-Pluggable text-to-speech with automatic sentence-level chunking, streaming audio output,
-and per-engine virtual environment isolation. Swap TTS backends via adapters without
-changing the API.
+Multi-engine TTS with a unified OpenAI-compatible API. Local engines (Kokoro, CosyVoice, Chatterbox, dots.tts) run in per-engine Python venvs managed by a Node.js proxy. Cloud providers (MiniMax, ElevenLabs) run as native Node adapters — no Python, no venv, no GPU.
 
 ## Architecture
 
 ```
-[Text Input] --> [Adapter Layer] --> [TTS Engine] --> [Voice Output]
-                   (chunking +        (Kokoro,         (PCM 24kHz)
+Client (dashboard / curl / Gateway)
+  │  POST /v1/audio/speech  { model: "minimax", input: "...", voice: "..." }
+  ▼
+Node.js (Fastify) — routing, engine resolution, ffmpeg transcode
+  ├─ Cloud adapter (fetch → raw PCM → pipePcmToClient)
+  │    minimax, elevenlabs
+  └─ Python worker (child_process → HTTP relay → PCM)
+       kokoro, cosyvoice, chatterbox, dots
+```
 
-                    streaming)         CosyVoice,       mono float32)
-The adapter layer handles sentence-level chunking, voice cache management, and
-PCM streaming. The underlying TTS engine is pluggable — the API and streaming
-behavior stay the same regardless of backend.
-
-| Component | Technology | Role |
-|-----------|-----------|------|
-| **Adapter** | Duck-typed Python | Chunking, streaming, voice cache routing |
-| **TTS Engine** | Kokoro-82M (ONNX) | Default. Ultra-fast CPU rendering, ~6MB RAM. 54 built-in voices. Consistent pacing. |
-
-| **TTS Engine** | Chatterbox (GPU) | Zero-shot cloning. 3 models: Turbo (350M, paralinguistic), English (500M), Multilingual (500M, 23 languages). ~10 GB VRAM total. |
-
-| **TTS Engine** | CosyVoice3-0.5B (GPU) | GPU required (~3.5 GB VRAM). Multilingual (9 languages), zero-shot voice cloning. Known prosody jitter on short phrases. 1.5B model unreleased. |
-| **Server** | FastAPI + uvicorn | HTTP / WebSocket API + Dashboard UI |
-| **Dashboard** | NUI (Web Components) | Browser UI — engine-centric navigation |
+Node owns all codec output. Every engine emits raw PCM (s16le, 24 kHz, mono). Node's `pipePcmToClient` transcodes PCM→MP3/Opus/AAC via bundled ffmpeg (`lib/nvideo`). One shared streaming path for all engines and providers.
 
 ## Quick Start
 
 ### 1. Configure
 
-Copy `.env.example` to `.env` and set your engine:
+Set `NSPEECH_ENGINE=kokoro` in `.env` and add cloud API keys as needed.
 
-```bash
-NSPEECH_ENGINE=kokoro
-NSPEECH_VOICE_DIR=venv/kokoro/voices
-NSPEECH_MODEL_DIR=venv/kokoro/models
-```
-
-### 2. Install
-
-Per-engine installation:
+### 2. Install (local engines only)
 
 ```bash
 python install.py install --engine kokoro --models
 ```
 
-This creates `venv/kokoro/env/`, installs dependencies, and downloads model weights.
+Creates `venv/kokoro/env/`, installs dependencies, downloads model weights. Cloud providers don't need installation.
 
 ### 3. Run
 
 ```bash
-python run.py
+node server/index.js
 ```
 
-All scripts (`run.py`, `benchmark.py`, `install.py`) auto-detect and use the correct
-venv — no manual activation needed. The dashboard is at `http://127.0.0.1:8000/`.
+Dashboard at `http://127.0.0.1:2233/`. Port is configurable in `config.json` (overridden by `NSPEECH_PORT` in `.env`).
 
 ### 4. Stop
 
-Press `Ctrl+C` in the terminal running the server.
+Press `Ctrl+C`. Node kills all Python worker process groups on shutdown.
 
-### Other Commands
+## Engines
+
+| Engine | Type | Hardware | Voices | Cloning |
+|--------|------|----------|--------|---------|
+| **Kokoro** | Local | CPU (~6 MB) | 54 built-in | Stub (fallback) |
+| **CosyVoice** | Local | GPU (~3.5 GB) | Clone-only | Zero-shot |
+| **Chatterbox** | Local | GPU (~10 GB) | Clone-only | Zero-shot |
+| **dots.tts** | Local | GPU | Clone-only | Zero-shot |
+| **MiniMax** | Cloud | — | 332+ system | Instant (API) |
+| **ElevenLabs** | Cloud | — | 10,000+ | Professional |
+
+Cloud adapters are stateless — no process spawn, no GPU exclusion. Local GPU engines are mutually exclusive (one GPU engine resident at a time). Switch engines from the dashboard home page.
+
+## API (OpenAI-compatible)
 
 ```bash
-python install.py verify --engine kokoro     # Check installation health
-python install.py update --engine kokoro     # Update packages
-python install.py models --engine kokoro     # Download model weights only
-python benchmark.py                           # Run TTS benchmarks
-```
-
-## Usage
-
-### HTTP API
-
-```bash
-# Single-shot TTS (streaming)
-curl -X POST http://localhost:8000/tts \
+# Generate speech
+curl -X POST http://127.0.0.1:2233/v1/audio/speech \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "voice_name": "af_heart", "output_format": "mp3"}' \
-  --output response.mp3
-
-# OpenAI compatible endpoint
-curl -X POST http://localhost:8000/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model": "kokoro", "input": "Hello world", "voice": "af_heart", "response_format": "mp3"}' \
-  --output response.mp3
-
-# Clone a voice (Chatterbox engine)
-curl -X POST http://localhost:8000/voices/clone \
-  -F "file=@reference.wav" \
-  -F "name=my_voice" \
-  -F "engine=chatterbox"
-
-# Mix two Kokoro voices
-curl -X POST http://localhost:8000/voices/mix \
-  -H "Content-Type: application/json" \
-  -d '{"name": "blend", "voice_a": "af_heart", "voice_b": "am_michael", "ratio": 0.5}'
+  -d '{"model":"minimax","input":"Hello world.","voice":"English_expressive_narrator","response_format":"mp3"}' \
+  --output out.mp3
 
 # List voices
-curl http://localhost:8000/voices
+curl http://127.0.0.1:2233/v1/voices?engine=elevenlabs
+
+# Clone a voice
+curl -X POST http://127.0.0.1:2233/v1/voices/clone?engine=elevenlabs \
+  -F "name=my_voice" -F "audio=@reference.wav"
+
+# Switch engine (SSE stream)
+curl -N -X POST http://127.0.0.1:2233/v1/admin/engine \
+  -H "Content-Type: application/json" -d '{"engine":"dots"}'
 ```
 
-### WebSocket Streaming
-
-Connect to `ws://localhost:8000/ws/tts` and send:
-
-```json
-{
-  "type": "tts_stream",
-  "text": "Here are today's headlines. First, the weather...",
-  "voice_name": "af_heart",
-  "output_format": "mp3"
-}
-```
-
-Receive encoded audio chunks as binary frames, followed by:
-
-```json
-{"is_final": true}
-```
-
-## Performance
-
-| Metric | Target | Actual (Kokoro CPU) |
-|--------|--------|---------------------|
-| First audio byte | <1000 ms | ~400-700 ms |
-| Full generation (20 words) | <1500 ms | ~1000 ms |
-| Voice cache load | <10 ms | Instant |
-| Model cold start | <5000 ms | <1 s |
+Full spec: [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) (API contract) and [docs/API_REFERENCE.md](docs/API_REFERENCE.md) (reference).
 
 ## Project Structure
 
 ```
 nSpeech/
-├── install.py              # Per-engine installer
-├── run.py                  # Server launcher (auto-detects venv)
-├── benchmark.py            # TTS benchmark (auto-detects venv)
-├── requirements/           # Per-engine dependency lists
-│   ├── core.txt            # FastAPI, soundfile, numpy, etc.
-│   ├── kokoro.txt          # kokoro-onnx
-│   ├── chatterbox.txt      # chatterbox-tts + deps
-│   └── cosyvoice.txt       # CosyVoice deps
-├── docs/
-│   ├── nSpeech_SPEC.md     # Full service specification
-│   ├── API_REFERENCE.md    # API usage examples
-│   ├── cosyvoice_notes.md  # CosyVoice integration notes
-│   └── nSpeech_DEV_PLAN.md # Development roadmap
-├── src/
-│   └── nspeech/
-│       ├── config.py       # Environment config (fail-fast)
-│       ├── tts.py          # Adapter protocol + engine router
-│       ├── server.py       # FastAPI HTTP / WebSocket server
-│       └── engines/
-│           ├── kokoro.py       # Kokoro ONNX adapter (default)
-│           ├── cosyvoice.py    # CosyVoice3 adapter
-│           └── chatterbox.py   # Chatterbox adapter (archived)
+├── server/                 # Node.js API server
+│   ├── index.js            # Fastify bootstrap
+│   ├── config.js           # config.json + .env loader
+│   ├── transcode.js        # ffmpeg PCM→MP3/Opus/AAC relay
+│   ├── logger.js           # nLogger adapter
+│   ├── api/                # Route handlers
+│   │   ├── speech.js       # POST /v1/audio/speech
+│   │   ├── voices.js       # GET|POST|DELETE /v1/voices/*
+│   │   ├── admin.js        # POST /v1/admin/engine
+│   │   └── formats.js
+│   ├── engine/             # Engine worker management
+│   │   ├── manager.js      # getEngine(), switchEngine()
+│   │   ├── worker.js       # WorkerProcess (spawn, relay, health)
+│   │   └── registry.js     # Local engine registry
+│   └── cloud/              # Cloud provider adapters
+│       ├── registry.js     # Cloud engine routing
+│       ├── minimax.js      # MiniMax adapter
+│       └── elevenlabs.js   # ElevenLabs adapter
+├── src/nspeech/            # Python engine layer
+│   ├── config.py
+│   ├── worker_routes.py    # Worker HTTP endpoints
+│   ├── worker_server.py    # uvicorn entry point
+│   └── engines/            # Per-engine adapters
+│       ├── kokoro.py
+│       ├── cosyvoice.py
+│       ├── chatterbox.py
+│       └── dots.py
 ├── web/                    # NUI dashboard
 │   ├── index.html
+│   ├── js/app.js           # Engine-aware navigation
 │   ├── css/main.css
-│   ├── js/app.js
-│   └── pages/
+│   └── pages/              # Per-engine pages
 │       ├── home.html
-│       ├── kokoro-generate.html
-│       └── kokoro-voices.html
+│       ├── kokoro/
+│       ├── cosyvoice/
+│       ├── chatterbox/
+│       ├── dots/
+│       ├── minimax/
+│       └── elevenlabs/
 ├── lib/
-│   └── nui_wc2/            # Git submodule — NUI library
+│   ├── nui_wc2/            # Git submodule — NUI Web Components
+│   ├── nlogger/            # Git submodule — unified logging
+│   └── nvideo/             # Git submodule — bundled ffmpeg
+├── docs/
+│   ├── AUDIO_API_PLAN.md   # Canonical API contract
+│   ├── AUDIO_API_DEV_PLAN.md
+│   ├── API_REFERENCE.md
+│   └── providers/          # Provider-specific docs
+│       ├── minimax.md
+│       └── elevenlabs.md
+├── voices_samples/         # Reference audio for testing
 ├── venv/                   # Per-engine virtual environments
-│   ├── kokoro/
-│   ├── chatterbox/
-│   └── cosyvoice/
-└── voices_samples/         # Reference audio samples
+├── requirements/           # Per-engine dependency lists
+└── install.py              # Per-engine venv installer
 ```
 
-For full API documentation including WebSocket, REST, and OpenAI API compatible
-endpoints, please refer to [docs/API_REFERENCE.md](docs/API_REFERENCE.md).
+## Documentation
 
-## Engine Differences
-
-| Feature | Kokoro | Chatterbox | CosyVoice3-0.5B |
-|---------|--------|------------|------------------|
-| Hardware | CPU | GPU (CUDA, ~10 GB VRAM) | GPU (CUDA, ~3.5 GB) |
-| RAM/VRAM | ~6 MB | ~10 GB (3 models) | ~3.5 GB |
-| Built-in voices | 54 | 0 (clone required) | 0 (clone required) |
-| Voice cloning | Stubbed (fallback) | True zero-shot | True zero-shot |
-| Voice mixing | Yes | No | No |
-| Languages | English (+ partial) | 23 languages | 9 languages |
-| Latency | Very low | Medium (~400ms TTFA) | Medium (~1.5s TTFA) |
-| Prosody | Consistent | Good | Variable (0.5B limitation) |
-| Paralinguistic tags | No | Turbo: [laugh], etc. | Inline emotion tags |
-| Streaming | Yes (internal) | Yes (per-sentence) | Yes (per-sentence) |
-
-**Note on CosyVoice3 Prosody:** The 0.5B model has known pacing jitter — speaking rate varies
-per sentence, with odd pauses on short phrases. The 1.5B model (unreleased) is expected to fix
-this. Kokoro-82M remains the benchmark for consistent pacing.
-
-## Notes
-
-- **Venvs**: All scripts auto-detect and re-launch inside the correct `venv/<engine>/env/`
-  if needed. No manual activation required.
-- **Per-engine isolation**: Each engine has its own venv to prevent dependency conflicts
-  (e.g., CosyVoice needs transformers 4.51.3, others need 5.x).
-- **Model weights**: First run downloads ~2 GB from HuggingFace. Use `--models` to
-  pre-download during install.
-- **Engine selection**: The default engine is Kokoro. Set `NSPEECH_ENGINE` in `.env`
-  to switch. Individual requests can override via the `engine` parameter.
-- **Patches**: The installer patches Chatterbox's watermarking module (`resemble-perth`
-  deadlocks on Windows/Python 3.13) to use a no-op dummy watermarker.
+- [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) — Canonical API surface and `extra_body` schema
+- [docs/AUDIO_API_DEV_PLAN.md](docs/AUDIO_API_DEV_PLAN.md) — Development phases and implementation status
+- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) — Concise endpoint reference with examples
+- [docs/providers/minimax.md](docs/providers/minimax.md) — MiniMax speech API reference
+- [docs/providers/elevenlabs.md](docs/providers/elevenlabs.md) — ElevenLabs speech API reference
+- [Agents.md](Agents.md) — LLM agent guidance for this codebase
