@@ -127,7 +127,7 @@ export function registerVoiceRoutes(app) {
         audio: data.audio,
         voice_name: data.name || data.voice_name,
         prompt_text: data.prompt_text,
-        preview_text: data.preview_text,
+        preview_text: data.test_phrase || data.preview_text,
         model: data.model,
       });
 

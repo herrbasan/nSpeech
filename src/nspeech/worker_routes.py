@@ -260,7 +260,7 @@ def create_app(engine_name: str) -> FastAPI:
 
     @app.post("/v1/voices/clone")
     async def clone_voice(
-        file: UploadFile = File(...),
+        audio: UploadFile = File(...),
         name: str = Form(...),
         model: str = Form(None),
         exaggeration: float = Form(0.5),
@@ -276,8 +276,8 @@ def create_app(engine_name: str) -> FastAPI:
         voice_dir.mkdir(parents=True, exist_ok=True)
         wav_path = voice_dir / f"{name}.wav"
 
-        raw_bytes = await file.read()
-        suffix = Path(file.filename or "").suffix.lower() or ".wav"
+        raw_bytes = await audio.read()
+        suffix = Path(audio.filename or "").suffix.lower() or ".wav"
         wav_bytes = _ensure_wav(raw_bytes, suffix)
         with open(wav_path, "wb") as f:
             f.write(wav_bytes)
@@ -300,9 +300,9 @@ def create_app(engine_name: str) -> FastAPI:
 
     @app.post("/v1/voices/preview")
     async def preview_voice(
-        file: UploadFile = File(...),
+        audio: UploadFile = File(...),
         prompt_text: str = Form(None),
-        test_phrase: str = Form(None),
+        preview_text: str = Form(None),
         model: str = Form(None),
         offline: bool = Form(False),
         output_format: str = Form("pcm"),
@@ -325,8 +325,8 @@ def create_app(engine_name: str) -> FastAPI:
         import tempfile
         tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
         try:
-            raw_bytes = await file.read()
-            suffix = Path(file.filename or "").suffix.lower() or ".wav"
+            raw_bytes = await audio.read()
+            suffix = Path(audio.filename or "").suffix.lower() or ".wav"
             wav_bytes = _ensure_wav(raw_bytes, suffix)
             tmp_wav.write(wav_bytes)
             tmp_wav.close()
@@ -361,7 +361,7 @@ def create_app(engine_name: str) -> FastAPI:
         finally:
             os.unlink(tmp_wav.name)
 
-        phrase = test_phrase or "This is a preview of the cloned voice."
+        phrase = preview_text or "This is a preview of the cloned voice."
         gen_kwargs = {}
         if model:
             gen_kwargs["model"] = model

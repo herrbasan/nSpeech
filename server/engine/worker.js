@@ -550,21 +550,17 @@ export class WorkerProcess {
   }
 
   async cloneVoice({ audio, voice_name, prompt_text, model }) {
-    // Build multipart body — same thing the Node relay does in voices.js
+    // Build multipart body — same pattern as previewVoice
     const boundary = `----nSpeechClone${Date.now()}`;
     const parts = [];
     const add = (name, value, filename) => {
-      parts.push(`--${boundary}`);
+      parts.push(Buffer.from(`--${boundary}\r\n`));
       const cd = filename
-        ? `Content-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: application/octet-stream`
-        : `Content-Disposition: form-data; name="${name}"`;
-      parts.push(cd);
-      parts.push('');
-      if (Buffer.isBuffer(value)) {
-        parts.push(value);
-      } else {
-        parts.push(value);
-      }
+        ? `Content-Disposition: form-data; name="${name}"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`
+        : `Content-Disposition: form-data; name="${name}"\r\n\r\n`;
+      parts.push(Buffer.from(cd));
+      parts.push(Buffer.isBuffer(value) ? value : Buffer.from(String(value)));
+      parts.push(Buffer.from('\r\n'));
     };
 
     add('name', voice_name);
@@ -572,8 +568,8 @@ export class WorkerProcess {
     if (model) add('model', model);
     add('audio', audio, `${voice_name}.wav`);
 
-    parts.push(`--${boundary}--`);
-    const body = parts.map(p => Buffer.isBuffer(p) ? p : Buffer.from(p + '\r\n')).reduce((a, b) => Buffer.concat([a, b]));
+    parts.push(Buffer.from(`--${boundary}--\r\n`));
+    const body = Buffer.concat(parts);
 
     const resp = await this.relay('POST', '/v1/voices/clone', {
       headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },

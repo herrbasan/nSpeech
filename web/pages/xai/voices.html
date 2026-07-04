@@ -150,7 +150,7 @@ function init(element, params, nui) {
         previewStatusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Previewing...';
 
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('audio', file);
         const phrase = testPhraseEl.value || 'This is a preview of the cloned voice.';
         formData.append('test_phrase', phrase);
 
@@ -213,7 +213,7 @@ function init(element, params, nui) {
         saveStatusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Saving...';
 
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('audio', file);
         formData.append('name', name);
         if (descInput.value.trim()) formData.append('description', descInput.value.trim());
 

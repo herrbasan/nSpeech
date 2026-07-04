@@ -180,7 +180,7 @@ function init(element, params, nui) {
         statusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Previewing...';
 
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('audio', file);
         formData.append('model', modelEl.value);
         formData.append('test_phrase', testPhraseEl.value || 'This is a preview of the cloned voice.');
         if (previewBatchEl.checked) formData.append('batch', 'true');
@@ -241,7 +241,7 @@ function init(element, params, nui) {
         statusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Saving...';
 
         const formData = new FormData();
-        formData.append('file', file);
+        formData.append('audio', file);
         formData.append('name', name);
         formData.append('model', modelEl.value);
 
