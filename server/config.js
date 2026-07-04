@@ -91,6 +91,9 @@ export const config = {
   // Secrets from .env only (never committed in config.json)
   openaiApiKey: envFile.OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? null,
   elevenlabsApiKey: envFile.ELEVENLABS_API_KEY ?? process.env.ELEVENLABS_API_KEY ?? null,
+  geminiApiKey: envFile.GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? null,
+  minimaxApiKey: envFile.MINIMAX_API_KEY ?? process.env.MINIMAX_API_KEY ?? null,
+  xaiApiKey: envFile.XAI_API_KEY ?? process.env.XAI_API_KEY ?? null,
 
   // Static dirs
   webDir: resolve(PROJECT_ROOT, 'web'),

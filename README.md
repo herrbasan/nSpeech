@@ -77,7 +77,7 @@ curl -N -X POST http://127.0.0.1:2233/v1/admin/engine \
   -H "Content-Type: application/json" -d '{"engine":"dots"}'
 ```
 
-Full spec: [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) (API contract) and [docs/API_REFERENCE.md](docs/API_REFERENCE.md) (reference).
+Full spec: [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) (API contract) and [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) (reference).
 
 ## Project Structure
 
@@ -129,10 +129,11 @@ nSpeech/
 ├── docs/
 │   ├── AUDIO_API_PLAN.md   # Canonical API contract
 │   ├── AUDIO_API_DEV_PLAN.md
-│   ├── API_REFERENCE.md
 │   └── providers/          # Provider-specific docs
 │       ├── minimax.md
 │       └── elevenlabs.md
+├── documentation/
+│   └── API_REFERENCE.md    # Project API reference
 ├── voices_samples/         # Reference audio for testing
 ├── venv/                   # Per-engine virtual environments
 ├── requirements/           # Per-engine dependency lists
@@ -143,7 +144,7 @@ nSpeech/
 
 - [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) — Canonical API surface and `extra_body` schema
 - [docs/AUDIO_API_DEV_PLAN.md](docs/AUDIO_API_DEV_PLAN.md) — Development phases and implementation status
-- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) — Concise endpoint reference with examples
+- [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) — Concise endpoint reference with examples
 - [docs/providers/minimax.md](docs/providers/minimax.md) — MiniMax speech API reference
 - [docs/providers/elevenlabs.md](docs/providers/elevenlabs.md) — ElevenLabs speech API reference
 - [Agents.md](Agents.md) — LLM agent guidance for this codebase

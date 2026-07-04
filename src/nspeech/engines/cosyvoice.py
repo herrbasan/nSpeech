@@ -156,10 +156,7 @@ class CosyvoiceAdapter:
     def generate(self, text, voice_name=None, instruct_text=None, language=None, speed=None, exaggeration=None, **kwargs):
         _speed = speed if speed is not None else 1.0
         spk_id, prompt_wav = self._resolve_voice(voice_name)
-
-        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-        if not sentences:
-            sentences = [text]
+        _is_batch = kwargs.get("batch") or kwargs.get("offline") or False
 
         if instruct_text:
             _prompt = f"{instruct_text}<|endofprompt|>"
@@ -168,11 +165,42 @@ class CosyvoiceAdapter:
         else:
             _prompt = "You are a helpful assistant.<|endofprompt|>"
 
+        # Batch mode: generate the whole text in one call to avoid
+        # between-sentence vocoder resets and boundary artifacts.
+        if _is_batch:
+            saved_prompt = None
+            saved_prompt_len = None
+            if spk_id:
+                spk = self.model.frontend.spk2info[spk_id]
+                saved_prompt = spk.get("prompt_text")
+                saved_prompt_len = spk.get("prompt_text_len")
+                prompt_token, prompt_token_len = self.model.frontend._extract_text_token(_prompt)
+                spk["prompt_text"] = prompt_token
+                spk["prompt_text_len"] = prompt_token_len
+
+            try:
+                chunk_gen = self.model.inference_instruct2(
+                    tts_text=text, instruct_text=_prompt, prompt_wav=prompt_wav,
+                    zero_shot_spk_id=spk_id, stream=False, speed=_speed,
+                    text_frontend=False,
+                )
+                for chunk in chunk_gen:
+                    pcm = chunk["tts_speech"].squeeze()
+                    if pcm.numel() == 0:
+                        continue
+                    yield pcm.cpu(), False
+            finally:
+                if saved_prompt is not None:
+                    self.model.frontend.spk2info[spk_id]["prompt_text"] = saved_prompt
+                    self.model.frontend.spk2info[spk_id]["prompt_text_len"] = saved_prompt_len
+            return
+
+        # Streaming mode: per-sentence chunking for progressive delivery.
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+        if not sentences:
+            sentences = [text]
+
         for sentence in sentences:
-            # Always override the speaker's prompt_text with the instruct
-            # prompt. Without this, CosyVoice uses the cloned voice's original
-            # transcript (from Whisper) as conditioning — and speaks it as a
-            # prefix before the actual input text.
             saved_prompt = None
             saved_prompt_len = None
             if spk_id:

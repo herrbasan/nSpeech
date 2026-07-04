@@ -23,78 +23,59 @@ document.addEventListener('click', (e) => {
     }
 });
 
+const ENGINES = {
+    kokoro: { label: 'Kokoro', icon: 'headphones' },
+    cosyvoice: { label: 'CosyVoice', icon: 'headphones' },
+    chatterbox: { label: 'Chatterbox', icon: 'headphones' },
+    dots: { label: 'dots.tts', icon: 'headphones' },
+    minimax: { label: 'MiniMax', icon: 'cloud' },
+    elevenlabs: { label: 'ElevenLabs', icon: 'cloud' },
+    xai: { label: 'xAI / Grok', icon: 'cloud' },
+    gemini: { label: 'Gemini', icon: 'cloud' },
+};
+
 function buildNavigation(engine) {
     const nav = [
         { label: 'Home', href: '#page=home', icon: 'home' },
         { label: 'Docs', href: '#page=docs', icon: 'book' }
     ];
 
-    if (engine === 'kokoro') {
+    const info = ENGINES[engine];
+    if (info) {
         nav.push({
-            label: 'Kokoro',
-            icon: 'headphones',
+            label: info.label,
+            icon: info.icon,
             items: [
-                { label: 'Generate', href: '#page=kokoro/generate' },
-                { label: 'Voices', href: '#page=kokoro/voices' }
-            ]
-        });
-    } else if (engine === 'cosyvoice') {
-        nav.push({
-            label: 'CosyVoice',
-            icon: 'headphones',
-            items: [
-                { label: 'Generate', href: '#page=cosyvoice/generate' },
-                { label: 'Voices', href: '#page=cosyvoice/voices' }
-            ]
-        });
-    } else if (engine === 'chatterbox') {
-        nav.push({
-            label: 'Chatterbox',
-            icon: 'headphones',
-            items: [
-                { label: 'Generate', href: '#page=chatterbox/generate' },
-                { label: 'Voices', href: '#page=chatterbox/voices' }
-            ]
-        });
-    } else if (engine === 'dots') {
-        nav.push({
-            label: 'dots.tts',
-            icon: 'headphones',
-            items: [
-                { label: 'Generate', href: '#page=dots/generate' },
-                { label: 'Voices', href: '#page=dots/voices' }
-            ]
-        });
-    } else if (engine === 'minimax') {
-        nav.push({
-            label: 'MiniMax',
-            icon: 'cloud',
-            items: [
-                { label: 'Generate', href: '#page=minimax/generate' },
-                { label: 'Voices', href: '#page=minimax/voices' }
-            ]
-        });
-    } else if (engine === 'elevenlabs') {
-        nav.push({
-            label: 'ElevenLabs',
-            icon: 'cloud',
-            items: [
-                { label: 'Generate', href: '#page=elevenlabs/generate' },
-                { label: 'Voices', href: '#page=elevenlabs/voices' }
-            ]
-        });
-    } else if (engine === 'xai') {
-        nav.push({
-            label: 'xAI / Grok',
-            icon: 'cloud',
-            items: [
-                { label: 'Generate', href: '#page=xai/generate' },
-                { label: 'Voices', href: '#page=xai/voices' }
+                { label: 'Generate', href: `#page=${engine}/generate` },
+                { label: 'Voices', href: `#page=${engine}/voices` }
             ]
         });
     }
 
     return nav;
+}
+
+function syncNavActive() {
+    const sideNav = document.getElementById('main-navigation');
+    if (!sideNav || typeof sideNav.setActive !== 'function') return;
+
+    const hash = location.hash || '#page=home';
+    // Match the page route, e.g. #page=elevenlabs/generate
+    const pageMatch = hash.match(/#page=([^?&]+)/);
+    const page = pageMatch ? pageMatch[1] : 'home';
+
+    // Prefer exact item match, then fall back to the engine group header.
+    const exact = sideNav.querySelector(`a[href="#page=${page}"]`);
+    if (exact) {
+        sideNav.setActive(exact);
+        return;
+    }
+
+    const engine = page.split('/')[0];
+    const groupLink = sideNav.querySelector(`a[href="#page=${engine}/generate"]`);
+    if (groupLink) {
+        sideNav.setActive(groupLink);
+    }
 }
 
 function initNav() {
@@ -104,6 +85,7 @@ function initNav() {
             const engine = d.engine || 'kokoro';
             const nav = buildNavigation(engine);
             renderNav(nav);
+            syncEngineSwitcher(engine);
         })
         .catch(() => {
             const nav = buildNavigation('kokoro');
@@ -114,16 +96,152 @@ function initNav() {
 // Attach initNav globally so that page-switches can trigger dynamic sidebar updates
 window.initNav = initNav;
 
+async function loadEngineList() {
+    try {
+        const res = await fetch('/v1/admin/engines');
+        if (!res.ok) return [];
+        const data = await res.json();
+        return data.engines || [];
+    } catch {
+        return [];
+    }
+}
+
+function getEngineLabel(name) {
+    const info = ENGINES[name];
+    return info ? info.label : name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+async function populateEngineSwitcher() {
+    const engines = await loadEngineList();
+    const switcher = document.getElementById('engine-switcher');
+    if (!switcher) return;
+
+    const items = engines.map(e => ({ label: getEngineLabel(e.name), value: e.name }));
+    switcher.setItems(items);
+
+    // Now that items are set, sync active selection to current engine.
+    initNav();
+}
+
+function syncEngineSwitcher(activeEngine) {
+    const switcher = document.getElementById('engine-switcher');
+    if (!switcher) return;
+
+    // Avoid loops when the change came from the switcher itself.
+    if (typeof switcher.getValue === 'function' && switcher.getValue() === activeEngine) return;
+    if (typeof switcher.setValue === 'function') {
+        switcher.setValue(activeEngine);
+    }
+}
+
+function setBusy(active) {
+    const loader = document.getElementById('engine-busy');
+    if (!loader) return;
+    loader.classList.toggle('active', active);
+}
+
+async function switchEngine(engineName) {
+    if (!engineName) return;
+
+    const switcher = document.getElementById('engine-switcher');
+    if (switcher && typeof switcher.disable === 'function') switcher.disable();
+    setBusy(true);
+
+    try {
+        const res = await fetch('/v1/admin/engine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine: engineName }),
+        });
+
+        if (!res.ok && res.headers.get('content-type')?.includes('application/json')) {
+            const err = await res.json();
+            throw new Error(err.error?.message || `HTTP ${res.status}`);
+        }
+        if (!res.ok) {
+            throw new Error(`Engine switch failed: HTTP ${res.status}`);
+        }
+
+        // SSE stream
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let done = false;
+        let finalResult = null;
+
+        while (!done) {
+            const { value, done: rd } = await reader.read();
+            done = rd;
+            if (value) buffer += decoder.decode(value, { stream: !done });
+
+            const blocks = buffer.split('\n\n');
+            buffer = blocks.pop() || '';
+
+            for (const block of blocks) {
+                const eventMatch = block.match(/^event:\s*(.+)$/m);
+                const dataMatch = block.match(/^data:\s*(.+)$/m);
+                if (!dataMatch) continue;
+
+                const eventType = eventMatch ? eventMatch[1].trim() : 'message';
+                const data = JSON.parse(dataMatch[1].trim());
+
+                if (eventType === 'result') {
+                    finalResult = data;
+                } else if (eventType === 'error') {
+                    throw new Error(data.error?.message || JSON.stringify(data.error));
+                }
+            }
+        }
+
+        if (finalResult && finalResult.engine) {
+            initNav();
+            syncEngineSwitcher(finalResult.engine);
+            // Always return to home after an engine switch; the previous
+            // engine-specific page (e.g. gemini/generate) no longer exists.
+            location.hash = '#page=home';
+        }
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Engine switch failed:', err);
+        alert(`Engine switch failed: ${err.message}`);
+        // Restore current engine selection from server state.
+        initNav();
+    } finally {
+        setBusy(false);
+        if (switcher && typeof switcher.enable === 'function') switcher.enable();
+    }
+}
+
+function initEngineSwitcher() {
+    const switcher = document.getElementById('engine-switcher');
+    if (!switcher) return;
+
+    switcher.addEventListener('nui-change', (e) => {
+        const detail = e.detail || {};
+        const values = detail.values || [];
+        const engineName = values[0];
+        if (engineName) switchEngine(engineName);
+    });
+
+    populateEngineSwitcher();
+}
+
 function renderNav(navData) {
     customElements.whenDefined('nui-link-list').then(() => {
         const sideNav = document.getElementById('main-navigation');
         if (sideNav && typeof sideNav.loadData === 'function') {
             sideNav.loadData(navData);
+            syncNavActive();
         }
     });
 }
 
+// Keep sidebar active state in sync with the router hash.
+window.addEventListener('hashchange', syncNavActive);
+
 initNav();
+initEngineSwitcher();
 
 nui.setupRouter({
     container: 'nui-content nui-main',

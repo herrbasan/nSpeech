@@ -1,8 +1,9 @@
 # Gemini TTS — Speech Provider
 
-**Base URL:** `https://generativelanguage.googleapis.com/v1alpha`  
-**Endpoint:** `POST /models/{model}:interactions.create`  
+**Base URL:** `https://generativelanguage.googleapis.com/v1beta`  
+**Endpoint:** `POST /interactions` (streaming: `POST /interactions?stream=true`)  
 **Auth:** `x-goog-api-key: <API_KEY>` (header, NOT `Authorization: Bearer`)  
+**API Revision:** `2026-05-20`  
 **API Key source:** [Google AI Studio > API Keys](https://aistudio.google.com/apikey)  
 **Playground:** [AI Studio TTS](https://aistudio.google.com/app/apps/bundled/synergy_intro)
 
@@ -30,8 +31,8 @@ Audio output is billed at 25 tokens per second of audio. Text input is billed at
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/models/{model}:interactions.create` | POST | Generate speech (single or multi-speaker) |
-| `/models/{model}:interactions.create?stream=true` | POST | Streaming speech generation |
+| `/v1beta/interactions` | POST | Generate speech (single or multi-speaker) |
+| `/v1beta/interactions` | POST | Streaming speech generation (set `stream: true` in body) |
 
 Unlike other providers, Gemini TTS has:
 - **No separate voices endpoint** — voices are a static list of 30 names
@@ -40,18 +41,21 @@ Unlike other providers, Gemini TTS has:
 
 ---
 
-## 1. Generate Speech — `POST :interactions.create`
+## 1. Generate Speech — `POST /v1beta/interactions`
 
 ### Request (REST)
 
 ```json
-POST /v1alpha/models/gemini-3.1-flash-tts-preview:interactions.create
+POST /v1beta/interactions
 x-goog-api-key: <key>
+Api-Revision: 2026-05-20
 Content-Type: application/json
 
 {
+  "model": "gemini-3.1-flash-tts-preview",
   "input": "Say cheerfully: Have a wonderful day!",
   "response_format": {"type": "audio"},
+  "stream": true,
   "generation_config": {
     "speech_config": [
       {"voice": "Kore"}
@@ -64,8 +68,10 @@ Content-Type: application/json
 
 | Field | Required | Notes |
 |-------|----------|-------|
+| `model` | ✅ | Model name, e.g. `gemini-3.1-flash-tts-preview`. |
 | `input` | ✅ | The prompt. Can include `Say cheerfully:`, director's notes, audio tags like `[whispers]`. |
 | `response_format.type` | ✅ | Must be `"audio"` for TTS. |
+| `stream` |  | Set `true` in the request body to receive SSE audio deltas. Query-param `?stream=true` is **not** supported. |
 | `generation_config.speech_config` | ✅ | Array of voice configs. Single element for single-speaker, two for multi-speaker. |
 | `speech_config[].voice` | ✅ | One of 30 voice names (see below). |
 | `speech_config[].speaker` |  | Speaker name matching the prompt. Only needed for multi-speaker. |
@@ -74,6 +80,7 @@ Content-Type: application/json
 
 ```json
 {
+  "model": "gemini-3.1-flash-tts-preview",
   "input": "Say in a spooky whisper: By the pricking of my thumbs, something wicked this way comes.",
   "response_format": {"type": "audio"},
   "generation_config": {
@@ -86,6 +93,7 @@ Content-Type: application/json
 
 ```json
 {
+  "model": "gemini-3.1-flash-tts-preview",
   "input": "Speaker1: How's it going today?\nSpeaker2: Not too bad, how about you?",
   "response_format": {"type": "audio"},
   "generation_config": {
@@ -97,29 +105,45 @@ Content-Type: application/json
 }
 ```
 
-### Response (non-streaming)
+### Response
+
+**Non-streaming** (`stream` omitted or `stream: false`) returns a single JSON object. The audio is located at `steps[0].content[0].data` with `mime_type: "audio/l16"` (plus a fallback to `output_audio.data`):
 
 ```json
 {
-  "output_audio": {
-    "data": "<base64-encoded PCM audio>"
-  }
+  "steps": [
+    {
+      "content": [
+        {
+          "mime_type": "audio/l16",
+          "data": "<base64-encoded PCM audio>"
+        }
+      ]
+    }
+  ]
 }
 ```
 
-The `output_audio.data` field contains base64-encoded PCM (s16le, 24kHz, mono). Decode and pipe into `pipePcmToClient`.
+**Streaming** (`stream: true` in the request body) returns `text/event-stream` audio deltas:
 
-### Response (streaming — 3.1 Flash TTS only)
+```
+event: step.delta
+data: {"index":0,"delta":{"mime_type":"audio/l16","data":"<base64 PCM chunk>"}}
 
-Streaming returns SSE-style events. Each `step.delta` event with `delta.type === "audio"` contains a base64 PCM chunk:
+event: step.delta
+data: {"index":0,"delta":{"mime_type":"audio/l16","data":"<base64 PCM chunk>"}}
 
-```json
-{"event_type": "step.delta", "delta": {"type": "audio", "data": "<base64 chunk>"}}
-{"event_type": "step.delta", "delta": {"type": "audio", "data": "<base64 chunk>"}}
-{"event_type": "step.finish"}
+event: step.stop
+data: {"index":0,"event_type":"step.stop"}
+
+event: interaction.completed
+data: {"interaction":{...},"event_type":"interaction.completed"}
+
+event: done
+data: [DONE]
 ```
 
-**nSpeech integration:** For non-streaming, decode the full base64 blob → Buffer → `Readable.from([buf])`. For streaming (3.1 only), accumulate chunks and push as they arrive.
+The audio data is base64-encoded PCM (s16le, 24kHz, mono). nSpeech's streaming path decodes each SSE delta and pushes PCM into ffmpeg as it arrives, so the browser receives chunked MP3/Opus/AAC and can start playing before generation finishes. Set `extra_body.batch: true` in the nSpeech request to disable streaming and receive one JSON blob.
 
 ### Error Responses
 

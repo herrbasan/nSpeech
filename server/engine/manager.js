@@ -10,15 +10,17 @@
  *   - Kill all workers on shutdown (process group).
  */
 import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 import { getEntry, listEngines, venvExists, PROJECT_ROOT } from './registry.js';
 import { WorkerProcess, WorkerError } from './worker.js';
-import { resolveCloud, listCloudEngines } from '../cloud/registry.js';
+import { resolveCloud } from '../cloud/registry.js';
 import { logger } from '../logger.js';
 
 const log = logger.child('manager');
 
 const SRC_DIR = resolve(PROJECT_ROOT, 'src');
+const ENGINE_STATE_FILE = resolve(PROJECT_ROOT, '.engine_state.json');
 
 
 export class EngineManager {
@@ -34,29 +36,72 @@ export class EngineManager {
   }
 
   /**
-   * Initialize: set the default engine from config and sweep stale state.
-   * Does NOT spawn any workers — lazy loading only.
+   * Initialize: set the current engine from persisted state or config default,
+   * then sweep stale state. Does NOT spawn any workers — lazy loading only.
    */
   init(defaultEngine) {
-    this.currentEngine = defaultEngine;
+    this.currentEngine = this._loadPersistedEngine(defaultEngine);
     WorkerProcess.sweepStalePortFiles();
-    log.info('engine manager initialized', { defaultEngine });
+    log.info('engine manager initialized', { defaultEngine, currentEngine: this.currentEngine });
+  }
+
+  /**
+   * Load the last-selected engine from disk, falling back to the configured
+   * default if the persisted value is missing or invalid.
+   */
+  _loadPersistedEngine(fallback) {
+    try {
+      if (existsSync(ENGINE_STATE_FILE)) {
+        const raw = readFileSync(ENGINE_STATE_FILE, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed?.engine && this._isValidEngine(parsed.engine)) {
+          return parsed.engine;
+        }
+      }
+    } catch (err) {
+      log.warn('failed to load persisted engine state', { error: err.message });
+    }
+    return fallback;
+  }
+
+  /**
+   * Update the current engine and persist it to disk.
+   */
+  setCurrentEngine(engineName) {
+    this.currentEngine = engineName;
+    this._persistCurrentEngine();
+  }
+
+  /**
+   * Persist the currently selected engine to disk so it survives restarts.
+   */
+  _persistCurrentEngine() {
+    try {
+      writeFileSync(ENGINE_STATE_FILE, JSON.stringify({ engine: this.currentEngine }, null, 2));
+    } catch (err) {
+      log.warn('failed to persist engine state', { error: err.message });
+    }
+  }
+
+  /**
+   * Check whether a string names a known local engine or cloud provider.
+   */
+  _isValidEngine(engineName) {
+    if (getEntry(engineName)) return true;
+    return resolveCloud(engineName) !== null;
   }
 
   /**
    * Resolve an engine from a model string — checks cloud first, then local.
    *
-   * Returns an object implementing:
-   *   generatePcmStream(params) → Readable
-   *   listVoices() → { voices: [...] }
-   *   cloneVoice({audio, voice_name, ...}) → { voice_id, ... }
-   *   previewVoice({audio, voice_name, ...}) → { pcmStream: Readable, extraHeaders: {} }
-   *   deleteVoice(voiceId) → { success }
-   *   mixVoices({name, voice_a, voice_b, ratio}) → { voice_id, ... }
-   *   health() → { status: 'ready'|'warming'|'dead' }
+   * Returns { engine, model } where:
+   *   engine: object implementing generatePcmStream, listVoices, cloneVoice, etc.
+   *   model:  provider sub-model resolved from the model string (cloud only).
+   *
+   * For local engines, model is null.
    *
    * @param {string} model — model selector (e.g. "minimax", "kokoro", "cosyvoice_0.5b")
-   * @returns {Promise<WorkerProcess|CloudAdapter>}
+   * @returns {Promise<{engine: WorkerProcess|CloudAdapter, model: string|null}>}
    */
   async getEngine(model) {
     const engineName = model || this.currentEngine;
@@ -64,15 +109,11 @@ export class EngineManager {
     // ── Cloud providers — check both model prefix AND bare engine name ─────
     const cloud = resolveCloud(engineName);
     if (cloud) {
-      const health = cloud.adapter.health();
-      if (health.status === 'dead') {
-        throw new WorkerError(503, 'cloud_unavailable', health.error || 'Cloud adapter is not available');
-      }
-      return cloud.adapter;
+      return { engine: cloud.adapter, model: cloud.model };
     }
 
     // ── Local engines ─────────────────────────────────────────────────────
-    return this.getWorker(engineName);
+    return { engine: await this.getWorker(engineName), model: null };
   }
 
   /**
@@ -194,7 +235,7 @@ export class EngineManager {
     const worker = await this.getWorker(engineName);
     if (onStatus) onStatus('load_done', engineName);
 
-    this.currentEngine = engineName;
+    this.setCurrentEngine(engineName);
     log.info(`engine switched: ${engineName}`, { engine: engineName });
 
     return { engine: engineName, status: 'switched' };

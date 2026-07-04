@@ -27,6 +27,9 @@ voice_gen/
 # Application Cache
 .cache/
 
+# Runtime engine state
+.engine_state.json
+
 # OS generated files
 .DS_Store
 .DS_Store?

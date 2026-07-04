@@ -51,9 +51,11 @@ export async function relaySpeech(request, reply, body) {
   });
 
   // ── Resolve engine ───────────────────────────────────────────────────────
-  let engine;
+  let engine, subModel;
   try {
-    engine = await manager.getEngine(body.model);
+    const resolved = await manager.getEngine(body.model);
+    engine = resolved.engine;
+    subModel = extraBody.model ?? resolved.model;
   } catch (err) {
     return sendError(reply, err);
   }
@@ -67,7 +69,7 @@ export async function relaySpeech(request, reply, body) {
       speed: body.speed ?? 1.0,
       instruct_text: body.instructions,
       extra_body: extraBody,
-      model: extraBody.model,
+      model: subModel,
     });
   } catch (err) {
     return sendError(reply, err);
@@ -123,12 +125,18 @@ export function registerSpeechRoute(app) {
 
 /**
  * Send a WorkerError or generic error as an OpenAI-compatible error response.
+ * Honors err.status / err.type / err.code when present.
  */
 function sendError(reply, err) {
   if (err.toJSON) {
     return reply.code(err.status || 503).send(err.toJSON());
   }
-  return reply.code(503).send({
-    error: { message: err.message, type: 'engine_error', code: 'unknown' },
+
+  const status = err.status || 503;
+  const type = err.type || 'engine_error';
+  const code = err.code || 'unknown';
+
+  return reply.code(status).send({
+    error: { message: err.message, type, code },
   });
 }

@@ -99,8 +99,26 @@ export function registerAdminRoutes(app) {
         reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
       }
 
+      // If a local engine is currently loaded, unload it before switching
+      // to a cloud engine so we don't waste VRAM / leave workers running.
+      const oldLocal = manager.currentEngine;
+      if (oldLocal) {
+        const oldWorker = manager.workers.get(oldLocal);
+        if (oldWorker) {
+          sendEvent('status', { stage: 'unload_start', engine: oldLocal });
+          try {
+            await manager.unload(oldLocal);
+            sendEvent('status', { stage: 'unload_done', engine: oldLocal });
+          } catch (err) {
+            sendEvent('error', { error: { message: err.message, type: 'engine_error', code: err.code || 'unknown' } });
+            reply.raw.end();
+            return;
+          }
+        }
+      }
+
       sendEvent('status', { stage: 'switch_done', engine: engineName });
-      manager.currentEngine = engineName;
+      manager.setCurrentEngine(engineName);
       sendEvent('result', { engine: engineName, status: 'switched' });
       reply.raw.end();
       return;

@@ -17,6 +17,7 @@
 import { MiniMaxAdapter } from './minimax.js';
 import { ElevenLabsAdapter } from './elevenlabs.js';
 import { XaiAdapter } from './xai.js';
+import { GeminiAdapter } from './gemini.js';
 import { logger } from '../logger.js';
 
 const log = logger.child('cloud');
@@ -36,15 +37,14 @@ function _register(prefix, AdapterClass, models) {
 // ── Register known providers ────────────────────────────────────────────────
 
 _register('minimax', MiniMaxAdapter, [
-  'minimax',
-  'minimax_speech_2_8_hd',
   'minimax_speech_2_8_turbo',
+  'minimax_speech_2_8_hd',
   'minimax_speech_2_6_hd',
   'minimax_speech_2_6_turbo',
 ]);
 
 _register('elevenlabs', ElevenLabsAdapter, [
-  'elevenlabs',
+  'eleven_turbo_v2_5',
   'elevenlabs_turbo_v2',
   'elevenlabs_turbo_v2_5',
   'elevenlabs_multilingual_v2',
@@ -52,10 +52,41 @@ _register('elevenlabs', ElevenLabsAdapter, [
 ]);
 
 _register('xai', XaiAdapter, [
-  'xai',
   'xai_grok_tts_1',
   'xai_grok_tts_1_hd',
 ]);
+
+_register('gemini', GeminiAdapter, [
+  'gemini-3.1-flash-tts-preview',
+  'gemini_3_1_flash_tts_preview',
+  'gemini_3_1_flash_tts',
+]);
+
+/**
+ * Convert a public model slug suffix into the provider's native model name.
+ * Handles version numbers (e.g. 2_8 → 2.8, 3_1 → 3.1) and underscores → hyphens.
+ */
+function normalizeSubModel(prefix, suffix) {
+  // Version numbers use dots: speech_2_8_hd → speech-2.8-hd
+  let normalized = suffix.replace(/(\d)_(\d)/g, '$1.$2');
+
+  // Remaining underscores become hyphens
+  normalized = normalized.replace(/_/g, '-');
+
+  // Provider-specific prefixes that survive normalization
+  if (prefix === 'gemini') {
+    // gemini_3_1_flash_tts_preview → gemini-3.1-flash-tts-preview
+    normalized = `gemini-${normalized}`;
+  } else if (prefix === 'elevenlabs') {
+    // elevenlabs_turbo_v2_5 → eleven-turbo-v2.5
+    normalized = `eleven-${normalized}`;
+  } else if (prefix === 'xai') {
+    // xai_grok_tts_1 → grok-tts-1 (xai models omit the xai- prefix)
+    normalized = normalized.replace(/^grok-tts-/, 'grok-tts-');
+  }
+
+  return normalized;
+}
 
 /**
  * Resolve a model string to a cloud adapter (if it matches).
@@ -72,12 +103,18 @@ export function resolveCloud(model) {
   // Try exact prefix match first, then startsWith
   for (const [prefix, entry] of _adapters) {
     if (model === prefix) {
-      return { adapter: entry.adapter, model: entry.models[0] }; // default model
+      // Bare prefix: use the first real model, never the prefix itself.
+      const defaultSlug = entry.models.find(m => m !== prefix) || entry.models[0];
+      // The default slug may still be in public form (e.g. minimax_speech_2_8_turbo).
+      // Convert it to the provider-native model ID (e.g. speech-2.8-turbo).
+      const defaultModel = defaultSlug.startsWith(prefix + '_')
+        ? normalizeSubModel(prefix, defaultSlug.slice(prefix.length + 1))
+        : defaultSlug;
+      return { adapter: entry.adapter, model: defaultModel };
     }
     if (model.startsWith(prefix + '_')) {
-      // Convert minimax_speech_2_8_hd → speech-2.8-hd
-      const subModel = model.slice(prefix.length + 1);
-      return { adapter: entry.adapter, model: subModel };
+      const suffix = model.slice(prefix.length + 1);
+      return { adapter: entry.adapter, model: normalizeSubModel(prefix, suffix) };
     }
   }
 

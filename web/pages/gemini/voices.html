@@ -1,0 +1,43 @@
+<div class="page-gemini-voices">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Gemini — Voices</h1>
+        <p class="lead">Gemini provides 30 static, named voices. There is no voice cloning or mixing.</p>
+    </header>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Available Voices</h3>
+        <div id="gem-voice-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    const listEl = element.querySelector('#gem-voice-list');
+
+    function loadVoices() {
+        fetch('/v1/voices?engine=gemini')
+            .then(r => r.json())
+            .then(d => {
+                const voices = d.voices || [];
+                if (!voices.length) {
+                    listEl.innerHTML = '<p style="color: var(--color-shade6)">No voices found.</p>';
+                    return;
+                }
+                let html = '<div style="display: grid; gap: var(--nui-space);">';
+                for (const v of voices) {
+                    html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half) 0;border-bottom:1px solid var(--border-shade1-4);" class="lead">' +
+                        '<span><strong>' + v.name + '</strong> <span style="color:var(--color-shade6);font-size:0.85em;">' + (v.description || '') + '</span></span>' +
+                        '<code style="font-size:0.85em;">' + v.voice_id + '</code>' +
+                        '</div>';
+                }
+                html += '</div>';
+                listEl.innerHTML = html;
+            })
+            .catch(err => {
+                listEl.innerHTML = '<p style="color:var(--color-danger)">Failed: ' + err.message + '</p>';
+            });
+    }
+
+    element.show = () => loadVoices();
+}
+</script>

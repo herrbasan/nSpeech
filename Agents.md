@@ -1,10 +1,12 @@
 # Context & References
 
+**Documentation philosophy:** Every document in this repo except `README.md` is written for LLM consumption — optimized for LLM parsing, not human readability. `README.md` is the sole human-facing document.
+
 Before proceeding, review the essential documentation:
-- [README.md](README.md)
+- [README.md](README.md) — Human-facing project overview
 - [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) — Canonical API contract and `extra_body` schema
 - [docs/AUDIO_API_DEV_PLAN.md](docs/AUDIO_API_DEV_PLAN.md) — Implementation phases and status
-- [docs/API_REFERENCE.md](docs/API_REFERENCE.md) — Endpoint reference with examples
+- [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) — Endpoint reference with examples
 
 ## Collaborative Mode
 
@@ -31,11 +33,13 @@ Do not roleplay as a human. Think as an LLM — use your actual analytical capab
 
 ### Cloud Adapters (server/cloud/)
 
-Each adapter runs as a plain JS module implementing the same contract as `WorkerProcess`. No Python, no venv, no child process.
+Each adapter runs as a plain JS module implementing the same contract as `WorkerProcess`. No Python, no venv, no child process. Cloud is stateless — no `getWorker()`, no GPU exclusion, no lazy start.
 
-- `server/cloud/registry.js` — Maps model prefixes (`minimax`, `elevenlabs`) to adapters.
-- `server/cloud/minimax.js` — MiniMax adapter. SSE hex→PCM decode. 3-step clone (upload→clone→activate).
+- `server/cloud/registry.js` — Maps model prefixes to adapters. Prefix match: `minimax` catches `minimax_speech_2_8_hd`, etc.
+- `server/cloud/minimax.js` — MiniMax adapter. SSE hex→PCM decode. 3-step clone (upload→clone→activate). 332+ system voices.
 - `server/cloud/elevenlabs.js` — ElevenLabs adapter. Raw binary PCM. Single-step clone.
+- `server/cloud/gemini.js` — Google Gemini adapter. 80+ languages, auto-detects input language.
+- `server/cloud/xai.js` — xAI adapter.
 
 ### Python Workers (src/nspeech/)
 
@@ -47,11 +51,46 @@ Each adapter runs as a plain JS module implementing the same contract as `Worker
 
 Built with NUI (`lib/nui_wc2/`). Engine-aware navigation in `web/js/app.js`. Per-engine pages at `web/pages/<engine>/generate.html` and `web/pages/<engine>/voices.html`.
 
+## Worker Lifecycle
+
+- **Port discovery:** Workers spawn with `--port 0` (OS-assigned). The bound port is written to `%TEMP%/nspeech-<engine>-<pid>.port` — this temp file is authoritative. Stdout is a fallback (engine libraries spam stdout).
+- **Health states:** `/health` returns `warming` until the adapter's model is loaded, then `ready`. GPU workers aren't marked ready until the model finishes loading.
+- **GPU vs CPU:** Only one GPU engine resident at a time. CPU engines (Kokoro) can coexist. Switching to a GPU engine unloads the current GPU engine first.
+- **Crash detection:** Worker exits unexpectedly → cleared from cache, 503 to client.
+- **Stream stall detection:** Byte-flow watchdog — if no bytes arrive for `STREAM_TIMEOUT` (default 30s), Node aborts upstream, closes client, marks worker unhealthy. Catches GPU deadlocks that don't exit the process.
+- **Request cancellation:** `AbortController` on every upstream fetch. Client disconnect → abort upstream immediately. Worker detects via FastAPI `Request.is_disconnected()`.
+- **Process group kill:** Workers spawned in a process group. On SIGINT/SIGTERM, Node kills the entire group. On startup, Node sweeps for stale `nspeech.worker_server` processes and kills them.
+- **In-flight tracking:** Atomic request counter per worker. Engine switch and unload blocked while counter is non-zero → returns 409.
+
+## Transcoding
+
+**Node owns all transcoding.** The original plan had workers encode mp3/opus via PyAV, but PyAV wheels on Windows lack libmp3lame. Instead:
+
+1. Node requests `output_format: pcm` from the worker → raw s16le 24kHz mono.
+2. `server/transcode.js` spawns ffmpeg (bundled via `lib/nvideo` submodule): PCM stdin → mp3/opus/aac stdout.
+3. One shared transcode code path for every engine.
+
+PCM variants:
+- `pcm` — OpenAI-compatible: 24kHz s16le mono (default interpretation)
+- `pcm_f32` — nSpeech native: 24kHz float32 mono. Internal clients (dashboard, Arena Slides) use this to skip conversion.
+
+## API Conventions
+
+- **Error schema:** All errors use OpenAI shape: `{"error": {"message", "type", "code", "param"}}`. Types: `invalid_request_error`, `engine_error`, `rate_limit_exceeded`, `service_unavailable`.
+- **Streaming honesty:** `X-Stream-Mode: native` (real incremental, local engines) vs `X-Stream-Mode: chunked` (complete file sliced, cloud adapters or `offline: true`).
+- **Engine switch:** `POST /v1/admin/engine` → SSE stream. Stages: `unload_start` → `unload_done` → `load_start` → `load_done`. Mutex-serialized; in-flight requests block switch with 409. Active in-flight requests to old engine are killed on switch — clients must handle mid-stream disconnect.
+- **extra_body schema:** Frozen in `docs/AUDIO_API_PLAN.md` §3. 17 optional fields across 6 categories (Voice Character, Quality, Model Selection, Voice Blending, Text Processing, Audio Output, Effects). Key renames: `exaggeration`→`expressiveness`, `steps`→`inference_steps`.
+- **Worker HTTP contract:** Workers expose engine-native endpoints (not OpenAI-compatible): `GET /health`, `GET /v1/voices`, `POST /v1/audio/speech`, `POST /v1/voices/clone` (multipart), `POST /v1/voices/preview`, `POST /v1/voices/mix`, `DELETE /v1/voices/{voice_id}`.
+
+## Config
+
+- `config.json` — service config: host, port, `default_engine`, `nvoice_url`, `voice_dir`, `model_dir`, `log_level`. Port overridden by `NSPEECH_PORT` in `.env`.
+- `.env` — secrets: `MINIMAX_API_KEY`, `ELEVENLABS_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY`, `NSPEECH_ENGINE` (startup default). `.env` is in `.gitignore` — NEVER committed.
+
 ## Key Conventions
 
-- **PCM contract:** All engines output s16le 24 kHz mono. Node transcodes.
-- **Engine resolution:** `getEngine(model)` resolves cloud first, then local. Bare names like `minimax` work through cloud registry.
-- **Cloud is stateless:** No `getWorker()`, no GPU exclusion, no lazy start. Just a JS module with a health check.
+- **PCM contract:** All engines output s16le 24 kHz mono. Node transcodes to final format.
+- **Engine resolution:** `getEngine(model)` resolves cloud first, then local. Bare names like `minimax` work through cloud registry prefix match.
 - **NUI conventions:** Use `data-action` for declarative wiring. Use `nui-button.setLoading()`. Wait for `customElements.whenDefined('nui-button')` before binding. Never use `<nui-button>` without an inner `<button>`. Replace `nui-click` with native `click` on the inner element.
 
 ## Session Management

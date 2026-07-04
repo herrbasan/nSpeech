@@ -171,8 +171,21 @@ export class MiniMaxAdapter {
     // ── Batch: non-streaming, single hex blob → Buffer ───────────────────
     if (isBatch) {
       const data = await resp.json();
+      log.info('MiniMax batch response', {
+        status: data?.data?.status,
+        baseStatus: data?.base_resp?.status_code,
+        baseMsg: data?.base_resp?.status_msg,
+        traceId: data?.trace_id,
+        hasAudio: !!data?.data?.audio,
+        audioLen: data?.data?.audio?.length,
+      });
       const audio = data?.data?.audio;
-      if (!audio) throw new Error('MiniMax batch: no audio in response');
+      if (!audio) {
+        throw new Error(
+          `MiniMax batch: no audio in response (status=${data?.data?.status}, ` +
+          `base_status=${data?.base_resp?.status_code}, msg=${data?.base_resp?.status_msg})`
+        );
+      }
       const pcmBuf = Buffer.from(audio, 'hex');
       return Readable.from([pcmBuf]);
     }
@@ -181,6 +194,9 @@ export class MiniMaxAdapter {
     const decoder = new TextDecoder();
     const reader = resp.body.getReader();
     let buffer = '';
+    let totalBytes = 0;
+    let lineCount = 0;
+    let emptyAudioCount = 0;
 
     return new Readable({
       async read() {
@@ -188,6 +204,14 @@ export class MiniMaxAdapter {
           while (true) {
             const { done, value } = await reader.read();
             if (done) {
+              if (totalBytes === 0) {
+                log.error('MiniMax streaming produced zero audio bytes', {
+                  lines: lineCount,
+                  emptyAudioLines: emptyAudioCount,
+                });
+                this.destroy(new Error('MiniMax streaming produced no audio'));
+                return;
+              }
               this.push(null); // EOF
               return;
             }
@@ -197,19 +221,40 @@ export class MiniMaxAdapter {
             buffer = lines.pop() || ''; // keep incomplete line
 
             for (const line of lines) {
+              lineCount += 1;
               const trimmed = line.trim();
-              if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-              try {
-                const chunk = JSON.parse(trimmed.slice(6));
-                const audio = chunk?.data?.audio;
-                if (audio && audio.length > 0) {
-                  // Hex-encoded s16le PCM → raw Buffer
-                  const pcm = Buffer.from(audio, 'hex');
-                  this.push(pcm);
+              if (!trimmed || !trimmed.startsWith('data: ')) {
+                if (trimmed && !trimmed.startsWith(':')) {
+                  log.warn('MiniMax streaming unexpected SSE line', { line: trimmed.slice(0, 200) });
                 }
-              } catch {
-                // Skip unparseable lines
+                continue;
+              }
+
+              let chunk;
+              try {
+                chunk = JSON.parse(trimmed.slice(6));
+              } catch (parseErr) {
+                log.warn('MiniMax streaming unparseable SSE data line', {
+                  line: trimmed.slice(0, 200),
+                  error: parseErr.message,
+                });
+                continue;
+              }
+
+              const audio = chunk?.data?.audio;
+              if (audio && audio.length > 0) {
+                const pcm = Buffer.from(audio, 'hex');
+                totalBytes += pcm.length;
+                this.push(pcm);
+              } else {
+                emptyAudioCount += 1;
+                if (emptyAudioCount <= 5 || chunk?.data?.status === 2) {
+                  log.info('MiniMax streaming empty audio chunk', {
+                    status: chunk?.data?.status,
+                    baseStatus: chunk?.base_resp?.status_code,
+                    traceId: chunk?.trace_id,
+                  });
+                }
               }
             }
           }

@@ -46,12 +46,19 @@ await app.register(fastifyStatic, {
   decorateReply: false, // avoid double-decorate from the first registration
 });
 
-// /docs → docs/ (serves API_REFERENCE.md for the dashboard Docs page's nui-markdown src)
+// /docs → docs/ (working documents: plans, provider research)
 await app.register(fastifyStatic, {
   root: resolve(config.projectRoot, 'docs'),
   prefix: '/docs/',
   decorateReply: false,
-  serveDotFiles: false, // don't expose docs/.git etc. if docs is ever a submodule root
+  serveDotFiles: false,
+});
+
+// /documentation → documentation/ (project documentation: API reference)
+await app.register(fastifyStatic, {
+  root: resolve(config.projectRoot, 'documentation'),
+  prefix: '/documentation/',
+  decorateReply: false,
 });
 
 // NOTE: We intentionally do NOT register @fastify/multipart globally.
