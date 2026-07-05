@@ -55,7 +55,7 @@ Built with NUI (`lib/nui_wc2/`). Engine-aware navigation in `web/js/app.js`. Per
 
 - **Port discovery:** Workers spawn with `--port 0` (OS-assigned). The bound port is written to `%TEMP%/nspeech-<engine>-<pid>.port` — this temp file is authoritative. Stdout is a fallback (engine libraries spam stdout).
 - **Health states:** `/health` returns `warming` until the adapter's model is loaded, then `ready`. GPU workers aren't marked ready until the model finishes loading.
-- **GPU vs CPU:** Only one GPU engine resident at a time. CPU engines (Kokoro) can coexist. Switching to a GPU engine unloads the current GPU engine first.
+- **GPU vs CPU:** All four local engines use GPU (Kokoro via ONNX CUDA). Only one GPU engine resident at a time. Switching to a different engine unloads the current one first.
 - **Crash detection:** Worker exits unexpectedly → cleared from cache, 503 to client.
 - **Stream stall detection:** Byte-flow watchdog — if no bytes arrive for `STREAM_TIMEOUT` (default 30s), Node aborts upstream, closes client, marks worker unhealthy. Catches GPU deadlocks that don't exit the process.
 - **Request cancellation:** `AbortController` on every upstream fetch. Client disconnect → abort upstream immediately. Worker detects via FastAPI `Request.is_disconnected()`.

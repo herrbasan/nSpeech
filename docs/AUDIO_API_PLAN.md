@@ -33,7 +33,7 @@ Clients always speak one API. The backend translates that API into engine-specif
 
 ```json
 {
-  "model": "kokoro",
+  "model": "nspeech",
   "input": "Hello world.",
   "voice": "af_heart",
   "response_format": "pcm",
@@ -64,7 +64,7 @@ Clients always speak one API. The backend translates that API into engine-specif
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | Engine/model selector. Examples: `kokoro`, `cosyvoice_0.5b`, `dots_mf`, `openai_tts_1`, `elevenlabs_turbo_v2_5`. |
+| `model` | string | Engine/provider selector. **Public values:** `"nspeech"` (dashboard-selected local engine), `"minimax"`, `"elevenlabs"`, `"gemini"`, `"xai"`. Cloud sub-models use underscores: `"minimax_speech_2_8_hd"`, `"elevenlabs_turbo_v2_5"`. Local engine names (`kokoro`, `dots`, etc.) are internal — use `"nspeech"` and switch via dashboard/`POST /v1/admin/engine`. |
 | `input` | string | Text to speak. Max length engine-specific. |
 | `voice` | string | Voice ID. May be a built-in voice, a persisted cloned voice, or an engine-specific alias. |
 | `response_format` | string | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`. Default `mp3`. |
@@ -126,7 +126,7 @@ PlayHT, Cartesia) can find natural homes for their features.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | Engine sub-model variant. e.g. `speech-2.8-turbo` (MiniMax), `turbo` (Chatterbox), `mf` (dots). Overrides the top-level `model` field for sub-model selection. |
+| `model` | string | Provider sub-model variant. e.g. `speech-2.8-turbo` (MiniMax), `eleven_turbo_v2_5` (ElevenLabs). For local engines, sub-model selection is engine-specific (e.g. Chatterbox `turbo`/`eng`/`mtl`, dots checkpoint). Overrides the top-level `model` field for sub-model selection. |
 
 #### Voice Blending
 
@@ -158,25 +158,26 @@ PlayHT, Cartesia) can find natural homes for their features.
 
 ### Engine support matrix
 
-| Field | Kokoro | CosyVoice | Chatterbox | dots | MiniMax | OpenAI | ElevenLabs |
-|-------|--------|-----------|------------|------|---------|--------|------------|
-| `pitch` | — | — | — | — | ✅ `voice_setting.pitch` | — | — |
-| `emotion` | — | inline `[breath]` | — | — | ✅ `voice_setting.emotion` | — | — |
-| `expressiveness` | — | — | ✅ `exaggeration` | — | emotion map | — | `style_exaggeration` |
-| `stability` | — | — | — | — | — | — | ✅ `stability` |
-| `inference_steps` | — | — | — | ✅ `steps` | — | — | — |
-| `guidance_scale` | — | — | — | ✅ `guidance_scale` | — | — | `similarity_boost` |
-| `seed` | — | — | — | ✅ `seed` | — | — | `seed` |
-| `batch` | — | — | ✅ | ✅ | — | — | — |
-| `model` | — | — | ✅ `model` | — | ✅ maps to request `model` | `tts-1`/`tts-1-hd` | model slug |
-| `blend` | ✅ (via mix endpoint) | — | — | — | ✅ `timbre_weights` | — | — |
-| `pronunciation` | — | — | — | — | ✅ `pronunciation_dict` | — | — |
-| `ssml` | — | — | — | — | — | — | Azure/Google |
-| `language` | — | ✅ `language` | ✅ `language` | ✅ `language` | ✅ `language_boost` | — | `language_code` |
-| `sample_rate` | — (fixed 24k) | — (fixed 24k) | — (fixed 24k) | — (fixed 24k) | ✅ `audio_setting.sample_rate` | — (fixed 24k) | `output_format.sample_rate` |
-| `channel` | — (fixed mono) | — (fixed mono) | — (fixed mono) | — (fixed mono) | ✅ `audio_setting.channel` | — | — |
-| `bitrate` | — | — | — | — | ✅ `audio_setting.bitrate` | — | — |
-| `sound_effects` | — | — | — | — | ✅ `voice_modify.sound_effects` | — | — |
+The `nspeech` column represents whichever local engine the dashboard has selected (kokoro, cosyvoice, chatterbox, or dots). Cloud providers are listed individually.
+
+| Field | nspeech (local) | MiniMax | ElevenLabs | Gemini | xAI |
+|-------|-----------------|---------|------------|--------|-----|
+| `pitch` | — | ✅ `voice_setting.pitch` | — | — | — |
+| `emotion` | engine-dependent | ✅ `voice_setting.emotion` | — | — | — |
+| `expressiveness` | engine-dependent | emotion map | `style_exaggeration` | — | — |
+| `stability` | — | — | ✅ `stability` | — | — |
+| `inference_steps` | dots only | — | — | — | — |
+| `guidance_scale` | dots only | — | `similarity_boost` | — | — |
+| `seed` | dots only | — | `seed` | — | — |
+| `batch` | engine-dependent | ✅ | ✅ | ✅ | ✅ |
+| `model` | engine-dependent | ✅ maps to request `model` | model slug | — | — |
+| `blend` | kokoro only (mix endpoint) | ✅ `timbre_weights` | — | — | — |
+| `pronunciation` | — | ✅ `pronunciation_dict` | — | — | — |
+| `language` | engine-dependent | ✅ `language_boost` | `language_code` | ✅ (auto) | — |
+| `sample_rate` | — (fixed 24k) | ✅ `audio_setting.sample_rate` | `output_format.sample_rate` | — | — |
+| `channel` | — (fixed mono) | ✅ `audio_setting.channel` | — | — | — |
+| `bitrate` | — | ✅ `audio_setting.bitrate` | — | — | — |
+| `sound_effects` | — | ✅ `voice_modify.sound_effects` | — | — | — |
 
 ### Response
 
@@ -223,7 +224,7 @@ POST /v1/audio/speech/clone
 Content-Type: multipart/form-data
 
 input: Hello world
-model: dots_mf
+model: nspeech
 response_format: pcm
 audio: <binary wav/mp3>
 prompt_text: Hello world        # optional transcript
@@ -342,8 +343,9 @@ language: en
 ### Voice ID namespacing
 
 Voice IDs are **engine-scoped**. A voice `af_heart` exists in Kokoro; it does not exist
-in CosyVoice. Requesting `model: cosyvoice_0.5b, voice: af_heart` returns a `voice_not_found`
-error, not a silent fallback to a default voice. Silent fallback hides bugs.
+in CosyVoice. If the dashboard has CosyVoice selected and you request
+`model: nspeech, voice: af_heart`, you get a `voice_not_found` error — not a silent
+fallback. Silent fallback hides bugs.
 
 A cloned voice `my_voice` persisted in Kokoro's cache is not visible to dots.tts. To use
 the same reference audio across engines, clone it separately in each engine.

@@ -79,7 +79,6 @@ export const config = {
   port: parseInt(pick('NSPEECH_PORT', process.env, envFile) ?? configJson.port ?? 8000, 10),
 
   defaultEngine: configJson.default_engine ?? 'kokoro',
-  currentEngine: configJson.default_engine ?? 'kokoro',
 
   nvoiceUrl: configJson.nvoice_url ?? null,
   voiceDir: configJson.voice_dir ?? 'venv/{engine}/voices',

@@ -47,14 +47,14 @@ Press `Ctrl+C`. Node kills all Python worker process groups on shutdown.
 
 | Engine | Type | Hardware | Voices | Cloning |
 |--------|------|----------|--------|---------|
-| **Kokoro** | Local | CPU (~6 MB) | 54 built-in | Stub (fallback) |
+| **Kokoro** | Local | GPU (ONNX CUDA, ~500 MB) | 54 built-in | Stub (fallback) |
 | **CosyVoice** | Local | GPU (~3.5 GB) | Clone-only | Zero-shot |
 | **Chatterbox** | Local | GPU (~10 GB) | Clone-only | Zero-shot |
-| **dots.tts** | Local | GPU | Clone-only | Zero-shot |
+| **dots.tts** | Local | GPU (~4-8 GB) | Clone-only | Zero-shot |
 | **MiniMax** | Cloud | — | 332+ system | Instant (API) |
 | **ElevenLabs** | Cloud | — | 10,000+ | Professional |
 
-Cloud adapters are stateless — no process spawn, no GPU exclusion. Local GPU engines are mutually exclusive (one GPU engine resident at a time). Switch engines from the dashboard home page.
+Cloud adapters are stateless — no process spawn, no GPU exclusion. Local engines are mutually exclusive (one GPU engine resident at a time). Switch engines from the dashboard home page.
 
 ## API (OpenAI-compatible)
 

@@ -192,13 +192,13 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 try {
   await app.listen({ host: config.host, port: config.port });
   const url = `http://${config.host}:${config.port}/`;
-  log.info('nSpeech V3 server started', { url, engine: config.currentEngine });
+  log.info('nSpeech V3 server started', { url, engine: manager.currentEngine });
 
   console.log('=========================================');
   console.log('      Starting nSpeech V3 API Server     ');
   console.log('=========================================');
   console.log(`• Dashboard: ${url}`);
-  console.log(`• Engine:    ${config.currentEngine}`);
+  console.log(`• Engine:    ${manager.currentEngine}`);
   console.log(`• Health:    ${url}health`);
   console.log('• Stop Server: Press Ctrl+C');
   console.log('=========================================\n');

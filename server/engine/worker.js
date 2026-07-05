@@ -261,7 +261,7 @@ export class WorkerProcess {
    * the one Node sees (uvicorn/torch subprocesses), so we can't rely on
    * PID-matching. Instead we scan for ANY nspeech-<engine>-*.port file.
    * This is safe because GPU exclusion ensures only one worker per engine
-   * runs at a time, and CPU engines (kokoro) don't conflict.
+   * runs at a time (all four local engines use GPU).
    *
    * Stale port files from crashed workers are swept at startup (see sweep()).
    * We also validate the port by checking stdout as a cross-reference.
