@@ -646,8 +646,15 @@ export class WorkerProcess {
 
   /**
    * Gracefully stop the worker.
-   * Sends SIGTERM, waits SHUTDOWN_GRACE_MS, then SIGKILL.
-   * Cleans up the port file.
+   *
+   * 1. POST /admin/unload to tell the Python worker to release model weights
+   *    and free VRAM (gc.collect + torch.cuda.empty_cache).
+   * 2. Then SIGTERM and wait SHUTDOWN_GRACE_MS, then SIGKILL.
+   * 3. Clean up the port file.
+   *
+   * Step 1 is critical on Windows where SIGTERM maps to TerminateProcess
+   * (immediate kill) — without the explicit unload, CUDA contexts leak VRAM
+   * across engine switches.
    */
   async stop() {
     if (!this.proc) return;
@@ -655,6 +662,35 @@ export class WorkerProcess {
     this.state = 'stopped';
     log.info(`stopping worker: ${this.engineName}`, { engine: this.engineName });
 
+    // ── Step 1: tell Python to free VRAM ──────────────────────────────────
+    if (this.baseUrl) {
+      try {
+        const resp = await fetch(`${this.baseUrl}/admin/unload`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (resp.ok) {
+          const body = await resp.json();
+          log.info(`worker unloaded: ${this.engineName}`, {
+            engine: this.engineName,
+            ...body,
+          });
+        } else {
+          log.warn(`worker unload returned ${resp.status}: ${this.engineName}`, {
+            engine: this.engineName,
+            status: resp.status,
+          });
+        }
+      } catch (err) {
+        // Non-fatal — the process kill is still the ultimate cleanup.
+        log.warn(`worker unload request failed (non-fatal): ${this.engineName}`, {
+          engine: this.engineName,
+          error: err.message,
+        });
+      }
+    }
+
+    // ── Step 2: kill the process ─────────────────────────────────────────
     // Clean up port file
     if (this.portFile && existsSync(this.portFile)) {
       try { unlinkSync(this.portFile); } catch { /* best-effort */ }

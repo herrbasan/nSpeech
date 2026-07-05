@@ -14,6 +14,7 @@ Endpoints:
     POST /v1/voices/mix       — blend two voices
     DELETE /v1/voices/{id}    — delete a voice
 """
+import gc
 import io
 import os
 import time
@@ -29,7 +30,7 @@ import torch
 
 from nspeech import config
 from nspeech.logger import get as get_logger, info, error
-from nspeech.tts import get_engine
+from nspeech.tts import get_engine, _engine_cache
 from nspeech.audio_formats import (
     normalize_to_wav,
     encode_stream,
@@ -92,6 +93,56 @@ def create_app(engine_name: str) -> FastAPI:
     )
 
     log = get_logger()
+
+    # ── POST /admin/unload ──────────────────────────────────────────────────
+
+    @app.post("/admin/unload")
+    async def unload_model():
+        """Release model weights and free VRAM. Called by Node before SIGKILL.
+
+        On Windows, SIGTERM maps to TerminateProcess (immediate kill) so the
+        Python worker never gets a chance to clean up CUDA contexts. Node sends
+        this HTTP request first, waits for it to complete, then kills the
+        process. Without this step, VRAM accumulates across engine switches.
+        """
+        engine_name_str = engine_name
+        log_info = get_logger()
+
+        # 1. Call adapter-level unload if implemented.
+        adapter = _engine_cache.get(engine_name_str)
+        if adapter is not None and hasattr(adapter, "unload"):
+            try:
+                adapter.unload()
+                log_info.info(
+                    f"adapter unloaded: {engine_name_str}",
+                    extra={"meta": {"engine": engine_name_str}, "category": "worker"},
+                )
+            except Exception as e:
+                log_info.warn(
+                    f"adapter unload error (non-fatal): {e}",
+                    extra={"meta": {"engine": engine_name_str, "error": str(e)}, "category": "worker"},
+                )
+
+        # 2. Drop the cached engine reference.
+        _engine_cache.pop(engine_name_str, None)
+
+        # 3. Force Python GC to collect the adapter and any dangling tensor refs.
+        gc.collect()
+
+        # 4. Tell PyTorch to return cached blocks to the OS.
+        #    This is the critical step — without it, CUDA holds VRAM even after
+        #    all Python references are gone.
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            allocated_mb = torch.cuda.memory_allocated() / (1024 * 1024)
+            reserved_mb = torch.cuda.memory_reserved() / (1024 * 1024)
+            log_info.info(
+                f"CUDA memory after unload: allocated={allocated_mb:.1f}MB reserved={reserved_mb:.1f}MB",
+                extra={"meta": {"engine": engine_name_str, "allocated_mb": allocated_mb, "reserved_mb": reserved_mb},
+                       "category": "worker"},
+            )
+
+        return {"status": "unloaded", "engine": engine_name_str}
 
     # ── GET /health ─────────────────────────────────────────────────────────
 

@@ -6,6 +6,7 @@ Thread-safe: voice-state mutations are lock-protected. ONNX inference
 If empty output reoccurs, fall back to per-thread pipeline instances.
 """
 import re
+import gc
 import time
 import threading
 from pathlib import Path
@@ -194,3 +195,11 @@ class KokoroAdapter:
             "cache_file": str(cache_path),
             "clone_time_ms": clone_time_ms
         }
+
+    def unload(self) -> None:
+        """Release ONNX session and cached tensors to free VRAM."""
+        self.pipeline = None
+        self.active_voices.clear()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()

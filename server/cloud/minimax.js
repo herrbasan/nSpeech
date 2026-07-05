@@ -317,8 +317,9 @@ export class MiniMaxAdapter {
         });
       }
 
-      // Cloned voices
+      // Cloned voices — filter out transient preview voices (pv_ prefix)
       for (const v of data.voice_cloning || []) {
+        if (v.voice_id && v.voice_id.startsWith('pv_')) continue;
         voices.push({
           voice_id: v.voice_id,
           name: v.voice_id,
@@ -357,10 +358,15 @@ export class MiniMaxAdapter {
     cleanName = cleanName.replace(/_+/g, '_');
     // Remove leading underscore or digit
     cleanName = cleanName.replace(/^[_0-9]+/, '');
-    // Ensure minimum length
+    // Ensure minimum length (MiniMax requires 6+ chars)
     if (cleanName.length < 6) cleanName = cleanName + '_voice';
     // Ensure starts with a letter
     if (!/^[a-zA-Z]/.test(cleanName)) cleanName = 'v_' + cleanName;
+    // Re-collapse after prefix/suffix fixes — appending '_voice' or 'v_'
+    // can create double underscores (e.g. "" → "_voice" → "v__voice").
+    cleanName = cleanName.replace(/_+/g, '_');
+    // Trim to MiniMax max length (32 chars for voice_id)
+    if (cleanName.length > 32) cleanName = cleanName.slice(0, 32);
 
     // Step 1: Upload source audio
     const uploadForm = new FormData();
@@ -443,25 +449,42 @@ export class MiniMaxAdapter {
 
   /**
    * Preview a cloned voice — clone + generate preview audio in one shot.
-   * Returns a PCM Readable stream and optional STT transcript metadata.
+   *
+   * Strategy: create with a unique timestamp-based ID first, THEN delete
+   * the previous preview. This avoids MiniMax error 2039 "voice clone voice
+   * id duplicate" which occurs when delete (async on MiniMax's side) hasn't
+   * completed before the next clone with the same ID.
+   *
+   * At most 2 preview voices exist transiently (old being deleted, new
+   * being created). The old one is cleaned up on the next preview cycle.
    *
    * @param {object} params
    * @param {Buffer} params.audio
-   * @param {string} [params.voice_name]  — generated if not provided
+   * @param {string} [params.voice_name]  — ignored (previews use generated name)
    * @param {string} [params.prompt_text]
    * @param {string} [params.preview_text] — text to speak in the preview
    * @returns {Promise<{pcmStream: Readable, extraHeaders: object}>}
    */
   async previewVoice({ audio, voice_name, prompt_text, preview_text }) {
-    const previewName = voice_name || `tmp${Date.now()}`;
+    // Create with a unique ID first — never races with a delete.
+    const newId = `pv_${Date.now()}`;
 
-    // Clone first
-    await this.cloneVoice({ audio, voice_name: previewName, prompt_text });
+    await this.cloneVoice({ audio, voice_name: newId, prompt_text });
+
+    // Now safe to delete the previous preview (async on MiniMax's side,
+    // but we don't need to wait for it).
+    if (this._lastPreviewId && this._lastPreviewId !== newId) {
+      this.deleteVoice(this._lastPreviewId).catch(err =>
+        log.warn('preview cleanup failed', { voice: this._lastPreviewId, error: err.message })
+      );
+    }
+    this._lastPreviewId = newId;
+    this._voicesCache = null;
 
     // Generate preview audio
     const pcmStream = await this.generatePcmStream({
       text: preview_text || 'This is a preview of the cloned voice.',
-      voice_name: previewName,
+      voice_name: newId,
       speed: 1.0,
     });
 

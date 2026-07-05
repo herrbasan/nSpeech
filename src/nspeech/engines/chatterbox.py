@@ -7,6 +7,7 @@ Three-model architecture:
 Voice caches: .turbo.pt (Turbo), .chatterbox.pt (Eng/MTL)
 """
 import re
+import gc
 import time
 from pathlib import Path
 from typing import Tuple, Generator, Dict, Any
@@ -171,6 +172,17 @@ class ChatterboxAdapter:
         """Chatterbox has no native voice catalog — all voices are user-cloned.
         Return [] so the worker falls through to its directory-scan fallback."""
         return []
+
+    def unload(self) -> None:
+        """Release all model references and free VRAM."""
+        self._turbo_model = None
+        self._eng_model = None
+        self._mtl_model = None
+        self._active_model = None
+        self._loaded_voice = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 # Module-level helper kept here so existing imports keep working.

@@ -12,6 +12,7 @@ Adapter conventions:
 - load_voice(): restores spk2info from .pt cache to model memory
 """
 import os
+import gc
 import re
 import sys
 import time
@@ -152,6 +153,16 @@ class CosyvoiceAdapter:
             "prompt_text": prompt_text,
             "clone_time_ms": clone_time_ms,
         }
+
+    def unload(self) -> None:
+        """Release CosyVoice3 model and free VRAM."""
+        self.model = None
+        self._current_voice = None
+        self._current_instruct = None
+        self._prompt_wav_path = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     def generate(self, text, voice_name=None, instruct_text=None, language=None, speed=None, exaggeration=None, **kwargs):
         _speed = speed if speed is not None else 1.0

@@ -216,10 +216,14 @@ export class EngineManager {
 
     const entry = getEntry(engineName);
 
-    // Unload current GPU engine if switching to a different GPU engine
-    if (entry.gpu && this.currentEngine !== engineName) {
+    // ── Unload the current engine (always) ─────────────────────────────
+    // Previous logic only stopped when both old AND new were GPU, which
+    // leaked VRAM on kokoro→dots (CPU→GPU) and dots→kokoro (GPU→CPU)
+    // switches. CPU-labeled engines (kokoro) still use CUDA via ONNX
+    // Runtime and hold VRAM. Always stop the old engine on switch.
+    if (this.currentEngine !== engineName) {
       const oldWorker = this.workers.get(this.currentEngine);
-      if (oldWorker && oldWorker.entry.gpu) {
+      if (oldWorker) {
         if (onStatus) onStatus('unload_start', this.currentEngine);
         await oldWorker.stop();
         this.workers.delete(this.currentEngine);
@@ -227,7 +231,10 @@ export class EngineManager {
       }
     }
 
-    // Also unload any other GPU engines that might be loaded
+    // Also unload any other GPU engines that might be loaded.
+    // GPU exclusion is about COEXISTENCE: only one GPU engine at a time.
+    // _unloadOtherGpuEngines catches stragglers that shouldn't exist but
+    // might due to stale state.
     await this._unloadOtherGpuEngines(engineName);
 
     // Spawn the new engine

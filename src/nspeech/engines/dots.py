@@ -27,6 +27,7 @@ Adapter conventions:
 - clone(): saves reference wav + transcript as JSON sidecar voice cache
 - load_voice(): validates reference exists, loads prompt_audio_path + prompt_text
 """
+import gc
 import json
 import os
 import shutil
@@ -264,6 +265,17 @@ class DotsAdapter:
         """dots.tts has no native voice catalog — all voices are user-cloned.
         Return [] so the worker falls through to its directory-scan fallback."""
         return []
+
+    def unload(self) -> None:
+        """Release dots.tts runtime and resampler to free VRAM."""
+        self._runtime = None
+        self._resampler = None
+        self._current_voice = None
+        self._prompt_audio_path = None
+        self._prompt_text = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 # end of DotsAdapter
