@@ -13,8 +13,10 @@
  * the engine from the query string instead of the multipart body.
  */
 import { manager } from '../engine/manager.js';
+import { WorkerProcess } from '../engine/worker.js';
 import { Readable } from 'node:stream';
-import { resolveEngine, getContentType, normalizeFormat } from './formats.js';
+import { normalizeFormat } from './formats.js';
+import { parseMultipart } from './multipart.js';
 import { pipePcmToClient } from '../transcode.js';
 
 /**
@@ -30,27 +32,46 @@ export function registerSpeechCloneRoute(app) {
       rawBody: false,
     },
   }, async (request, reply) => {
-    const engineName = resolveEngine(request.query.model) ||
-                       request.query.engine ||
-                       manager.currentEngine;
+    const model = request.query.model || request.query.engine || null;
     const outputFormat = normalizeFormat(request.query.response_format);
 
-    let worker;
+    let engine;
     try {
-      worker = await manager.getWorker(engineName);
+      const resolved = await manager.getEngine(model);
+      engine = resolved.engine;
     } catch (err) {
       return sendError(reply, err);
     }
 
     try {
-      // Forward the buffered multipart body (set by Fastify's parser registered
-      // in server/index.js) to the worker's preview endpoint. The worker does
-      // the actual multipart parsing via FastAPI UploadFile/File/Form bindings.
+      // ── Cloud adapter: use previewVoice() ──────────────────────────────
+      if (!(engine instanceof WorkerProcess)) {
+        const contentType = request.headers['content-type'];
+        const body = Buffer.isBuffer(request.body)
+          ? request.body
+          : Buffer.from(request.body || '');
+        const data = parseMultipart(body, contentType);
+
+        const result = await engine.previewVoice({
+          audio: data.audio,
+          voice_name: data.name || data.voice_name,
+          prompt_text: data.prompt_text,
+          preview_text: data.test_phrase || data.preview_text,
+        });
+
+        reply.hijack();
+        const rawResponse = reply.raw;
+        request.raw.on('close', () => { result.pcmStream.destroy(); });
+        pipePcmToClient(result.pcmStream, rawResponse, outputFormat, { streamMode: 'chunked' });
+        return;
+      }
+
+      // ── Local worker: forward multipart to worker's preview endpoint ───
       const contentType = request.headers['content-type'];
       const body = Buffer.isBuffer(request.body)
         ? request.body
         : Buffer.from(request.body || '');
-      const resp = await worker.relay('POST', '/v1/voices/preview', {
+      const resp = await engine.relay('POST', '/v1/voices/preview', {
         headers: { 'content-type': contentType },
         body,
       });

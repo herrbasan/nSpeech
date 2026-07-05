@@ -94,26 +94,43 @@ export class EngineManager {
   /**
    * Resolve an engine from a model string — checks cloud first, then local.
    *
+   * The public API only exposes two categories of model:
+   *   - "nspeech" (or null/empty) → routes to the dashboard-selected local engine
+   *   - cloud prefixes ("minimax", "elevenlabs", "gemini", "xai") → cloud adapter
+   *
+   * Old local engine names (kokoro, dots, etc.) are REJECTED — they are
+   * internal implementation details gated behind the admin endpoint.
+   * Clients use "nspeech" and get whatever engine the dashboard picked.
+   *
    * Returns { engine, model } where:
    *   engine: object implementing generatePcmStream, listVoices, cloneVoice, etc.
    *   model:  provider sub-model resolved from the model string (cloud only).
    *
    * For local engines, model is null.
    *
-   * @param {string} model — model selector (e.g. "minimax", "kokoro", "cosyvoice_0.5b")
+   * @param {string} model — model selector ("nspeech", "minimax", etc.)
    * @returns {Promise<{engine: WorkerProcess|CloudAdapter, model: string|null}>}
    */
   async getEngine(model) {
-    const engineName = model || this.currentEngine;
+    // ── Normalize: null/undefined/empty/"nspeech" → current local engine ──
+    const resolved = (!model || model === 'nspeech') ? this.currentEngine : model;
 
-    // ── Cloud providers — check both model prefix AND bare engine name ─────
-    const cloud = resolveCloud(engineName);
+    // ── Cloud providers — check model prefix ─────────────────────────────
+    const cloud = resolveCloud(resolved);
     if (cloud) {
       return { engine: cloud.adapter, model: cloud.model };
     }
 
-    // ── Local engines ─────────────────────────────────────────────────────
-    return { engine: await this.getWorker(engineName), model: null };
+    // ── Reject old local engine names — these are internal only ──────────
+    if (getEntry(resolved)) {
+      throw new WorkerError(400, 'engine_private',
+        `Engine "${resolved}" is not available via the public API. ` +
+        `Use model "nspeech" (current: ${this.currentEngine}) or a cloud provider.`);
+    }
+
+    // ── Unknown engine ───────────────────────────────────────────────────
+    throw new WorkerError(404, 'engine_not_found',
+      `Unknown model: "${resolved}". Available: nspeech, minimax, elevenlabs, gemini, xai.`);
   }
 
   /**

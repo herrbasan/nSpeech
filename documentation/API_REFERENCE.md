@@ -69,7 +69,7 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `model` | string | current engine | Engine selector: `kokoro`, `cosyvoice`, `chatterbox`, `dots`, `minimax`, `elevenlabs`. Prefix with version for sub-models: `minimax_speech_2_8_hd`, `elevenlabs_turbo_v2_5`. |
+| `model` | string | `"nspeech"` | Engine selector. **Public values:** `"nspeech"` (dashboard-selected local engine), `"minimax"`, `"elevenlabs"`, `"gemini"`, `"xai"`. Cloud sub-models: `"minimax_speech_2_8_hd"`, `"elevenlabs_turbo_v2_5"`. Old local names (`kokoro`, `dots`, etc.) are rejected — use `"nspeech"` and switch via dashboard. |
 | `input` | string | **required** | Text to synthesize. |
 | `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in CosyVoice. |
 | `response_format` | string | `"mp3"` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`, `pcm_f32`. |
@@ -126,28 +126,55 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 
 Raw audio bytes with `Content-Type` per format. Every streaming response carries `X-Stream-Mode: native` (real incremental) or `X-Stream-Mode: chunked` (complete file sliced — batch mode or non-streaming cloud providers).
 
-### Engine Support Matrix
+## Engine Capabilities
 
-| Field | Kokoro | CosyVoice | Chatterbox | dots | MiniMax | ElevenLabs |
-|-------|--------|-----------|------------|------|---------|------------|
-| `pitch` | — | — | — | — | ✅ | — |
-| `emotion` | — | inline tags | — | — | ✅ | — |
-| `expressiveness` | — | — | ✅ | — | emotion map | `style` |
-| `stability` | — | — | — | — | — | ✅ native |
-| `batch` | — | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `inference_steps` | — | — | — | ✅ | — | — |
-| `guidance_scale` | — | — | — | ✅ | — | `similarity_boost` |
-| `seed` | — | — | — | ✅ | — | ✅ |
-| `blend` | ✅ (persist) | — | — | — | ✅ `timbre_weights` | — |
-| `language` | — | ✅ | ✅ | ✅ | ✅ `language_boost` | ✅ |
-| `sample_rate` | — | — | — | — | ✅ | ✅ |
-| `sound_effects` | — | — | — | — | ✅ | — |
+The `model` field selects a provider. Each provider has different strengths, price points, and supported `extra_body` fields.
+
+### Choosing an engine
+
+| Engine (`model`) | Type | Best for | TTFA | Voice cloning | Max text |
+|---|---|---|---|---|---|
+| `"nspeech"` | Local GPU | Privacy, offline, unlimited use | <1s | ✅ (engine-dependent) | Unlimited |
+| `"minimax"` | Cloud | Best quality, sound effects, 332+ voices | ~1s | ✅ ($1.50/voice) | 10K chars |
+| `"elevenlabs"` | Cloud | Voice consistency, 32 languages | ~1s | ✅ (instant) | 5K chars |
+| `"gemini"` | Cloud | 80+ languages, auto-detect | ~1s | — | 5K chars |
+| `"xai"` | Cloud | Grok integration | ~1s | — | 5K chars |
+
+The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). The four local engines (kokoro, cosyvoice, chatterbox, dots) are NOT exposed as model names — clients use `"nspeech"` and get whatever engine the dashboard selected.
+
+### `extra_body` support by provider
+
+| Field | nspeech (local) | MiniMax | ElevenLabs | Gemini | xAI |
+|-------|-----------------|---------|------------|--------|-----|
+| `pitch` | — | ✅ | — | — | — |
+| `emotion` | engine-dependent | ✅ | — | — | — |
+| `expressiveness` | engine-dependent | emotion map | `style` | — | — |
+| `stability` | — | — | ✅ native | — | — |
+| `batch` | engine-dependent | ✅ | ✅ | ✅ | ✅ |
+| `inference_steps` | dots only | — | — | — | — |
+| `guidance_scale` | dots only | — | `similarity_boost` | — | — |
+| `seed` | dots only | — | ✅ | — | — |
+| `blend` | kokoro only | ✅ `timbre_weights` | — | — | — |
+| `language` | engine-dependent | ✅ `language_boost` | ✅ | ✅ (auto) | — |
+| `sample_rate` | — | ✅ | ✅ | — | — |
+| `sound_effects` | — | ✅ | — | — | — |
+
+### Local engine details
+
+When `model: "nspeech"`, the actual engine behind the request is the one selected via the dashboard. Each has unique capabilities:
+
+| Engine | Voices | Strengths | `extra_body` notes |
+|--------|--------|-----------|--------------------|
+| Kokoro | 54 built-in + cloned/blended | Most stable, reliable for long-form narration, ONNX-based (fast startup) | `blend` via voice mixing endpoint; no `batch` support |
+| CosyVoice3 | cloned only | Best zero-shot cloning quality, multi-language, instruct-based control | `batch`, `language`, `instruct_text` supported; 0.5B model |
+| Chatterbox | cloned only | Three models (Turbo 350M / Eng 500M / Multilingual 500M), 23 languages | `expressiveness` via `exaggeration`; model type via `extra_body.model` |
+| dots.tts | cloned only | SOTA expressiveness, 48kHz native, best emotion range (2B AR model) | `batch`, `inference_steps`, `guidance_scale`, `seed`; slowest TTFA |
 
 ---
 
 ## 2. Voice Management — `/v1/voices`
 
-Voice IDs are engine-scoped. Endpoints act on the current engine, or the engine specified by `?engine=`.
+Voice IDs are engine-scoped. Endpoints act on the engine specified by `?engine=` (use `nspeech`, `minimax`, `elevenlabs`, etc.). Omitting `?engine=` uses the current local engine.
 
 ### `GET /v1/voices`
 
@@ -230,7 +257,7 @@ OpenAI-compatible shape:
 
 | HTTP | `type` | When |
 |------|--------|------|
-| 400 | `invalid_request_error` | Missing/invalid input, bad format |
+| 400 | `invalid_request_error` | Missing/invalid input, bad format, old local engine name (use `"nspeech"`) |
 | 404 | `invalid_request_error` | Voice/model/engine not found |
 | 409 | `invalid_request_error` (`engine_busy`) | Engine switch while requests active |
 | 429 | `rate_limit_exceeded` | Cloud provider rate limit |
@@ -242,7 +269,13 @@ OpenAI-compatible shape:
 ## 5. Examples
 
 ```bash
-# MiniMax — generate MP3 (streamed)
+# Local engine (whatever dashboard selected) — generate MP3
+curl -X POST http://127.0.0.1:2233/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"nspeech","input":"Hello.","voice":"af_heart","response_format":"mp3"}' \
+  --output out.mp3
+
+# MiniMax — stream MP3 with specific voice
 curl -X POST http://127.0.0.1:2233/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{"model":"minimax","input":"Hello.","voice":"English_expressive_narrator","response_format":"mp3"}' \

@@ -14,6 +14,7 @@
 import { manager } from '../engine/manager.js';
 import { pipePcmToClient } from '../transcode.js';
 import { logger } from '../logger.js';
+import { parseMultipart } from './multipart.js';
 
 /**
  * Register all voice management routes on a Fastify instance.
@@ -78,7 +79,7 @@ export function registerVoiceRoutes(app) {
 
       // Simple multipart parse — just get name + audio
       const contentType = request.headers['content-type'] || '';
-      const data = _parseMultipart(body, contentType);
+      const data = parseMultipart(body, contentType);
 
       const result = await engine.cloneVoice({
         audio: data.audio,
@@ -114,7 +115,7 @@ export function registerVoiceRoutes(app) {
         : Buffer.from(request.body || '');
 
       const contentType = request.headers['content-type'] || '';
-      const data = _parseMultipart(body, contentType);
+      const data = parseMultipart(body, contentType);
 
       logger.info('preview multipart parsed', {
         hasAudio: !!data.audio,
@@ -201,65 +202,6 @@ export function registerVoiceRoutes(app) {
   };
 
   app.delete('/v1/voices/:voiceId', deleteVoiceHandler);
-}
-
-/**
- * Parse multipart form-data buffer. Extracts text fields and file fields.
- */
-function _parseMultipart(buffer, contentType) {
-  // Extract boundary from the HTTP Content-Type header (NOT from the body).
-  const boundaryMatch = contentType.match(/boundary=(.+?)(?:;|$)/);
-  if (!boundaryMatch) return { audio: buffer };
-
-  const boundary = boundaryMatch[1].trim().replace(/^["']|["']$/g, '');
-  const delim = Buffer.from('--' + boundary);
-  const result = {};
-
-  // Split on each occurrence of the boundary marker
-  let pos = buffer.indexOf(delim);
-  let prevEnd = pos + delim.length;
-
-  while (pos !== -1) {
-    // Find next boundary
-    const nextPos = buffer.indexOf(delim, pos + delim.length);
-    const partEnd = nextPos !== -1 ? nextPos : buffer.length;
-
-    // Skip boundary line itself (--boundary\r\n or --boundary\n)
-    let partStart = pos + delim.length;
-    if (buffer[partStart] === 13) partStart++;  // \r
-    if (buffer[partStart] === 10) partStart++;  // \n
-
-    if (partStart < partEnd && nextPos !== -1) { // skip the final boundary (--boundary--)
-      const part = buffer.slice(partStart, partEnd);
-      const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'));
-      if (headerEnd !== -1) {
-        const header = part.slice(0, headerEnd).toString('utf8');
-        let body = part.slice(headerEnd + 4);
-
-        // Trim trailing \r\n
-        if (body.length >= 2 && body[body.length - 2] === 13 && body[body.length - 1] === 10) {
-          body = body.slice(0, -2);
-        }
-
-        const nameMatch = header.match(/name="([^"]+)"/);
-        const filenameMatch = header.match(/filename="([^"]+)"/);
-
-        if (nameMatch) {
-          const name = nameMatch[1];
-          result[name] = filenameMatch ? Buffer.from(body) : body.toString('utf8');
-        }
-      }
-    }
-
-    pos = nextPos;
-  }
-
-  // Fallback: if no audio key but large buffer, use raw bytes
-  if (!result.audio && buffer.length > 1000) {
-    result.audio = buffer;
-  }
-
-  return result;
 }
 
 function sendError(reply, err) {
