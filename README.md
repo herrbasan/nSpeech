@@ -1,6 +1,6 @@
 # nSpeech — Pluggable Text-to-Speech Service V3
 
-Multi-engine TTS with a unified OpenAI-compatible API. Local engines (Kokoro, CosyVoice, Chatterbox, dots.tts) run in per-engine Python venvs managed by a Node.js proxy. Cloud providers (MiniMax, ElevenLabs) run as native Node adapters — no Python, no venv, no GPU.
+Multi-engine TTS with a unified OpenAI-compatible API. Local engines (Kokoro, CosyVoice, Chatterbox, dots.tts) run in per-engine Python venvs managed by a Node.js proxy. Cloud providers (MiniMax, ElevenLabs, Gemini, xAI) run as native Node adapters — no Python, no venv, no GPU.
 
 ## Architecture
 
@@ -10,30 +10,37 @@ Client (dashboard / curl / Gateway)
   ▼
 Node.js (Fastify) — routing, engine resolution, ffmpeg transcode
   ├─ Cloud adapter (fetch → raw PCM → pipePcmToClient)
-  │    minimax, elevenlabs
+  │    minimax, elevenlabs, gemini, xai
   └─ Python worker (child_process → HTTP relay → PCM)
-       kokoro, cosyvoice, chatterbox, dots
+       kokoro, cosyvoice, chatterbox-{turbo,eng,mtl}, dots
 ```
 
 Node owns all codec output. Every engine emits raw PCM (s16le, 24 kHz, mono). Node's `pipePcmToClient` transcodes PCM→MP3/Opus/AAC via bundled ffmpeg (`lib/nvideo`). One shared streaming path for all engines and providers.
 
 ## Quick Start
 
-### 1. Configure
-
-Set `NSPEECH_ENGINE=kokoro` in `.env` and add cloud API keys as needed.
-
-### 2. Install (local engines only)
+### 1. Install
 
 ```bash
-python install.py install --engine kokoro --models
+python install.py install              # kokoro only (default)
+# or: python install.py install --engine all --models   # everything
 ```
 
-Creates `venv/kokoro/env/`, installs dependencies, downloads model weights. Cloud providers don't need installation.
+Creates `venv/kokoro/env/`, installs dependencies, downloads model weights. Cloud providers need no installation — just API keys in `.env`.
+
+### 2. Configure
+
+Copy `.env.example` to `.env` and add cloud API keys as needed:
+
+```bash
+cp .env.example .env
+# Edit .env — set MINIMAX_API_KEY, ELEVENLABS_API_KEY, etc.
+```
 
 ### 3. Run
 
 ```bash
+npm install
 node server/index.js
 ```
 
@@ -49,12 +56,26 @@ Press `Ctrl+C`. Node kills all Python worker process groups on shutdown.
 |--------|------|----------|--------|---------|
 | **Kokoro** | Local | GPU (ONNX CUDA, ~500 MB) | 54 built-in | Stub (fallback) |
 | **CosyVoice** | Local | GPU (~3.5 GB) | Clone-only | Zero-shot |
-| **Chatterbox** | Local | GPU (~10 GB) | Clone-only | Zero-shot |
-| **dots.tts** | Local | GPU (~4-8 GB) | Clone-only | Zero-shot |
+| **CB Turbo** | Local | GPU (~2 GB, 350M) | Clone-only | Zero-shot |
+| **CB English** | Local | GPU (~2 GB, 500M) | Clone-only | Zero-shot |
+| **CB Multilingual** | Local | GPU (~2 GB, 500M) | Clone-only | Zero-shot |
+| **dots.tts** | Local | GPU (~4-8 GB, 2B) | Clone-only | Zero-shot |
 | **MiniMax** | Cloud | — | 332+ system | Instant (API) |
 | **ElevenLabs** | Cloud | — | 10,000+ | Professional |
+| **Gemini** | Cloud | — | System voices | Instant (API) |
+| **xAI / Grok** | Cloud | — | System voices | Instant (API) |
+
+Chatterbox has three independent engine entries — each loads only one model and has its own voice directory. They share a single venv (`venv/chatterbox/env/`).
 
 Cloud adapters are stateless — no process spawn, no GPU exclusion. Local engines are mutually exclusive (one GPU engine resident at a time). Switch engines from the dashboard home page.
+
+### Adding Engines Later
+
+```bash
+python install.py install --engine chatterbox --models
+python install.py install --engine cosyvoice --models
+python install.py install --engine dots --models
+```
 
 ## API (OpenAI-compatible)
 
@@ -100,15 +121,18 @@ nSpeech/
 │   └── cloud/              # Cloud provider adapters
 │       ├── registry.js     # Cloud engine routing
 │       ├── minimax.js      # MiniMax adapter
-│       └── elevenlabs.js   # ElevenLabs adapter
+│       ├── elevenlabs.js   # ElevenLabs adapter
+│       ├── gemini.js       # Gemini adapter
+│       └── xai.js          # xAI / Grok adapter
 ├── src/nspeech/            # Python engine layer
 │   ├── config.py
 │   ├── worker_routes.py    # Worker HTTP endpoints
 │   ├── worker_server.py    # uvicorn entry point
+│   ├── tts.py              # Engine factory + alias resolution
 │   └── engines/            # Per-engine adapters
 │       ├── kokoro.py
 │       ├── cosyvoice.py
-│       ├── chatterbox.py
+│       ├── chatterbox.py   # Shared by chatterbox-{turbo,eng,mtl}
 │       └── dots.py
 ├── web/                    # NUI dashboard
 │   ├── index.html
@@ -118,10 +142,14 @@ nSpeech/
 │       ├── home.html
 │       ├── kokoro/
 │       ├── cosyvoice/
-│       ├── chatterbox/
+│       ├── chatterbox-turbo/
+│       ├── chatterbox-eng/
+│       ├── chatterbox-mtl/
 │       ├── dots/
 │       ├── minimax/
-│       └── elevenlabs/
+│       ├── elevenlabs/
+│       ├── gemini/
+│       └── xai/
 ├── lib/
 │   ├── nui_wc2/            # Git submodule — NUI Web Components
 │   ├── nlogger/            # Git submodule — unified logging

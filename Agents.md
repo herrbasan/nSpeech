@@ -26,7 +26,7 @@ Do not roleplay as a human. Think as an LLM — use your actual analytical capab
 
 ### Node.js Layer (server/)
 
-- `server/engine/manager.js` — `EngineManager.getEngine(model)` checks cloud registry first, then local workers. Routes `model` strings to adapters.
+- `server/engine/manager.js` — `EngineManager.getEngine(model)` checks cloud registry first, then local workers. Routes `model` strings to adapters. Local engine names (kokoro, chatterbox-turbo, etc.) resolve to workers; `nspeech` routes to the dashboard-selected engine; cloud prefixes route to cloud adapters.
 - `server/engine/worker.js` — `WorkerProcess` wraps a Python child process. Provides `generatePcmStream()`, `listVoices()`, `cloneVoice()`, etc. — same surface as cloud adapters.
 - `server/api/speech.js` / `server/api/voices.js` — handlers call engine methods. No HTTP relay knowledge needed.
 - `server/transcode.js` — `pipePcmToClient(pcmStream, rawResponse, format)` spawns ffmpeg: PCM stdin → MP3/Opus/AAC stdout.
@@ -46,10 +46,20 @@ Each adapter runs as a plain JS module implementing the same contract as `Worker
 - `src/nspeech/worker_server.py` — uvicorn FastAPI worker. Port discovery via temp file.
 - `src/nspeech/worker_routes.py` — Speech endpoint + voice management. Merges `extra_body` into adapter kwargs.
 - `src/nspeech/engines/<name>.py` — Per-engine adapters implementing `generate()`, `list_voices()`, `clone()`, etc.
+- `src/nspeech/tts.py` — Engine factory. `get_engine(name)` resolves `chatterbox-{turbo,eng,mtl}` → `chatterbox.py` adapter with a `model_type` argument. Other engines map directly to their module.
+
+### Chatterbox Architecture
+
+Chatterbox has three model variants, each a separate engine entry in `registry.json`:
+- `chatterbox-turbo` — 350M Turbo model (paralinguistic tags, fastest)
+- `chatterbox-eng` — 500M English model (exaggeration tuning)
+- `chatterbox-mtl` — 500M Multilingual model (23 languages)
+
+All three share one venv (`venv/chatterbox/env/`) but have **separate voice directories** (`venv/chatterbox-{turbo,eng,mtl}/voices/`). Voice caches use a uniform `.pt` extension — no cross-model confusion. The adapter (`src/nspeech/engines/chatterbox.py`) takes a `model_type` at construction and loads only that model. GPU exclusion ensures only one variant is resident at a time.
 
 ### Dashboard (web/)
 
-Built with NUI (`lib/nui_wc2/`). Engine-aware navigation in `web/js/app.js`. Per-engine pages at `web/pages/<engine>/generate.html` and `web/pages/<engine>/voices.html`.
+Built with NUI (`lib/nui_wc2/`). Engine-aware navigation in `web/js/app.js`. Per-engine pages at `web/pages/<engine>/generate.html` and `web/pages/<engine>/voices.html`. Chatterbox has three separate page directories (chatterbox-turbo, chatterbox-eng, chatterbox-mtl).
 
 ## Worker Lifecycle
 
@@ -90,7 +100,7 @@ PCM variants:
 ## Key Conventions
 
 - **PCM contract:** All engines output s16le 24 kHz mono. Node transcodes to final format.
-- **Engine resolution:** `getEngine(model)` resolves cloud first, then local. Bare names like `minimax` work through cloud registry prefix match.
+- **Engine resolution:** `getEngine(model)` resolves cloud first, then local. Bare names like `minimax` work through cloud registry prefix match. Local engine names (kokoro, chatterbox-turbo, etc.) resolve to their workers. `nspeech` routes to the dashboard-selected engine.
 - **NUI conventions:** Use `data-action` for declarative wiring. Use `nui-button.setLoading()`. Wait for `customElements.whenDefined('nui-button')` before binding. Never use `<nui-button>` without an inner `<button>`. Replace `nui-click` with native `click` on the inner element.
 
 ## Session Management
