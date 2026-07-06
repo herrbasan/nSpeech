@@ -9,7 +9,17 @@
     "worker_module": "nspeech.worker_server",
     "gpu": true
   },
-  "chatterbox": {
+  "chatterbox-turbo": {
+    "venv_python": "venv/chatterbox/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
+  },
+  "chatterbox-eng": {
+    "venv_python": "venv/chatterbox/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
+  },
+  "chatterbox-mtl": {
     "venv_python": "venv/chatterbox/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
     "gpu": true

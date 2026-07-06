@@ -188,17 +188,36 @@ def create_app(engine_name: str) -> FastAPI:
         existing = {v.get("voice_id") or v.get("name") for v in voices}
 
         # .wav files (cloned voices)
+        # For Chatterbox variants, a .wav is just raw reference audio — not a
+        # usable voice until the adapter extracts conditionals into a .pt file.
+        # Only list .wav files that have a corresponding .pt cache.
+        is_chatterbox = engine_name.startswith("chatterbox")
         for wav_path in voice_dir.glob("*.wav"):
             base = wav_path.stem
             if base.startswith("__preview__"):
                 continue
-            if base not in existing:
-                voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
-                existing.add(base)
+            if base in existing:
+                continue
+            if is_chatterbox:
+                pt_check = wav_path.with_suffix(".pt")
+                if not pt_check.exists():
+                    continue
+            voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
+            existing.add(base)
 
         # .pt cache files (blended, engine-specific, or preview)
-        for pt_path in voice_dir.glob(f"*.{engine_name}.pt"):
-            base = pt_path.stem.rsplit(".", 1)[0]
+        # Chatterbox variants (chatterbox-turbo/eng/mtl) each have their own
+        # voice directory and use a plain .pt extension. Other engines use
+        # the .{engine_name}.pt pattern (e.g. .kokoro.pt).
+        if engine_name.startswith("chatterbox"):
+            pt_glob = "*.pt"
+            base_slice = lambda p: p.stem
+        else:
+            pt_glob = f"*.{engine_name}.pt"
+            base_slice = lambda p: p.stem.rsplit(".", 1)[0]
+
+        for pt_path in voice_dir.glob(pt_glob):
+            base = base_slice(pt_path)
             if base in existing:
                 continue
             if base.startswith("__preview__"):

@@ -83,25 +83,39 @@ def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
         _engine_last_used[engine_name] = time.time()
         return _engine_cache[engine_name]
 
-    # Lazy dynamic import from src/nspeech/engines/
-    try:
-        module = importlib.import_module(f"nspeech.engines.{engine_name}")
-    except ModuleNotFoundError as e:
-        raise ValueError(f"TTS Engine '{engine_name}' not found. Make sure src/nspeech/engines/{engine_name}.py exists.") from e
-
-    # Find the adapter class (convention: EngineName title cased + Adapter)
-    class_name = engine_name.title() + "Adapter"
-    if hasattr(module, class_name):
-        adapter_class = getattr(module, class_name)
+    # Chatterbox model variants share one adapter module but load different
+    # model classes. Map chatterbox-turbo/eng/mtl → chatterbox adapter with
+    # a model_type argument. Each variant has its own voice directory.
+    CHATTERBOX_MODELS = {
+        "chatterbox-turbo": "turbo",
+        "chatterbox-eng": "eng",
+        "chatterbox-mtl": "mtl",
+    }
+    if engine_name in CHATTERBOX_MODELS:
+        module = importlib.import_module("nspeech.engines.chatterbox")
+        adapter_class = module.ChatterboxAdapter
+        print(f"Loading engine {engine_name} into memory (model={CHATTERBOX_MODELS[engine_name]})...")
+        adapter_instance = adapter_class(model_type=CHATTERBOX_MODELS[engine_name])
     else:
-        # Fallback: scan for any class ending in 'Adapter'
-        adapters = [v for k, v in module.__dict__.items() if isinstance(v, type) and k.endswith("Adapter")]
-        if not adapters:
-            raise TypeError(f"Module {engine_name}.py must contain a class implementing TTSAdapterProtocol.")
-        adapter_class = adapters[0]
+        # Lazy dynamic import from src/nspeech/engines/
+        try:
+            module = importlib.import_module(f"nspeech.engines.{engine_name}")
+        except ModuleNotFoundError as e:
+            raise ValueError(f"TTS Engine '{engine_name}' not found. Make sure src/nspeech/engines/{engine_name}.py exists.") from e
 
-    print(f"Loading engine {engine_name} into memory...")
-    adapter_instance = adapter_class()
+        # Find the adapter class (convention: EngineName title cased + Adapter)
+        class_name = engine_name.title() + "Adapter"
+        if hasattr(module, class_name):
+            adapter_class = getattr(module, class_name)
+        else:
+            # Fallback: scan for any class ending in 'Adapter'
+            adapters = [v for k, v in module.__dict__.items() if isinstance(v, type) and k.endswith("Adapter")]
+            if not adapters:
+                raise TypeError(f"Module {engine_name}.py must contain a class implementing TTSAdapterProtocol.")
+            adapter_class = adapters[0]
+
+        print(f"Loading engine {engine_name} into memory...")
+        adapter_instance = adapter_class()
     
     _engine_cache[engine_name] = adapter_instance
     _engine_last_used[engine_name] = time.time()

@@ -94,13 +94,14 @@ export class EngineManager {
   /**
    * Resolve an engine from a model string — checks cloud first, then local.
    *
-   * The public API only exposes two categories of model:
+   * Accepted values:
    *   - "nspeech" (or null/empty) → routes to the dashboard-selected local engine
    *   - cloud prefixes ("minimax", "elevenlabs", "gemini", "xai") → cloud adapter
+   *   - local engine names ("kokoro", "cosyvoice", "chatterbox-turbo", etc.) →
+   *     resolves to that engine's worker (lazy-started via getWorker)
    *
-   * Old local engine names (kokoro, dots, etc.) are REJECTED — they are
-   * internal implementation details gated behind the admin endpoint.
-   * Clients use "nspeech" and get whatever engine the dashboard picked.
+   * The dashboard's per-engine pages use local engine names directly to
+   * target a specific engine regardless of the current dashboard selection.
    *
    * Returns { engine, model } where:
    *   engine: object implementing generatePcmStream, listVoices, cloneVoice, etc.
@@ -108,7 +109,7 @@ export class EngineManager {
    *
    * For local engines, model is null.
    *
-   * @param {string} model — model selector ("nspeech", "minimax", etc.)
+   * @param {string} model — model selector ("nspeech", "minimax", "kokoro", etc.)
    * @returns {Promise<{engine: WorkerProcess|CloudAdapter, model: string|null}>}
    */
   async getEngine(model) {
@@ -121,11 +122,13 @@ export class EngineManager {
       return { engine: cloud.adapter, model: cloud.model };
     }
 
-    // ── Reject old local engine names — these are internal only ──────────
+    // ── Local engines — resolve to worker (lazy-started) ────────────────
+    // The dashboard's per-engine pages target specific local engines by
+    // name (kokoro, cosyvoice, etc.). getWorker() handles venv checks,
+    // lazy spawning, and GPU exclusion.
     if (getEntry(resolved)) {
-      throw new WorkerError(400, 'engine_private',
-        `Engine "${resolved}" is not available via the public API. ` +
-        `Use model "nspeech" (current: ${this.currentEngine}) or a cloud provider.`);
+      const worker = await this.getWorker(resolved);
+      return { engine: worker, model: null };
     }
 
     // ── Unknown engine ───────────────────────────────────────────────────
@@ -157,8 +160,9 @@ export class EngineManager {
         return existing;
       }
       if (existing.state === 'dead' || existing.state === 'unhealthy') {
-        // Worker died — remove and respawn
+        // Worker died — stop its process (free VRAM!) then respawn
         log.warn(`removing dead worker: ${engineName}`, { engine: engineName, state: existing.state });
+        await existing.stop().catch(() => {});
         this.workers.delete(engineName);
       } else {
         // Still spawning — wait for it
@@ -234,18 +238,15 @@ export class EngineManager {
     const entry = getEntry(engineName);
 
     // ── Unload the current engine (always) ─────────────────────────────
-    // Previous logic only stopped when both old AND new were GPU, which
-    // leaked VRAM on kokoro→dots (CPU→GPU) and dots→kokoro (GPU→CPU)
-    // switches. CPU-labeled engines (kokoro) still use CUDA via ONNX
-    // Runtime and hold VRAM. Always stop the old engine on switch.
-    if (this.currentEngine !== engineName) {
-      const oldWorker = this.workers.get(this.currentEngine);
-      if (oldWorker) {
-        if (onStatus) onStatus('unload_start', this.currentEngine);
-        await oldWorker.stop();
-        this.workers.delete(this.currentEngine);
-        if (onStatus) onStatus('unload_done', this.currentEngine);
-      }
+    // Always stop the old engine on switch — even if switching to the same
+    // engine name (the old worker may be in a bad state after a stream stall).
+    // This is the only way to guarantee VRAM is freed before loading the new model.
+    const oldWorker = this.workers.get(this.currentEngine);
+    if (oldWorker) {
+      if (onStatus) onStatus('unload_start', this.currentEngine);
+      await oldWorker.stop();
+      this.workers.delete(this.currentEngine);
+      if (onStatus) onStatus('unload_done', this.currentEngine);
     }
 
     // Also unload any other GPU engines that might be loaded.

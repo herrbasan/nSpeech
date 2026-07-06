@@ -204,5 +204,13 @@ try {
   console.log('=========================================\n');
 } catch (err) {
   log.error('failed to start server', { error: err.message });
+  console.error('\n=========================================');
+  console.error('  FAILED TO START nSpeech V3 Server');
+  console.error('=========================================');
+  console.error(`Error: ${err.message}`);
+  if (err.code === 'EADDRINUSE') {
+    console.error(`Port ${config.port} is already in use. Stop the other process or change NSPEECH_PORT.`);
+  }
+  console.error('=========================================\n');
   process.exit(1);
 }
