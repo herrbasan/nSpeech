@@ -38,7 +38,14 @@ PROJECT_ROOT = Path(__file__).parent.resolve()
 REQUIREMENTS_DIR = PROJECT_ROOT / "requirements"
 VENV_BASE = PROJECT_ROOT / "venv"
 
+# Installable engines. 'chatterbox' creates a shared venv for all three
+# model variants (chatterbox-turbo, chatterbox-eng, chatterbox-mtl).
+# At runtime, each variant is a separate engine entry in registry.json.
 ENGINES = ["kokoro", "cosyvoice", "chatterbox", "dots", "all"]
+
+# Chatterbox variants — all share venv/chatterbox/env/ but have separate
+# voice directories. Created during chatterbox install.
+CHATTERBOX_VARIANTS = ["chatterbox-turbo", "chatterbox-eng", "chatterbox-mtl"]
 
 # Per-engine Python version override.
 # Engines not listed here use the system Python (whatever runs install.py).
@@ -234,6 +241,11 @@ def install_engine_deps(python, engine):
         run([str(python), "-m", "pip", "install", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/nightly/cu128"])
 
+    elif engine == "dots":
+        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/cu128"])
+
     print("[+] Engine requirements installed.")
 
 
@@ -359,14 +371,27 @@ def download_models(python, engine):
     model_dir = ensure_models_dir(engine)
 
     if engine == "chatterbox":
-        print("    Downloading Chatterbox weights ...")
-        run([
-            str(python), "-c",
-            f"import sys; sys.path.insert(0, 'src'); "
-            f"import os; os.environ['NSPEECH_MODEL_DIR'] = r'{model_dir}'; "
-            f"from chatterbox.tts import ChatterboxTTS; "
-            f"ChatterboxTTS.from_pretrained(device='cpu')"
-        ], cwd=str(PROJECT_ROOT))
+        # Download all three model checkpoints so first-use doesn't trigger
+        # a HuggingFace download (which exceeds the 30s stream stall timeout).
+        chatterbox_models = [
+            ("Turbo (350M)",    "from chatterbox.tts_turbo import ChatterboxTurboTTS; ChatterboxTurboTTS.from_pretrained(device='cpu')"),
+            ("English (500M)",  "from chatterbox.tts import ChatterboxTTS; ChatterboxTTS.from_pretrained(device='cpu')"),
+            ("Multilingual (500M)", "from chatterbox.mtl_tts import ChatterboxMultilingualTTS; ChatterboxMultilingualTTS.from_pretrained(device='cpu')"),
+        ]
+        for label, import_cmd in chatterbox_models:
+            print(f"    Downloading Chatterbox {label} ...")
+            run([
+                str(python), "-c",
+                f"import sys; sys.path.insert(0, 'src'); "
+                f"import os; os.environ['NSPEECH_MODEL_DIR'] = r'{model_dir}'; "
+                f"{import_cmd}"
+            ], cwd=str(PROJECT_ROOT))
+
+        # Create per-variant voice directories
+        for variant in CHATTERBOX_VARIANTS:
+            variant_voices = VENV_BASE / variant / "voices"
+            variant_voices.mkdir(parents=True, exist_ok=True)
+            print(f"    [+] Voice dir: venv/{variant}/voices/")
 
     elif engine == "kokoro":
         urls = [
@@ -396,6 +421,30 @@ def download_models(python, engine):
     elif engine == "cosyvoice":
         _install_cosyvoice_models(python, model_dir)
 
+    elif engine == "dots":
+        # dots.tts repo is cloned into the model directory.
+        # The adapter expects venv/dots/models/dots.tts/src/ on sys.path.
+        dots_repo_dir = model_dir / "dots.tts"
+        if not dots_repo_dir.exists():
+            print(f"    [*] Cloning dots.tts repo ...")
+            run(["git", "clone", "https://github.com/rednote-hilab/dots.tts.git", str(dots_repo_dir)])
+        else:
+            print(f"    [+] dots.tts repo already exists at {dots_repo_dir}")
+
+        # Pre-download the default checkpoint (mf = 4 NFE, fastest)
+        print(f"    [*] Pre-downloading dots.tts-mf checkpoint ...")
+        dots_src = dots_repo_dir / "src"
+        run([
+            str(python), "-c",
+            f"import sys; sys.path.insert(0, 'src'); "
+            f"import os; os.environ['NSPEECH_MODEL_DIR'] = r'{model_dir}'; "
+            f"os.environ['NSPEECH_DOTS_CHECKPOINT'] = 'rednote-hilab/dots.tts-mf'; "
+            f"sys.path.insert(0, r'{dots_src}'); "
+            f"sys.path.insert(0, r'{dots_repo_dir}'); "
+            f"from dots_tts.runtime import DotsTtsRuntime; "
+            f"DotsTtsRuntime.from_pretrained('rednote-hilab/dots.tts-mf', precision='float32', optimize=False)"
+        ], cwd=str(PROJECT_ROOT))
+
     print("[+] Models ready.")
 
 
@@ -418,6 +467,16 @@ def verify_engine(python, engine):
             print(f"    [+] CosyVoice repo found at {repo_dir}")
         else:
             print(f"    [-] CosyVoice repo NOT found at {repo_dir}")
+            all_ok = False
+
+    elif engine == "dots":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
+        repo_dir = _models_dir(engine) / "dots.tts"
+        if repo_dir.exists():
+            print(f"    [+] dots.tts repo found at {repo_dir}")
+        else:
+            print(f"    [-] dots.tts repo NOT found at {repo_dir}")
             all_ok = False
 
     checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
@@ -478,7 +537,10 @@ def cmd_install(args):
     print()
 
     if engine == "all":
-        engines_to_install = ["kokoro", "cosyvoice", "chatterbox"]
+        # 'all' installs the default engine (kokoro) plus all optional local engines.
+        # Cloud providers (minimax, elevenlabs, gemini, xai) need no installation —
+        # just API keys in .env.
+        engines_to_install = ["kokoro", "cosyvoice", "chatterbox", "dots"]
     else:
         engines_to_install = [engine]
 
@@ -503,16 +565,11 @@ def cmd_install(args):
         print(f"  {eng:12} venv/{eng}/env/  [{status}]")
 
     print()
-    print("To start an engine:")
-    for eng in engines_to_install:
-        if results.get(eng, False):
-            print(f"  venv\\{eng}\\env\\Scripts\\python run.py")
-
+    print("To start the server:")
+    print("  node server/index.js")
     print()
-    print("Make sure .env points to the correct engine directories:")
-    print("  NSPEECH_ENGINE=<engine>")
-    print("  NSPEECH_MODEL_DIR=venv/<engine>/models")
-    print("  NSPEECH_VOICE_DIR=venv/<engine>/voices")
+    print("The server reads .env for NSPEECH_ENGINE (default: kokoro).")
+    print("Cloud providers (minimax, elevenlabs, gemini, xai) need API keys in .env.")
 
     if all(results.values()):
         print()
@@ -589,24 +646,27 @@ def main():
     parser = argparse.ArgumentParser(description="Install/update nSpeech TTS service")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p_install = subparsers.add_parser("install", help="Fresh install")
-    p_install.add_argument("--engine", "-e", required=True,
-                           choices=ENGINES, help="Engine to install")
+    p_install = subparsers.add_parser("install", help="Fresh install (default: kokoro only)")
+    p_install.add_argument("--engine", "-e", default="kokoro",
+                           choices=ENGINES,
+                           help="Engine to install (default: kokoro). "
+                                "Use 'all' for every local engine. "
+                                "Cloud providers need no install — just API keys in .env.")
     p_install.add_argument("--models", action="store_true", help="Pre-download model weights")
 
     p_update = subparsers.add_parser("update", help="Update packages")
     p_update.add_argument("--engine", "-e", required=True,
-                          choices=["kokoro", "cosyvoice", "chatterbox"],
+                          choices=["kokoro", "cosyvoice", "chatterbox", "dots"],
                           help="Engine to update")
 
     p_verify = subparsers.add_parser("verify", help="Verify installation")
     p_verify.add_argument("--engine", "-e", required=True,
-                         choices=["kokoro", "cosyvoice", "chatterbox"],
+                         choices=["kokoro", "cosyvoice", "chatterbox", "dots"],
                          help="Engine to verify")
 
     p_models = subparsers.add_parser("models", help="Download model weights")
     p_models.add_argument("--engine", "-e", required=True,
-                          choices=["kokoro", "cosyvoice", "chatterbox"],
+                          choices=["kokoro", "cosyvoice", "chatterbox", "dots"],
                           help="Engine to download models for")
 
     args = parser.parse_args()
