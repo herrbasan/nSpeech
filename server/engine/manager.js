@@ -16,6 +16,7 @@ import { getEntry, listEngines, venvExists, PROJECT_ROOT } from './registry.js';
 import { WorkerProcess, WorkerError } from './worker.js';
 import { resolveCloud } from '../cloud/registry.js';
 import { logger } from '../logger.js';
+import { emit } from '../events.js';
 
 const log = logger.child('manager');
 
@@ -43,6 +44,7 @@ export class EngineManager {
     this.currentEngine = this._loadPersistedEngine(defaultEngine);
     WorkerProcess.sweepStalePortFiles();
     log.info('engine manager initialized', { defaultEngine, currentEngine: this.currentEngine });
+    emit('system', `Engine manager initialized — default: ${defaultEngine}`, { defaultEngine, currentEngine: this.currentEngine });
   }
 
   /**
@@ -162,6 +164,7 @@ export class EngineManager {
       if (existing.state === 'dead' || existing.state === 'unhealthy') {
         // Worker died — stop its process (free VRAM!) then respawn
         log.warn(`removing dead worker: ${engineName}`, { engine: engineName, state: existing.state });
+        emit('worker', `Removing dead worker: ${engineName} (state: ${existing.state})`, { engine: engineName, state: existing.state });
         await existing.stop().catch(() => {});
         this.workers.delete(engineName);
       } else {
@@ -262,6 +265,7 @@ export class EngineManager {
 
     this.setCurrentEngine(engineName);
     log.info(`engine switched: ${engineName}`, { engine: engineName });
+    emit('engine', `Switched to ${engineName}`, { engine: engineName });
 
     return { engine: engineName, status: 'switched' };
   }
@@ -281,6 +285,7 @@ export class EngineManager {
     await worker.stop();
     this.workers.delete(engineName);
     log.info(`engine unloaded: ${engineName}`, { engine: engineName });
+    emit('engine', `Unloaded ${engineName}`, { engine: engineName });
   }
 
   /**
@@ -296,6 +301,7 @@ export class EngineManager {
 
     for (const name of toUnload) {
       log.info(`unloading GPU engine for exclusion: ${name}`, { engine: name });
+      emit('engine', `GPU exclusion: unloading ${name}`, { engine: name });
       const worker = this.workers.get(name);
       await worker.stop();
       this.workers.delete(name);
@@ -321,6 +327,7 @@ export class EngineManager {
    */
   async shutdownAll() {
     log.info('shutting down all workers');
+    emit('system', 'Shutting down all workers');
     const stops = [];
     for (const [name, worker] of this.workers) {
       stops.push(worker.stop().catch(err => {
@@ -330,6 +337,7 @@ export class EngineManager {
     await Promise.all(stops);
     this.workers.clear();
     log.info('all workers stopped');
+    emit('system', 'All workers stopped');
   }
 }
 

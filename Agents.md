@@ -57,6 +57,17 @@ Chatterbox has three model variants, each a separate engine entry in `registry.j
 
 All three share one venv (`venv/chatterbox/env/`) but have **separate voice directories** (`venv/chatterbox-{turbo,eng,mtl}/voices/`). Voice caches use a uniform `.pt` extension — no cross-model confusion. The adapter (`src/nspeech/engines/chatterbox.py`) takes a `model_type` at construction and loads only that model. GPU exclusion ensures only one variant is resident at a time.
 
+### CosyVoice — Known Issues (2026-07-07)
+
+CosyVoice3 adapter (`src/nspeech/engines/cosyvoice.py`) is **partially functional**. The model produces good single-sentence quality but has unresolved multi-sentence issues:
+
+- **Batch mode not truly batched:** The `inference_instruct2` call internally splits text and runs independent `model.tts()` sessions — the batch flag only controls downstream encoding, not model behavior. Voice character drifts between sentences.
+- **Chunk-boundary pops:** Each internal `model.tts()` call starts a fresh vocoder session with non-zero-start samples. A 10ms fade (`_fade_boundary`) mitigates but doesn't eliminate the discontinuity.
+- **Streaming quality:** Per-sentence prompt-swap was removed (prompt now set once), but vocoder resets between sentences cause inconsistent cadence. CosyVoice has no true cross-sentence prosodic context.
+- **Root cause:** `inference_instruct2` is designed for single-utterance instructed generation, not paragraph-level voice cloning. Switching to `inference_zero_shot` (which uses cached speaker identity) was attempted but produced gibberish due to missing prompt_text conditioning.
+
+**Recommendation:** Use CosyVoice for single-sentence zero-shot cloning only. For paragraphs, use Kokoro (stability) or Chatterbox English (quality). Revisit when CosyVoice upstream adds proper paragraph-level generation or we invest in a proper crossfade/caching approach.
+
 ### Dashboard (web/)
 
 Built with NUI (`lib/nui_wc2/`). Engine-aware navigation in `web/js/app.js`. Per-engine pages at `web/pages/<engine>/generate.html` and `web/pages/<engine>/voices.html`. Chatterbox has three separate page directories (chatterbox-turbo, chatterbox-eng, chatterbox-mtl).

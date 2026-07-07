@@ -34,11 +34,38 @@
 import { manager } from '../engine/manager.js';
 import { getEntry } from '../engine/registry.js';
 import { resolveCloud } from '../cloud/registry.js';
+import { subscribe, getHistory } from '../events.js';
 
 /**
- * Register the engine switch route on a Fastify instance.
+ * Register admin routes on a Fastify instance.
  */
 export function registerAdminRoutes(app) {
+
+  // ── GET /v1/admin/events — live event stream (SSE) ───────────────────────
+
+  app.get('/v1/admin/events', async (request, reply) => {
+    reply.raw.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    // Replay recent history on connect
+    for (const event of getHistory()) {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+
+    // Subscribe to live events
+    const unsub = subscribe((event) => {
+      reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+
+    // Cleanup on disconnect
+    request.raw.on('close', () => {
+      unsub();
+    });
+  });
 
   // ── POST /v1/admin/engine — switch engine with SSE progress ──────────────
 

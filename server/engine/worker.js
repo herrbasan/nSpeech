@@ -18,6 +18,7 @@ import { resolve, join, delimiter } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { logger } from '../logger.js';
+import { emit } from '../events.js';
 
 const log = logger.child('worker');
 
@@ -134,6 +135,7 @@ export class WorkerProcess {
           code, signal,
           stderr: this._stderrBuffer.slice(-2000),
         });
+        emit('error', `Worker crashed: ${this.engineName} (exit code ${code})`, { engine: this.engineName, code, signal });
       }
     });
 
@@ -166,6 +168,7 @@ export class WorkerProcess {
       engine: this.engineName,
       port: this.port,
     });
+    emit('worker', `Worker ready: ${this.engineName} (port ${this.port})`, { engine: this.engineName, port: this.port });
 
     return this.baseUrl;
   }
@@ -436,6 +439,7 @@ export class WorkerProcess {
       log.error(`stream stall detected: ${this.engineName}`, {
         engine: this.engineName, path, timeoutMs: streamTimeoutMs,
       });
+      emit('error', `Stream stall: ${this.engineName} on ${path} (${streamTimeoutMs}ms)`, { engine: this.engineName, path, timeoutMs: streamTimeoutMs });
     }, streamTimeoutMs);
 
     // If the caller provides a client signal, forward its abort

@@ -23,6 +23,23 @@ import torch
 import torchaudio
 from nspeech import config
 
+# 10ms fade at chunk boundaries to eliminate vocoder reset pops.
+# CosyVoice internally calls model.tts() for each text split, creating
+# independent vocoder sessions with non-zero-start/end samples that
+# cause audible clicks when concatenated.
+FADE_SAMPLES = 240  # 10ms at 24kHz
+
+def _fade_boundary(tensor):
+    """Apply a short fade-in/out to eliminate click at chunk boundaries."""
+    n = tensor.shape[-1]
+    fade = min(FADE_SAMPLES, n // 4)
+    if fade < 2:
+        return tensor
+    ramp = torch.linspace(0, 1, fade, device=tensor.device, dtype=tensor.dtype)
+    tensor[..., :fade] *= ramp
+    tensor[..., -fade:] *= ramp.flip(0)
+    return tensor
+
 os.environ["NUMBA_DISABLE_JIT"] = "1"
 
 import torchaudio  # noqa: E402
@@ -199,6 +216,7 @@ class CosyvoiceAdapter:
                     pcm = chunk["tts_speech"].squeeze()
                     if pcm.numel() == 0:
                         continue
+                    pcm = _fade_boundary(pcm)
                     yield pcm.cpu(), False
             finally:
                 if saved_prompt is not None:
@@ -211,18 +229,22 @@ class CosyvoiceAdapter:
         if not sentences:
             sentences = [text]
 
-        for sentence in sentences:
-            saved_prompt = None
-            saved_prompt_len = None
-            if spk_id:
-                spk = self.model.frontend.spk2info[spk_id]
-                saved_prompt = spk.get("prompt_text")
-                saved_prompt_len = spk.get("prompt_text_len")
-                prompt_token, prompt_token_len = self.model.frontend._extract_text_token(_prompt)
-                spk["prompt_text"] = prompt_token
-                spk["prompt_text_len"] = prompt_token_len
+        # Set prompt once — CosyVoice's frontend_instruct2 overwrites
+        # spk["prompt_text"] with the instruct text. Do it once before
+        # all sentences and restore once after, instead of per-sentence
+        # swaps that cause vocoder boundary artifacts.
+        saved_prompt = None
+        saved_prompt_len = None
+        if spk_id:
+            spk = self.model.frontend.spk2info[spk_id]
+            saved_prompt = spk.get("prompt_text")
+            saved_prompt_len = spk.get("prompt_text_len")
+            prompt_token, prompt_token_len = self.model.frontend._extract_text_token(_prompt)
+            spk["prompt_text"] = prompt_token
+            spk["prompt_text_len"] = prompt_token_len
 
-            try:
+        try:
+            for sentence in sentences:
                 chunk_gen = self.model.inference_instruct2(
                     tts_text=sentence, instruct_text=_prompt, prompt_wav=prompt_wav,
                     zero_shot_spk_id=spk_id, stream=False, speed=_speed,
@@ -232,11 +254,12 @@ class CosyvoiceAdapter:
                     pcm = chunk["tts_speech"].squeeze()
                     if pcm.numel() == 0:
                         continue
+                    pcm = _fade_boundary(pcm)
                     yield pcm.cpu(), False
-            finally:
-                if saved_prompt is not None:
-                    self.model.frontend.spk2info[spk_id]["prompt_text"] = saved_prompt
-                    self.model.frontend.spk2info[spk_id]["prompt_text_len"] = saved_prompt_len
+        finally:
+            if saved_prompt is not None:
+                self.model.frontend.spk2info[spk_id]["prompt_text"] = saved_prompt
+                self.model.frontend.spk2info[spk_id]["prompt_text_len"] = saved_prompt_len
 
     def list_voices(self) -> list:
         """CosyVoice has no native voice catalog — all voices are user-cloned.
