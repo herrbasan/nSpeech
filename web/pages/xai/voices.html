@@ -1,6 +1,6 @@
 ﻿<div class="page-xai-voices">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>xAI / Grok ÔÇö Voices</h1>
+        <h1>xAI / Grok — Voices</h1>
         <p class="lead">Clone a voice from reference audio. Voices live on xAI's servers.</p>
     </header>
 
@@ -54,40 +54,6 @@
         <h3 style="margin-top: 0">Cloned Voices</h3>
         <div id="xai-cloned-list"><p style="color: var(--color-shade6)">Loading...</p></div>
     </nui-card>
-
-    <nui-card>
-        <h3 style="margin-top: 0">Voice Presets</h3>
-        <p class="lead" style="margin-bottom: var(--nui-space)">Combine a voice with instructions for a reusable preset.</p>
-
-        <nui-input-group>
-            <label for="xai-preset-name">Preset Name</label>
-            <nui-input><input type="text" id="xai-preset-name" placeholder="Smart Lady"></nui-input>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="xai-preset-id">ID (URL-safe slug)</label>
-            <nui-input><input type="text" id="xai-preset-id" placeholder="smart-lady"></nui-input>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="xai-preset-voice">Base Voice</label>
-            <nui-select id="xai-preset-voice-select"><select id="xai-preset-voice"></select></nui-select>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="xai-preset-instructions">Instructions</label>
-            <nui-textarea min-rows="2" max-rows="4">
-                <textarea id="xai-preset-instructions" placeholder="Speak in the cadence of a public intellectual."></textarea>
-            </nui-textarea>
-        </nui-input-group>
-
-        <nui-button variant="primary" id="btn-xai-save-preset">
-            <button type="button">Save Preset</button>
-        </nui-button>
-
-        <div id="xai-preset-status" style="margin-top: var(--nui-space);"></div>
-        <div id="xai-preset-list" style="margin-top: var(--nui-space-double);"></div>
-    </nui-card>
 </div>
 
 <script type="nui/page">
@@ -130,173 +96,31 @@ function init(element, params, nui) {
 
     function loadClonedVoices() {
         fetch('/v1/voices?engine=xai').then(r => r.json()).then(d => {
-            const voices = (d.voices || []).filter(v => v.category === 'cloned' || v.category === 'preset');
-            // Only show cloned in this list; presets handled separately
-            const cloned = voices.filter(v => v.category === 'cloned');
-            if (!cloned.length) {
+            const voices = (d.voices || []).filter(v => v.category === 'cloned');
+            if (!voices.length) {
                 clonedListEl.innerHTML = '<p style="color: var(--color-shade6)">No cloned voices yet.</p>';
-            } else {
-                clonedListEl.innerHTML = '';
-                for (const v of cloned) {
-                    const row = document.createElement('div');
-                    row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);';
-                    const label = document.createElement('span');
-                    label.textContent = v.name;
-                    const delBtn = document.createElement('button');
-                    delBtn.type = 'button';
-                    delBtn.textContent = 'Delete';
-                    delBtn.addEventListener('click', async () => {
-                        await fetch(`/v1/voices/${encodeURIComponent(v.voice_id)}?engine=xai`, { method: 'DELETE' });
-                        loadClonedVoices();
-                        loadPresets();
-                    });
-                    row.appendChild(label);
-                    row.appendChild(delBtn);
-                    clonedListEl.appendChild(row);
-                }
+                return;
             }
-            loadPresets();
+            clonedListEl.innerHTML = '';
+            for (const v of voices) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);';
+                const label = document.createElement('span');
+                label.textContent = v.name;
+                const delBtn = document.createElement('button');
+                delBtn.type = 'button';
+                delBtn.textContent = 'Delete';
+                delBtn.addEventListener('click', async () => {
+                    await fetch(`/v1/voices/${encodeURIComponent(v.voice_id)}?engine=xai`, { method: 'DELETE' });
+                    loadClonedVoices();
+                });
+                row.appendChild(label);
+                row.appendChild(delBtn);
+                clonedListEl.appendChild(row);
+            }
         }).catch(() => {
             clonedListEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load voices.</p>';
         });
-    }
-
-    // ÔöÇÔöÇ Presets ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
-
-    function loadPresets() {
-        var ENGINE = 'xai';
-        var presetListEl = element.querySelector('#xai-preset-list');
-        var voiceSelect = element.querySelector('#xai-preset-voice-select');
-        var voiceSelectEl = element.querySelector('#xai-preset-voice');
-
-        fetch('/v1/voices?engine=' + ENGINE).then(function(r) { return r.json(); }).then(function(d) {
-            var allVoices = d.voices || [];
-            // Populate voice dropdown
-            var options = [];
-            for (var i = 0; i < allVoices.length; i++) {
-                if (allVoices[i].voice_type !== 'preset') {
-                    options.push({ value: allVoices[i].voice_id, label: allVoices[i].name + ' \u2014 ' + (allVoices[i].description || '') });
-                }
-            }
-            voiceSelect.setItems([{ group: 'xAI Voices', options: options }]);
-            // Render preset list
-            var presets = allVoices.filter(function(v) { return v.voice_type === 'preset'; });
-            if (!presets.length) {
-                presetListEl.innerHTML = '<p style="color: var(--color-shade6);">No presets yet.</p>';
-                return;
-            }
-            var html = '<div style="display: grid; gap: var(--nui-space-half);">';
-            for (var i = 0; i < presets.length; i++) {
-                var p = presets[i];
-                html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half);border:1px solid var(--border-shade1-4);border-radius:var(--border-radius1-3);">' +
-                    '<div><strong>' + p.name + '</strong> <code style="font-size:0.85em;">' + p.voice_id + '</code><br>' +
-                    '<span style="color:var(--color-shade6);font-size:0.85em;">voice: <code>' + p.base_voice + '</code>' + (p.instructions ? ' \u2014 ' + p.instructions.slice(0, 50) + '\u2026' : '') + '</span></div>' +
-                    '<div style="display:flex;gap:var(--nui-space-half);">' +
-                    '<nui-button data-preview-preset="' + p.voice_id + '"><button type="button">Preview</button></nui-button>' +
-                    '<nui-button variant="danger" data-delete-preset="' + p.voice_id + '"><button type="button">Delete</button></nui-button>' +
-                    '</div></div>';
-            }
-            html += '</div>';
-            presetListEl.innerHTML = html;
-            var previewBtns = presetListEl.querySelectorAll('[data-preview-preset]');
-            for (var d = 0; d < previewBtns.length; d++) {
-                (function(id) {
-                    previewBtns[d].querySelector('button').addEventListener('click', function() { previewPreset(id); });
-                })(previewBtns[d].dataset.previewPreset);
-            }
-            var deleteBtns = presetListEl.querySelectorAll('[data-delete-preset]');
-            for (var d = 0; d < deleteBtns.length; d++) {
-                (function(id) {
-                    deleteBtns[d].querySelector('button').addEventListener('click', function() { deletePreset(id); });
-                })(deleteBtns[d].dataset.deletePreset);
-            }
-        });
-    }
-
-    function deletePreset(id) {
-        fetch('/v1/voices/' + id + '?engine=xai', { method: 'DELETE' })
-            .then(function(r) { return r.json(); })
-            .then(function() {
-                element.querySelector('#xai-preset-status').innerHTML = '<span style="color:var(--color-highlight);">Preset deleted.</span>';
-                loadPresets();
-                loadClonedVoices();
-            });
-    }
-
-    function savePreset() {
-        var ENGINE = 'xai';
-        var id = element.querySelector('#xai-preset-id').value.trim();
-        var name = element.querySelector('#xai-preset-name').value.trim();
-        var voice = element.querySelector('#xai-preset-voice').value;
-        var instructions = element.querySelector('#xai-preset-instructions').value.trim();
-        var statusEl = element.querySelector('#xai-preset-status');
-
-        if (!name || !id || !voice) {
-            statusEl.innerHTML = '<span style="color:var(--color-danger);">Name, ID, and base voice are required.</span>';
-            return;
-        }
-        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Saving...</span>';
-        fetch('/v1/voices/preset', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ engine: ENGINE, id: id, name: name, voice: voice, instructions: instructions }),
-        }).then(function(r) { return r.json(); }).then(function() {
-            statusEl.innerHTML = '<span style="color:var(--color-highlight);">Preset saved!</span>';
-            element.querySelector('#xai-preset-name').value = '';
-            element.querySelector('#xai-preset-id').value = '';
-            element.querySelector('#xai-preset-instructions').value = '';
-            element.querySelector('#xai-preset-voice').selectedIndex = 0;
-            loadPresets();
-        }).catch(function(err) {
-            statusEl.innerHTML = '<span style="color:var(--color-danger);">Save failed: ' + err.message + '</span>';
-        });
-    }
-
-    element.querySelector('#btn-xai-save-preset button').addEventListener('click', savePreset);
-
-    function previewPreset(id) {
-        var ENGINE = 'xai';
-        var presetStatusEl = element.querySelector('#xai-preset-status');
-        stop();
-
-        abortController = new AbortController();
-        previewAudio.style.display = 'block';
-        mediaSource = new MediaSource();
-        previewAudio.src = URL.createObjectURL(mediaSource);
-        presetStatusEl.innerHTML = '<span style="color:var(--color-shade6);">Playing preset...</span>';
-
-        mediaSource.addEventListener('sourceopen', function() {
-            var sb = mediaSource.addSourceBuffer('audio/mpeg');
-            fetch('/v1/audio/speech', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: ENGINE, input: 'This is a preview of the preset voice.', voice: id, response_format: 'mp3' }),
-                signal: abortController.signal,
-            }).then(function(res) {
-                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
-                return res.body.getReader();
-            }).then(function(reader) {
-                function pump() {
-                    reader.read().then(function(result) {
-                        if (result.done) {
-                            if (mediaSource.readyState === 'open') mediaSource.endOfStream();
-                            presetStatusEl.innerHTML = '';
-                            return;
-                        }
-                        sb.appendBuffer(result.value);
-                        sb.addEventListener('updateend', function() {
-                            if (previewAudio.paused) previewAudio.play().catch(function() {});
-                        }, { once: true });
-                        pump();
-                    });
-                }
-                pump();
-            }).catch(function(err) {
-                if (err.name !== 'AbortError') {
-                    presetStatusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>';
-                }
-            });
-        }, { once: true });
     }
 
     function onAction(e) {
@@ -326,7 +150,7 @@ function init(element, params, nui) {
         previewStatusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Previewing...';
 
         const formData = new FormData();
-        formData.append('audio', file);
+        formData.append('file', file);
         const phrase = testPhraseEl.value || 'This is a preview of the cloned voice.';
         formData.append('test_phrase', phrase);
 
@@ -337,12 +161,8 @@ function init(element, params, nui) {
                     method: 'POST', body: formData, signal: abortController.signal
                 });
                 if (!res.ok) {
-                    let detail = `HTTP ${res.status}`;
-                    try {
-                        const errJson = JSON.parse(await res.text());
-                        detail = errJson?.error?.message || errJson?.detail || detail;
-                    } catch {}
-                    previewStatusEl.innerHTML = `<nui-badge variant="danger">${detail}</nui-badge>`;
+                    const errText = await res.text();
+                    previewStatusEl.innerHTML = `<nui-badge variant="danger">Preview failed: HTTP ${res.status}</nui-badge>`;
                     previewAudio.style.display = 'none';
                     return;
                 }
@@ -389,7 +209,7 @@ function init(element, params, nui) {
         saveStatusEl.innerHTML = '<nui-progress type="busy"></nui-progress> Saving...';
 
         const formData = new FormData();
-        formData.append('audio', file);
+        formData.append('file', file);
         formData.append('name', name);
         if (descInput.value.trim()) formData.append('description', descInput.value.trim());
 
