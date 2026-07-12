@@ -44,7 +44,9 @@ Voice IDs are **case-insensitive**. Custom cloned voices use a unique ID from th
 | `/v1/tts/voices` | GET | List available voices |
 | `/v1/tts` | WS | Streaming TTS (WebSocket, multi-turn + barge-in) |
 | `/v1/custom-voices` | GET | List custom cloned voices |
-| `/v1/custom-voices` | POST | Clone a custom voice |
+| `/v1/custom-voices` | POST | Clone a custom voice **(Enterprise only)** |
+
+> **Note:** The `POST /v1/custom-voices` endpoint requires an Enterprise plan. Standard API keys receive a 403/503. Custom voices can still be created via the [console](https://console.x.ai/team/default/voice/voice-library) (up to 30 free). nSpeech's xAI adapter returns a clear error for non-Enterprise keys. Use voice presets as an alternative for saving voice+instructions combinations.
 
 ---
 
