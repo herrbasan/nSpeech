@@ -20,7 +20,8 @@ Every engine emits raw PCM (s16le, 24 kHz, mono). Node owns format transcoding. 
 | POST | `/v1/voices/clone` | Persist a cloned voice (multipart) |
 | POST | `/v1/voices/preview` | Temporary clone + preview audio (multipart) |
 | POST | `/v1/voices/mix` | Blend two voices (JSON) |
-| DELETE | `/v1/voices/:voice_id` | Delete a voice |
+| POST | `/v1/voices/preset` | Create/update a voice preset (JSON) |
+| DELETE | `/v1/voices/:voice_id` | Delete a voice or preset |
 | POST | `/v1/admin/engine` | Switch active engine (SSE progress) |
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
@@ -181,13 +182,26 @@ Voice IDs are engine-scoped. Endpoints act on the engine specified by `?engine=`
 ```json
 {
   "voices": [
-    {"voice_id": "af_heart", "name": "af_heart", "category": "builtin", "voice_type": "builtin", "engine": "kokoro", "language": "en"},
+    {"voice_id": "smart-lady", "name": "Smart Lady", "category": "preset", "voice_type": "preset", "engine": "gemini", "base_voice": "Kore", "instructions": "Speak in the cadence of a public intellectual."},
+    {"voice_id": "Kore", "name": "Kore", "category": "builtin", "voice_type": "gemini_system", "engine": "gemini", "language": "auto", "description": "Warm"},
     {"voice_id": "my_voice", "name": "my_voice", "category": "cloned", "voice_type": "cloned", "engine": "minimax"}
   ]
 }
 ```
 
-Cloud adapters include `language`, `description`, `preview_url`, and `labels` where available.
+Cloud adapters include `language`, `description`, `preview_url`, and `labels` where available. All engines include Node-managed voice presets as `voice_type: "preset"`.
+
+### `POST /v1/voices/preset`
+
+Create or update a voice preset — a saved combination of a base voice and instructions. Works for all engines (local and cloud). JSON body:
+
+```json
+{"engine": "gemini", "id": "smart-lady", "name": "Smart Lady", "voice": "Kore", "instructions": "Speak in the cadence of a public intellectual."}
+```
+
+Returns `{"voice_id": "smart-lady", "name": "Smart Lady", "voice_type": "preset", "engine": "gemini", "base_voice": "Kore", "instructions": "..."}`.
+
+Presets appear in `GET /v1/voices` alongside built-in and cloned voices. When used as the `voice` in a TTS request, the preset's `voice` and `instructions` override the request — the client does not need to repeat them. Presets are stored in `presets/<engine>.json` at the project root.
 
 ### `POST /v1/voices/clone`
 
@@ -285,6 +299,17 @@ curl -X POST http://127.0.0.1:2233/v1/audio/speech \
 curl -X POST http://127.0.0.1:2233/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{"model":"elevenlabs","input":"The first move sets everything in motion.","voice":"JBFqnCBsd6RMkjVDRZzb","extra_body":{"stability":0.3,"expressiveness":0.7}}' \
+  --output out.mp3
+
+# Create a voice preset
+curl -X POST http://127.0.0.1:2233/v1/voices/preset \
+  -H "Content-Type: application/json" \
+  -d '{"engine":"gemini","id":"smart-lady","name":"Smart Lady","voice":"Kore","instructions":"Speak in the cadence of a public intellectual."}'
+
+# Generate with a preset (auto-resolves to base voice + instructions)
+curl -X POST http://127.0.0.1:2233/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini","input":"Hello.","voice":"smart-lady","response_format":"mp3"}' \
   --output out.mp3
 
 # Clone a voice
