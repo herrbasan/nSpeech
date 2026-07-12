@@ -53,8 +53,10 @@ export function registerVoiceRoutes(app) {
         data.voices = [];
       }
 
-      // Merge Node-managed presets into the voice list
-      const engineName = typeof engine.engineName === 'string' ? engine.engineName : null;
+      // Merge Node-managed presets into the voice list.
+      // Use the query param (model) for the engine name — cloud adapters
+      // don't expose engineName, and the model string is the canonical name.
+      const engineName = model || (typeof engine.engineName === 'string' ? engine.engineName : null);
       if (engineName) {
         const presetVoices = presets.toVoiceList(engineName);
         data.voices.push(...presetVoices);
