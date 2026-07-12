@@ -171,15 +171,13 @@ function init(element, params, nui) {
         fetch('/v1/voices?engine=' + ENGINE).then(function(r) { return r.json(); }).then(function(d) {
             var allVoices = d.voices || [];
             // Populate voice dropdown
-            voiceSelect.innerHTML = '<option value="" disabled selected>Select a base voice...</option>';
+            var options = [];
             for (var i = 0; i < allVoices.length; i++) {
-                if (allVoices[i].voice_type === 'builtin') {
-                    var opt = document.createElement('option');
-                    opt.value = allVoices[i].voice_id;
-                    opt.textContent = allVoices[i].name;
-                    voiceSelect.appendChild(opt);
+                if (allVoices[i].voice_type !== 'preset') {
+                    options.push({ value: allVoices[i].voice_id, label: allVoices[i].name + ' \u2014 ' + (allVoices[i].description || '') });
                 }
             }
+            voiceSelect.setItems([{ group: 'xAI Voices', options: options }]);
             // Render preset list
             var presets = allVoices.filter(function(v) { return v.voice_type === 'preset'; });
             if (!presets.length) {
