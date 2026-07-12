@@ -78,12 +78,25 @@ function init(element, params, nui) {
             .then(r => r.json())
             .then(d => {
                 const voices = d.voices || [];
-                const options = voices.map(v => ({ value: v.voice_id, label: `${v.name} — ${v.description || ''}` }));
-                voiceSelect.setItems([{ group: 'Gemini Voices', options }]);
-                if (selectEl.options.length <= 1 && options.length > 0) {
-                    selectEl.value = options[0].value;
+                const presets = [];
+                const builtins = [];
+                for (const v of voices) {
+                    if (v.voice_type === 'preset') {
+                        presets.push({ value: v.voice_id, label: '\u2605 ' + v.name });
+                    } else {
+                        builtins.push({ value: v.voice_id, label: v.name + ' \u2014 ' + (v.description || '') });
+                    }
                 }
-                statusEl.textContent = `${voices.length} voices loaded`;
+                const groups = [];
+                if (presets.length) groups.push({ group: 'Presets', options: presets });
+                if (builtins.length) groups.push({ group: 'Gemini Voices', options: builtins });
+                voiceSelect.setItems(groups);
+                if (selectEl.options.length <= 1 && presets.length > 0) {
+                    selectEl.value = presets[0].value;
+                } else if (selectEl.options.length <= 1 && builtins.length > 0) {
+                    selectEl.value = builtins[0].value;
+                }
+                statusEl.textContent = voices.length + ' voices loaded';
             })
             .catch(() => {
                 statusEl.textContent = 'Failed to load voices';
