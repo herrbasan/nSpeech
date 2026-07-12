@@ -48,8 +48,7 @@ function buildNavigation(engine) {
             icon: info.icon,
             items: [
                 { label: 'Generate', href: `#page=${engine}/generate` },
-                { label: 'Voices', href: `#page=${engine}/voices` },
-                { label: 'Presets', href: `#page=${engine}/presets` }
+                { label: 'Voices', href: `#page=${engine}/voices` }
             ]
         });
     }
