@@ -168,7 +168,7 @@ export function registerVoiceRoutes(app) {
   // ── POST /v1/voices/mix ───────────────────────────────────────────────────
 
   const mixVoicesHandler = async (request, reply) => {
-    const model = manager.currentEngine;
+    const model = request.query.engine || request.query.model || manager.currentEngine;
 
     let engine;
     try {
