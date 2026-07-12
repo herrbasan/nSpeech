@@ -3,23 +3,20 @@
 nSpeech Service Installer
 =========================
 Installs the text-to-speech service with per-engine isolation.
-Supports: kokoro, cosyvoice, chatterbox, or all engines.
+Supports: kokoro, chatterbox, dots, or all engines.
 
 Layout:
     venv/
       kokoro/
         env/          # Python virtual environment
         models/       # ONNX weights, voice bins
-      cosyvoice/
-        env/
-        models/       # CosyVoice repo clone, weights
       chatterbox/
         env/
         models/
 
 Usage:
     python install.py install --engine kokoro
-    python install.py install --engine cosyvoice --models
+    python install.py install --engine chatterbox --models
     python install.py install --engine all
     python install.py update --engine kokoro
     python install.py verify --engine kokoro
@@ -41,7 +38,7 @@ VENV_BASE = PROJECT_ROOT / "venv"
 # Installable engines. 'chatterbox' creates a shared venv for all three
 # model variants (chatterbox-turbo, chatterbox-eng, chatterbox-mtl).
 # At runtime, each variant is a separate engine entry in registry.json.
-ENGINES = ["kokoro", "cosyvoice", "chatterbox", "dots", "all"]
+ENGINES = ["kokoro", "chatterbox", "dots", "all"]
 
 # Chatterbox variants — all share venv/chatterbox/env/ but have separate
 # voice directories. Created during chatterbox install.
@@ -56,7 +53,6 @@ ENGINE_PYTHON_VERSIONS = {
 
 ENGINE_PATCHES = {
     "chatterbox": ["patch_chatterbox"],
-    "cosyvoice": [],
     "kokoro": [],
     "dots": [],
 }
@@ -225,17 +221,6 @@ def install_engine_deps(python, engine):
         run([str(python), "-m", "pip", "install", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/cpu"])
 
-    elif engine == "cosyvoice":
-        print("[*] Installing PyTorch with CUDA for CosyVoice ...")
-        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
-        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
-             "--index-url", "https://download.pytorch.org/whl/cu126"])
-        run([str(python), "-m", "pip", "install", "onnxruntime-gpu>=1.21.0"])
-
-        print("[*] Installing CosyVoice pinned dependencies ...")
-        run([str(python), "-m", "pip", "install",
-             "transformers==4.51.3", "tokenizers==0.21.0", "huggingface-hub==0.30.0"])
-
     elif engine == "chatterbox":
         run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
         run([str(python), "-m", "pip", "install", "torch", "torchaudio",
@@ -334,38 +319,6 @@ def patch_chatterbox(python):
     return patches_applied
 
 
-def _install_cosyvoice_models(python, model_dir):
-    repo_dir = model_dir / "CosyVoice"
-    repo_url = "https://github.com/FunAudioLLM/CosyVoice.git"
-
-    if not repo_dir.exists():
-        print(f"    [*] Cloning CosyVoice repo (with submodules) ...")
-        print(f"        This may take a few minutes (~500 MB).")
-        run(["git", "clone", "--recursive", repo_url, str(repo_dir)])
-        print(f"    [+] Repo cloned to {repo_dir}")
-    else:
-        print(f"    [+] CosyVoice repo already exists at {repo_dir}")
-        print(f"    [*] Updating submodules ...")
-        run(["git", "-C", str(repo_dir), "submodule", "update", "--init", "--recursive"])
-        print(f"    [+] Submodules updated.")
-
-    pretrained_dir = model_dir / "pretrained_models"
-    model_dest = pretrained_dir / "Fun-CosyVoice3-0.5B"
-    if model_dest.exists() and (model_dest / "cosyvoice3.yaml").exists():
-        print(f"    [+] CosyVoice3 model already downloaded at {model_dest}")
-        return
-
-    print(f"    [*] Downloading CosyVoice3-0.5B from HuggingFace ...")
-    print(f"        This may take a while (~2 GB).")
-    run([
-        str(python), "-c",
-        f"from huggingface_hub import snapshot_download; "
-        f"snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', "
-        f"local_dir=r'{model_dest}')"
-    ])
-    print(f"    [+] Model downloaded to {model_dest}")
-
-
 def download_models(python, engine):
     print(f"[*] Downloading {engine} models ...")
     model_dir = ensure_models_dir(engine)
@@ -418,9 +371,6 @@ def download_models(python, engine):
                     dest.unlink()
                 sys.exit(1)
 
-    elif engine == "cosyvoice":
-        _install_cosyvoice_models(python, model_dir)
-
     elif engine == "dots":
         # dots.tts repo is cloned into the model directory.
         # The adapter expects venv/dots/models/dots.tts/src/ on sys.path.
@@ -458,17 +408,6 @@ def verify_engine(python, engine):
     elif engine == "kokoro":
         checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
         checks.append(("Kokoro ONNX", "import kokoro_onnx; print('kokoro OK')"))
-    elif engine == "cosyvoice":
-        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
-        checks.append(("Transformers", "import transformers; print(f'transformers {transformers.__version__}')"))
-        checks.append(("pyworld", "import pyworld; print('pyworld OK')"))
-        repo_dir = _models_dir(engine) / "CosyVoice"
-        if repo_dir.exists():
-            print(f"    [+] CosyVoice repo found at {repo_dir}")
-        else:
-            print(f"    [-] CosyVoice repo NOT found at {repo_dir}")
-            all_ok = False
-
     elif engine == "dots":
         checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
         checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
@@ -540,7 +479,7 @@ def cmd_install(args):
         # 'all' installs the default engine (kokoro) plus all optional local engines.
         # Cloud providers (minimax, elevenlabs, gemini, xai) need no installation —
         # just API keys in .env.
-        engines_to_install = ["kokoro", "cosyvoice", "chatterbox", "dots"]
+        engines_to_install = ["kokoro", "chatterbox", "dots"]
     else:
         engines_to_install = [engine]
 
@@ -656,17 +595,17 @@ def main():
 
     p_update = subparsers.add_parser("update", help="Update packages")
     p_update.add_argument("--engine", "-e", required=True,
-                          choices=["kokoro", "cosyvoice", "chatterbox", "dots"],
-                          help="Engine to update")
+                         choices=["kokoro", "chatterbox", "dots"],
+                         help="Engine to update")
 
     p_verify = subparsers.add_parser("verify", help="Verify installation")
     p_verify.add_argument("--engine", "-e", required=True,
-                         choices=["kokoro", "cosyvoice", "chatterbox", "dots"],
+                         choices=["kokoro", "chatterbox", "dots"],
                          help="Engine to verify")
 
     p_models = subparsers.add_parser("models", help="Download model weights")
     p_models.add_argument("--engine", "-e", required=True,
-                          choices=["kokoro", "cosyvoice", "chatterbox", "dots"],
+                          choices=["kokoro", "chatterbox", "dots"],
                           help="Engine to download models for")
 
     args = parser.parse_args()

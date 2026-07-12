@@ -25,7 +25,6 @@ document.addEventListener('click', (e) => {
 
 const ENGINES = {
     kokoro: { label: 'Kokoro', icon: 'headphones' },
-    cosyvoice: { label: 'CosyVoice', icon: 'headphones' },
     'chatterbox-turbo': { label: 'CB Turbo', icon: 'headphones' },
     'chatterbox-eng': { label: 'CB English', icon: 'headphones' },
     'chatterbox-mtl': { label: 'CB Multilingual', icon: 'headphones' },

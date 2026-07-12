@@ -144,11 +144,6 @@ Registry format (`server/engine/registry.json`):
     "venv_python": "venv/kokoro/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
     "gpu": false
-  },
-  "cosyvoice": {
-    "venv_python": "venv/cosyvoice/env/Scripts/python.exe",
-    "worker_module": "nspeech.worker_server",
-    "gpu": true
   }
 }
 ```
@@ -181,7 +176,7 @@ Manager behavior:
 
 Verify:
 - Node can spawn a Kokoro worker and proxy `GET /v1/voices`.
-- Node can switch from Kokoro to CosyVoice and back.
+- Node can switch from Kokoro to dots and back.
 - Killing a worker mid-request causes Node to return 503 to the client.
 - Client disconnect mid-stream causes the worker to stop generating (check GPU idle).
 
@@ -196,7 +191,7 @@ Files:
 
 Behavior:
 1. Validate and normalize the OpenAI-compatible request body.
-2. Resolve engine from `model` (e.g. `kokoro`, `cosyvoice_0.5b`, `openai_tts_1`).
+2. Resolve engine from `model` (e.g. `kokoro`, `dots`, `minimax_speech_2_8_hd`).
 3. Get or start worker for that engine.
 4. Translate OpenAI fields to engine-native fields:
    - `input` → `text`
@@ -332,7 +327,7 @@ Renames from the draft:
 - `steps` → `inference_steps` (more descriptive, avoids ambiguity)
 
 Retired fields:
-- `text_frontend` (CosyVoice internal, not a user-facing control)
+- `text_frontend` (engine-internal, not a user-facing control)
 - `emotion_tags` (replaced by top-level `emotion`)
 
 New fields covering MiniMax + future providers: `pitch`, `emotion`, `stability`,
@@ -341,7 +336,6 @@ New fields covering MiniMax + future providers: `pitch`, `emotion`, `stability`,
 Web dashboard files that need updating (names changed):
 - `web/pages/chatterbox/generate.html` — `exaggeration` → `expressiveness`
 - `web/pages/dots/generate.html` — `steps` → `inference_steps`
-- `web/pages/cosyvoice/generate.html` — `text_frontend`/`emotion_tags` removed (cosyvoice adapter reads `emotion` from extra_body now)
 
 #### 8.1: Engine interface abstraction
 
@@ -557,7 +551,7 @@ All error responses (from Node, workers, and cloud adapters) use the OpenAI shap
 ```json
 {
   "error": {
-    "message": "Voice 'af_heart' not found in engine cosyvoice_0.5b",
+    "message": "Voice 'af_heart' not found in engine dots",
     "type": "invalid_request_error",
     "code": "voice_not_found",
     "param": "voice"

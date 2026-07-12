@@ -71,7 +71,7 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
 |-------|------|---------|-------|
 | `model` | string | `"nspeech"` | Engine selector. **Public values:** `"nspeech"` (dashboard-selected local engine), `"minimax"`, `"elevenlabs"`, `"gemini"`, `"xai"`. Cloud sub-models: `"minimax_speech_2_8_hd"`, `"elevenlabs_turbo_v2_5"`. Old local names (`kokoro`, `dots`, etc.) are rejected — use `"nspeech"` and switch via dashboard. |
 | `input` | string | **required** | Text to synthesize. |
-| `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in CosyVoice. |
+| `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in Chatterbox. |
 | `response_format` | string | `"mp3"` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`, `pcm_f32`. |
 | `speed` | float | `1.0` | OpenAI range `0.25`–`4.0`. Engines may clamp (e.g. ElevenLabs: 0.7–1.2). |
 | `instructions` | string | — | Natural-language style direction. Passed through where supported. |
@@ -140,7 +140,7 @@ The `model` field selects a provider. Each provider has different strengths, pri
 | `"gemini"` | Cloud | 80+ languages, auto-detect | ~1s | — | 5K chars |
 | `"xai"` | Cloud | Grok integration | ~1s | — | 5K chars |
 
-The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). The four local engines (kokoro, cosyvoice, chatterbox, dots) are NOT exposed as model names — clients use `"nspeech"` and get whatever engine the dashboard selected.
+The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). The local engines (kokoro, chatterbox, dots) are NOT exposed as model names — clients use `"nspeech"` and get whatever engine the dashboard selected.
 
 ### `extra_body` support by provider
 
@@ -166,7 +166,6 @@ When `model: "nspeech"`, the actual engine behind the request is the one selecte
 | Engine | Voices | Strengths | `extra_body` notes |
 |--------|--------|-----------|--------------------|
 | Kokoro | 54 built-in + cloned/blended | Most stable, reliable for long-form narration, ONNX-based (fast startup) | `blend` via voice mixing endpoint; no `batch` support |
-| CosyVoice3 | cloned only | Best zero-shot cloning quality, multi-language, instruct-based control | `batch`, `language`, `instruct_text` supported; 0.5B model |
 | Chatterbox | cloned only | Three models (Turbo 350M / Eng 500M / Multilingual 500M), 23 languages | `expressiveness` via `exaggeration`; model type via `extra_body.model` |
 | dots.tts | cloned only | SOTA expressiveness, 48kHz native, best emotion range (2B AR model) | `batch`, `inference_steps`, `guidance_scale`, `seed`; slowest TTFA |
 

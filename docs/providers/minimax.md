@@ -483,6 +483,6 @@ No local `.pt` cache. No GPU. No Python worker spawn.
 - [x] ~~PCM format details~~ — Confirmed s16le little-endian. Sample rate matches request.
 - [ ] **PCM @ 32000 Hz test** — nSpeech standard is 24kHz but MiniMax supports up to 44100. Test whether 32000 Hz PCM works cleanly (only tested at 24000 Hz so far).
 - [ ] **WebSocket TTFA benchmark** — WS path promises lower latency than HTTP SSE. Test with a 100-char sentence.
-- [ ] **Latency vs Kokoro** — Compare MiniMax cloud TTFA vs local Kokoro for short phrases. Cloud may beat GPU cold-start on dots/cosyvoice.
+- [ ] **Latency vs Kokoro** — Compare MiniMax cloud TTFA vs local Kokoro for short phrases. Cloud may beat GPU cold-start on dots.
 - [ ] **Pricing viability** — $60–100/M chars. At ~5 chars/word, ~$0.30–0.50 per 5,000-word article. Compare to local GPU electricity cost.
 - [ ] **WebSocket reconnection** — Does MiniMax WS support resume/reconnect, or full new connection per voice change?

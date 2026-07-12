@@ -57,16 +57,9 @@ Chatterbox has three model variants, each a separate engine entry in `registry.j
 
 All three share one venv (`venv/chatterbox/env/`) but have **separate voice directories** (`venv/chatterbox-{turbo,eng,mtl}/voices/`). Voice caches use a uniform `.pt` extension — no cross-model confusion. The adapter (`src/nspeech/engines/chatterbox.py`) takes a `model_type` at construction and loads only that model. GPU exclusion ensures only one variant is resident at a time.
 
-### CosyVoice — Known Issues (2026-07-07)
+### CosyVoice — Removed (2026-07-12)
 
-CosyVoice3 adapter (`src/nspeech/engines/cosyvoice.py`) is **partially functional**. The model produces good single-sentence quality but has unresolved multi-sentence issues:
-
-- **Batch mode not truly batched:** The `inference_instruct2` call internally splits text and runs independent `model.tts()` sessions — the batch flag only controls downstream encoding, not model behavior. Voice character drifts between sentences.
-- **Chunk-boundary pops:** Each internal `model.tts()` call starts a fresh vocoder session with non-zero-start samples. A 10ms fade (`_fade_boundary`) mitigates but doesn't eliminate the discontinuity.
-- **Streaming quality:** Per-sentence prompt-swap was removed (prompt now set once), but vocoder resets between sentences cause inconsistent cadence. CosyVoice has no true cross-sentence prosodic context.
-- **Root cause:** `inference_instruct2` is designed for single-utterance instructed generation, not paragraph-level voice cloning. Switching to `inference_zero_shot` (which uses cached speaker identity) was attempted but produced gibberish due to missing prompt_text conditioning.
-
-**Recommendation:** Use CosyVoice for single-sentence zero-shot cloning only. For paragraphs, use Kokoro (stability) or Chatterbox English (quality). Revisit when CosyVoice upstream adds proper paragraph-level generation or we invest in a proper crossfade/caching approach.
+CosyVoice was removed from nSpeech. The adapter produced audible artifacts (blips/pops) in both streaming and batch mode. Root cause was never identified despite multiple investigation sessions. If re-integrated in the future, it will be from scratch with fresh assumptions about the generation pipeline.
 
 ### Dashboard (web/)
 
@@ -76,7 +69,7 @@ Built with NUI (`lib/nui_wc2/`). Engine-aware navigation in `web/js/app.js`. Per
 
 - **Port discovery:** Workers spawn with `--port 0` (OS-assigned). The bound port is written to `%TEMP%/nspeech-<engine>-<pid>.port` — this temp file is authoritative. Stdout is a fallback (engine libraries spam stdout).
 - **Health states:** `/health` returns `warming` until the adapter's model is loaded, then `ready`. GPU workers aren't marked ready until the model finishes loading.
-- **GPU vs CPU:** All four local engines use GPU (Kokoro via ONNX CUDA). Only one GPU engine resident at a time. Switching to a different engine unloads the current one first.
+- **GPU vs CPU:** All five local engines use GPU (Kokoro via ONNX CUDA, Chatterbox ×3, dots.tts). Only one GPU engine resident at a time. Switching to a different engine unloads the current one first.
 - **Crash detection:** Worker exits unexpectedly → cleared from cache, 503 to client.
 - **Stream stall detection:** Byte-flow watchdog — if no bytes arrive for `STREAM_TIMEOUT` (default 30s), Node aborts upstream, closes client, marks worker unhealthy. Catches GPU deadlocks that don't exit the process.
 - **Request cancellation:** `AbortController` on every upstream fetch. Client disconnect → abort upstream immediately. Worker detects via FastAPI `Request.is_disconnected()`.

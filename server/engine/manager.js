@@ -99,7 +99,7 @@ export class EngineManager {
    * Accepted values:
    *   - "nspeech" (or null/empty) → routes to the dashboard-selected local engine
    *   - cloud prefixes ("minimax", "elevenlabs", "gemini", "xai") → cloud adapter
-   *   - local engine names ("kokoro", "cosyvoice", "chatterbox-turbo", etc.) →
+   *   - local engine names ("kokoro", "chatterbox-turbo", etc.) →
    *     resolves to that engine's worker (lazy-started via getWorker)
    *
    * The dashboard's per-engine pages use local engine names directly to
@@ -126,7 +126,7 @@ export class EngineManager {
 
     // ── Local engines — resolve to worker (lazy-started) ────────────────
     // The dashboard's per-engine pages target specific local engines by
-    // name (kokoro, cosyvoice, etc.). getWorker() handles venv checks,
+    // name (kokoro, chatterbox-turbo, etc.). getWorker() handles venv checks,
     // lazy spawning, and GPU exclusion.
     if (getEntry(resolved)) {
       const worker = await this.getWorker(resolved);

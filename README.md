@@ -1,6 +1,6 @@
 # nSpeech — Pluggable Text-to-Speech Service V3
 
-Multi-engine TTS with a unified OpenAI-compatible API. Local engines (Kokoro, CosyVoice, Chatterbox, dots.tts) run in per-engine Python venvs managed by a Node.js proxy. Cloud providers (MiniMax, ElevenLabs, Gemini, xAI) run as native Node adapters — no Python, no venv, no GPU.
+Multi-engine TTS with a unified OpenAI-compatible API. Local engines (Kokoro, Chatterbox, dots.tts) run in per-engine Python venvs managed by a Node.js proxy. Cloud providers (MiniMax, ElevenLabs, Gemini, xAI) run as native Node adapters — no Python, no venv, no GPU.
 
 ## Architecture
 
@@ -12,7 +12,7 @@ Node.js (Fastify) — routing, engine resolution, ffmpeg transcode
   ├─ Cloud adapter (fetch → raw PCM → pipePcmToClient)
   │    minimax, elevenlabs, gemini, xai
   └─ Python worker (child_process → HTTP relay → PCM)
-       kokoro, cosyvoice, chatterbox-{turbo,eng,mtl}, dots
+       kokoro, chatterbox-{turbo,eng,mtl}, dots
 ```
 
 Node owns all codec output. Every engine emits raw PCM (s16le, 24 kHz, mono). Node's `pipePcmToClient` transcodes PCM→MP3/Opus/AAC via bundled ffmpeg (`lib/nvideo`). One shared streaming path for all engines and providers.
@@ -55,7 +55,6 @@ Press `Ctrl+C`. Node kills all Python worker process groups on shutdown.
 | Engine | Type | Hardware | Voices | Cloning |
 |--------|------|----------|--------|---------|
 | **Kokoro** | Local | GPU (ONNX CUDA, ~500 MB) | 54 built-in | Stub (fallback) |
-| **CosyVoice** | Local | GPU (~3.5 GB) | Clone-only | Zero-shot |
 | **CB Turbo** | Local | GPU (~2 GB, 350M) | Clone-only | Zero-shot |
 | **CB English** | Local | GPU (~2 GB, 500M) | Clone-only | Zero-shot |
 | **CB Multilingual** | Local | GPU (~2 GB, 500M) | Clone-only | Zero-shot |
@@ -73,7 +72,6 @@ Cloud adapters are stateless — no process spawn, no GPU exclusion. Local engin
 
 ```bash
 python install.py install --engine chatterbox --models
-python install.py install --engine cosyvoice --models
 python install.py install --engine dots --models
 ```
 
@@ -131,7 +129,6 @@ nSpeech/
 │   ├── tts.py              # Engine factory + alias resolution
 │   └── engines/            # Per-engine adapters
 │       ├── kokoro.py
-│       ├── cosyvoice.py
 │       ├── chatterbox.py   # Shared by chatterbox-{turbo,eng,mtl}
 │       └── dots.py
 ├── web/                    # NUI dashboard
@@ -141,7 +138,6 @@ nSpeech/
 │   └── pages/              # Per-engine pages
 │       ├── home.html
 │       ├── kokoro/
-│       ├── cosyvoice/
 │       ├── chatterbox-turbo/
 │       ├── chatterbox-eng/
 │       ├── chatterbox-mtl/

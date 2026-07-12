@@ -4,11 +4,6 @@
     "worker_module": "nspeech.worker_server",
     "gpu": true
   },
-  "cosyvoice": {
-    "venv_python": "venv/cosyvoice/env/Scripts/python.exe",
-    "worker_module": "nspeech.worker_server",
-    "gpu": true
-  },
   "chatterbox-turbo": {
     "venv_python": "venv/chatterbox/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",

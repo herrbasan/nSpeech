@@ -421,7 +421,7 @@ def create_app(engine_name: str) -> FastAPI:
                 clone_meta = await asyncio.to_thread(
                     engine.clone, str(Path(tmp_wav.name)), preview_name, **clone_kwargs
                 )
-                # If clone returned a transcript (CosyVoice/dots do), use it.
+                # If clone returned a transcript (dots does), use it.
                 if isinstance(clone_meta, dict) and clone_meta.get("prompt_text"):
                     stt_transcript = clone_meta["prompt_text"]
                 await asyncio.to_thread(engine.load_voice, preview_name)

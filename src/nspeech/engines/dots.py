@@ -2,7 +2,7 @@
 dots.tts TTS Engine Adapter
 Implements zero-shot voice cloning via dots.tts (2B fully continuous AR TTS).
 
-dots.tts is architecturally different from CosyVoice/Chatterbox:
+dots.tts is architecturally different from Chatterbox:
 - No embedding extraction. Voice identity comes from a CAM++ x-vector computed
   at inference time from reference audio.
 - The reference audio + transcript are passed to EVERY generate() call.

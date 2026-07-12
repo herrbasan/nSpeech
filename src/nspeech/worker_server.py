@@ -39,7 +39,7 @@ def _write_port_file(engine, port):
 
 def main():
     parser = argparse.ArgumentParser(description="nSpeech worker server")
-    parser.add_argument("--engine", required=True, help="Engine name (kokoro, cosyvoice, etc.)")
+    parser.add_argument("--engine", required=True, help="Engine name (kokoro, chatterbox-turbo, etc.)")
     parser.add_argument("--port", type=int, default=0, help="Port to bind (0 = OS-assigned)")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind")
     args = parser.parse_args()

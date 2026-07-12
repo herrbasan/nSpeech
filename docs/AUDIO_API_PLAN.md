@@ -7,7 +7,7 @@ Goal: define an OpenAI-compatible audio surface for nSpeech that also covers loc
 
 ## 1. Guiding principle
 
-Clients always speak one API. The backend translates that API into engine-specific calls, whether the engine is local (Kokoro, CosyVoice, dots.tts) or remote (OpenAI, ElevenLabs, Azure, Google).
+Clients always speak one API. The backend translates that API into engine-specific calls, whether the engine is local (Kokoro, dots.tts) or remote (OpenAI, ElevenLabs, Azure, Google).
 
 - Base shape follows the OpenAI audio endpoints where possible.
 - Local-only features live in the same JSON body via `extra_body` (for structured options) or in separate multipart endpoints (for file uploads).
@@ -158,7 +158,7 @@ PlayHT, Cartesia) can find natural homes for their features.
 
 ### Engine support matrix
 
-The `nspeech` column represents whichever local engine the dashboard has selected (kokoro, cosyvoice, chatterbox, or dots). Cloud providers are listed individually.
+The `nspeech` column represents whichever local engine the dashboard has selected (kokoro, chatterbox, or dots). Cloud providers are listed individually.
 
 | Field | nspeech (local) | MiniMax | ElevenLabs | Gemini | xAI |
 |-------|-----------------|---------|------------|--------|-----|
@@ -343,7 +343,7 @@ language: en
 ### Voice ID namespacing
 
 Voice IDs are **engine-scoped**. A voice `af_heart` exists in Kokoro; it does not exist
-in CosyVoice. If the dashboard has CosyVoice selected and you request
+in dots.tts. If the dashboard has dots selected and you request
 `model: nspeech, voice: af_heart`, you get a `voice_not_found` error — not a silent
 fallback. Silent fallback hides bugs.
 
@@ -490,7 +490,7 @@ All errors use the OpenAI-compatible shape:
 ```json
 {
   "error": {
-    "message": "Voice 'af_heart' not found in engine cosyvoice_0.5b",
+    "message": "Voice 'af_heart' not found in engine dots",
     "type": "invalid_request_error",
     "code": "voice_not_found",
     "param": "voice"
