@@ -24,7 +24,7 @@
 
         <nui-input-group>
             <label for="preset-voice">Base Voice</label>
-            <nui-select>
+            <nui-select id="preset-voice-select">
                 <select id="preset-voice"><option value="">Loading...</option></select>
             </nui-select>
         </nui-input-group>
@@ -56,7 +56,8 @@ function init(element, params, nui) {
     var ENGINE = 'gemini';
     var presetListEl = element.querySelector('#preset-list');
     var statusEl = element.querySelector('#preset-status');
-    var voiceSelect = element.querySelector('#preset-voice');
+    var voiceSelect = element.querySelector('#preset-voice-select');
+    var voiceSelectEl = element.querySelector('#preset-voice');
     var nameInput = element.querySelector('#preset-name');
     var idInput = element.querySelector('#preset-id');
     var instructionsInput = element.querySelector('#preset-instructions');
@@ -190,7 +191,7 @@ function init(element, params, nui) {
     function savePreset() {
         var id = idInput.value.trim();
         var name = nameInput.value.trim();
-        var voice = voiceSelect.value;
+        var voice = voiceSelectEl.value;
         var instructions = instructionsInput.value.trim();
 
         if (!name || !id || !voice) {
@@ -221,6 +222,5 @@ function init(element, params, nui) {
 
     element.querySelector('#btn-save-preset button').addEventListener('click', savePreset);
     element.show = function() { loadAll(); };
-    loadAll();
 }
 </script>

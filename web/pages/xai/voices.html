@@ -71,7 +71,7 @@
 
         <nui-input-group>
             <label for="xai-preset-voice">Base Voice</label>
-            <nui-select><select id="xai-preset-voice"></select></nui-select>
+            <nui-select id="xai-preset-voice-select"><select id="xai-preset-voice"></select></nui-select>
         </nui-input-group>
 
         <nui-input-group>
@@ -166,7 +166,8 @@ function init(element, params, nui) {
     function loadPresets() {
         var ENGINE = 'xai';
         var presetListEl = element.querySelector('#xai-preset-list');
-        var voiceSelect = element.querySelector('#xai-preset-voice');
+        var voiceSelect = element.querySelector('#xai-preset-voice-select');
+        var voiceSelectEl = element.querySelector('#xai-preset-voice');
 
         fetch('/v1/voices?engine=' + ENGINE).then(function(r) { return r.json(); }).then(function(d) {
             var allVoices = d.voices || [];
