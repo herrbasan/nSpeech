@@ -58,184 +58,78 @@ This is from a conversation with an LLM, and is of the type I use TTS for.</text
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
+import { NSpeechClient, playSpeechStream } from "/lib/nspeech-client/nspeech-client.js";
 
-    const voiceSelect = element.querySelector('#gem-voice-select');
-    const selectEl = element.querySelector('#gem-voice');
-    const instructionsEl = element.querySelector('#gem-instructions');
-    const textArea = element.querySelector('#gem-text');
-    const batchEl = element.querySelector('#gem-batch');
-    const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    let audio = element.querySelector('#gem-audio');
-    const statusEl = element.querySelector('#gem-status');
+function init(element, params, nui) {
+    const nspeech = new NSpeechClient();
+    let abortController = null;
+    let audioEl = element.querySelector("#gem-audio");
+
+    const voiceSelect = element.querySelector("#gem-voice-select");
+    const selectEl = element.querySelector("#gem-voice");
+    const instructionsEl = element.querySelector("#gem-instructions");
+    const textArea = element.querySelector("#gem-text");
+    const batchEl = element.querySelector("#gem-batch");
+    const statusEl = element.querySelector("#gem-status");
 
     function loadVoices() {
-        statusEl.textContent = 'Loading voices...';
-        fetch('/v1/voices?engine=gemini')
-            .then(r => r.json())
-            .then(d => {
-                const voices = d.voices || [];
-                const presets = [];
-                const builtins = [];
-                for (const v of voices) {
-                    if (v.voice_type === 'preset') {
-                        presets.push({ value: v.voice_id, label: '\u2605 ' + v.name });
-                    } else {
-                        builtins.push({ value: v.voice_id, label: v.name + ' \u2014 ' + (v.description || '') });
-                    }
+        statusEl.textContent = "Loading voices...";
+        nspeech.listVoices("gemini").then(function(d) {
+            const voices = d.voices || [];
+            const presets = [];
+            const builtins = [];
+            for (const v of voices) {
+                if (v.voice_type === "preset") {
+                    presets.push({ value: v.voice_id, label: "\u2605 " + v.name });
+                } else {
+                    builtins.push({ value: v.voice_id, label: v.name + " \u2014 " + (v.description || "") });
                 }
-                const groups = [];
-                if (presets.length) groups.push({ group: 'Presets', options: presets });
-                if (builtins.length) groups.push({ group: 'Gemini Voices', options: builtins });
-                voiceSelect.setItems(groups);
-                if (selectEl.options.length <= 1 && presets.length > 0) {
-                    selectEl.value = presets[0].value;
-                } else if (selectEl.options.length <= 1 && builtins.length > 0) {
-                    selectEl.value = builtins[0].value;
-                }
-                statusEl.textContent = voices.length + ' voices loaded';
-            })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            }
+            const groups = [];
+            if (presets.length) groups.push({ group: "Presets", options: presets });
+            if (builtins.length) groups.push({ group: "Gemini Voices", options: builtins });
+            voiceSelect.setItems(groups);
+            if (selectEl.options.length <= 1 && presets.length > 0) {
+                selectEl.value = presets[0].value;
+            } else if (selectEl.options.length <= 1 && builtins.length > 0) {
+                selectEl.value = builtins[0].value;
+            }
+            statusEl.textContent = voices.length + " voices loaded";
+        }).catch(function() {
+            statusEl.textContent = "Failed to load voices";
+        });
     }
 
     function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        if (audio) {
-            audio.pause();
-            audio.src = '';
-        }
-        if (mediaSource?.readyState === 'open') {
-            try { mediaSource.endOfStream(); } catch (_) {}
-        }
-        mediaSource = null;
-        statusEl.textContent = '';
+        if (abortController) { abortController.abort(); abortController = null; }
+        if (audioEl) { audioEl.pause(); audioEl.src = ""; }
+        statusEl.textContent = "";
     }
 
-    stopBtn.addEventListener('click', stop);
+    element.querySelector("#btn-stop").addEventListener("click", stop);
 
-    generateBtn.querySelector('button').addEventListener('click', () => {
+    element.querySelector("#btn-generate button").addEventListener("click", function() {
         const text = textArea.value.trim();
         if (!text) return;
         stop();
-
-        const voice = selectEl.value;
-        const instructions = instructionsEl.value.trim();
-        const isBatch = batchEl.checked;
         abortController = new AbortController();
-        const startTime = performance.now();
-
-        const newAudio = document.createElement('audio');
-        newAudio.id = 'gem-audio';
-        newAudio.controls = true;
-        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
-        audio.replaceWith(newAudio);
-        audio = newAudio;
-
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-
-        let firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', async () => {
-            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
-
-            const extraBody = {};
-            if (isBatch) extraBody.batch = true;
-
-            try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'gemini',
-                        input: text,
-                        voice: voice,
-                        response_format: 'mp3',
-                        instructions: instructions,
-                        extra_body: extraBody,
-                    }),
-                    signal: abortController.signal,
-                });
-                if (!response.ok) {
-                    const ed = await response.json().catch(() => ({}));
-                    throw new Error(ed.error?.message || `HTTP ${response.status}`);
-                }
-                const reader = response.body.getReader();
-
-                // Decouple network reads from SourceBuffer updates so the
-                // browser can start decoding while more chunks are still
-                // arriving. This is what makes streaming *feel* streaming.
-                const queue = [];
-                let appending = false;
-                let ended = false;
-
-                const tryPlay = () => {
-                    if (!audio.paused || sourceBuffer.buffered.length === 0) return;
-                    audio.play().catch((e) => {
-                        console.warn('Gemini audio play failed', e.message);
-                    });
-                };
-
-                const pumpQueue = () => {
-                    if (appending || queue.length === 0) {
-                        if (ended && !appending && mediaSource.readyState === 'open') {
-                            mediaSource.endOfStream();
-                            statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
-                        }
-                        return;
-                    }
-                    appending = true;
-                    const chunk = queue.shift();
-                    sourceBuffer.appendBuffer(chunk);
-                    sourceBuffer.onupdateend = () => {
-                        appending = false;
-                        tryPlay();
-                        pumpQueue();
-                    };
-                    sourceBuffer.onerror = (e) => {
-                        appending = false;
-                        console.error('SourceBuffer error', e);
-                        pumpQueue();
-                    };
-                };
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                        ended = true;
-                        pumpQueue();
-                        break;
-                    }
-                    if (!firstChunk && value?.length) {
-                        firstChunk = true;
-                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms · playing...`;
-                        // Start playback as early as possible once the first
-                        // bytes arrive; the Generate click is a user gesture.
-                        tryPlay();
-                    }
-                    queue.push(value);
-                    pumpQueue();
-                }
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    statusEl.textContent = 'Stopped.';
-                } else {
-                    statusEl.textContent = `Error: ${err.message}`;
-                }
-            }
-        }, { once: true });
+        statusEl.textContent = "Generating...";
+        nspeech.speech({
+            model: "gemini", input: text, voice: selectEl.value,
+            format: "mp3",
+            instructions: instructionsEl.value.trim() || undefined,
+            extraBody: batchEl.checked ? { batch: true } : undefined,
+            signal: abortController.signal,
+        }).then(function(response) {
+            const result = playSpeechStream(response, audioEl, function(info) {
+                if (info.status === "done") statusEl.textContent = "Done in " + info.timeMs.toFixed(0) + "ms";
+            });
+            audioEl = result.audio;
+        }).catch(function(err) {
+            if (err.name !== "AbortError") statusEl.textContent = "Error: " + err.message;
+        });
     });
 
-    element.show = () => loadVoices();
-    element.hide = () => stop();
+    element.show = function() { loadVoices(); };
 }
 </script>
