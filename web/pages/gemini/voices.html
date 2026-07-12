@@ -1,17 +1,12 @@
 <div class="page-gemini-voices">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>Gemini — Voices</h1>
-        <p class="lead">30 static named voices plus voice presets (voice + instructions combinations).</p>
+        <h1>Gemini — Voice Presets</h1>
+        <p class="lead">Combine a Gemini voice with instructions to create a reusable character preset.</p>
     </header>
 
     <nui-card>
-        <h3 style="margin-top: 0">Available Voices</h3>
-        <div id="gem-voice-list"><p style="color: var(--color-shade6)">Loading...</p></div>
-    </nui-card>
-
-    <nui-card>
-        <h3 style="margin-top: 0">Voice Presets</h3>
-        <p class="lead" style="margin-bottom: var(--nui-space)">Combine a voice with instructions to create a reusable character preset.</p>
+        <h3 style="margin-top: 0">Create Preset</h3>
+        <p class="lead" style="margin-bottom: var(--nui-space)">Choose a base voice and write instructions that define how it speaks.</p>
 
         <nui-input-group>
             <label for="preset-name">Preset Name</label>
@@ -30,7 +25,7 @@
         <nui-input-group>
             <label for="preset-voice">Base Voice</label>
             <nui-select>
-                <select id="preset-voice"></select>
+                <select id="preset-voice"><option value="">Loading...</option></select>
             </nui-select>
         </nui-input-group>
 
@@ -46,15 +41,17 @@
         </nui-button>
 
         <div id="preset-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
 
-        <div id="preset-list" style="margin-top: var(--nui-space-double);"></div>
+    <nui-card>
+        <h3 style="margin-top: 0">Your Presets</h3>
+        <div id="preset-list"><p style="color: var(--color-shade6)">Loading...</p></div>
     </nui-card>
 </div>
 
 <script type="nui/page">
 function init(element, params, nui) {
     var ENGINE = 'gemini';
-    var listEl = element.querySelector('#gem-voice-list');
     var presetListEl = element.querySelector('#preset-list');
     var statusEl = element.querySelector('#preset-status');
     var voiceSelect = element.querySelector('#preset-voice');
@@ -63,41 +60,17 @@ function init(element, params, nui) {
     var instructionsInput = element.querySelector('#preset-instructions');
     var allVoices = [];
 
-    function loadVoices() {
+    function loadAll() {
         fetch('/v1/voices?engine=' + ENGINE)
             .then(function(r) { return r.json(); })
             .then(function(d) {
                 allVoices = d.voices || [];
-                renderVoiceList();
                 populateVoiceDropdown();
                 loadPresets();
             })
             .catch(function(err) {
-                listEl.innerHTML = '<p style="color:var(--color-danger)">Failed: ' + err.message + '</p>';
+                presetListEl.innerHTML = '<p style="color:var(--color-danger)">Failed to load: ' + err.message + '</p>';
             });
-    }
-
-    function renderVoiceList() {
-        if (!allVoices.length) {
-            listEl.innerHTML = '<p style="color: var(--color-shade6)">No voices found.</p>';
-            return;
-        }
-        var html = '<div style="display: grid; gap: var(--nui-space);">';
-        for (var i = 0; i < allVoices.length; i++) {
-            var v = allVoices[i];
-            var typeLabel = v.voice_type === 'preset'
-                ? '<span style="color:var(--color-highlight);font-size:0.8em;">preset</span>'
-                : '';
-            var desc = v.voice_type === 'preset'
-                ? '<br><span style="color:var(--color-shade6);font-size:0.85em;">base: <code>' + v.base_voice + '</code>' + (v.instructions ? ' \u2014 ' + v.instructions.slice(0, 60) + '\u2026' : '') + '</span>'
-                : '';
-            html += '<div style="display:flex;align-items:flex-start;justify-content:space-between;padding:var(--nui-space-half) 0;border-bottom:1px solid var(--border-shade1-4);">' +
-                '<span class="lead"><strong>' + v.name + '</strong> ' + typeLabel + desc + '</span>' +
-                '<code style="font-size:0.85em;">' + v.voice_id + '</code>' +
-                '</div>';
-        }
-        html += '</div>';
-        listEl.innerHTML = html;
     }
 
     function populateVoiceDropdown() {
@@ -124,17 +97,17 @@ function init(element, params, nui) {
             html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half);border:1px solid var(--border-shade1-4);border-radius:var(--border-radius1-3);">' +
                 '<div><strong>' + p.name + '</strong> <code style="font-size:0.85em;">' + p.voice_id + '</code><br>' +
                 '<span style="color:var(--color-shade6);font-size:0.85em;">voice: <code>' + p.base_voice + '</code>' + (p.instructions ? ' \u2014 ' + p.instructions.slice(0, 50) + '\u2026' : '') + '</span></div>' +
-                '<nui-button variant="danger" data-delete="' + p.voice_id + '"><button type="button">Delete</button></nui-button>' +
+                '<nui-button variant="danger" data-delete-preset="' + p.voice_id + '"><button type="button">Delete</button></nui-button>' +
                 '</div>';
         }
         html += '</div>';
         presetListEl.innerHTML = html;
 
-        var deleteBtns = presetListEl.querySelectorAll('[data-delete]');
+        var deleteBtns = presetListEl.querySelectorAll('[data-delete-preset]');
         for (var d = 0; d < deleteBtns.length; d++) {
             (function(id) {
                 deleteBtns[d].querySelector('button').addEventListener('click', function() { deletePreset(id); });
-            })(deleteBtns[d].dataset.delete);
+            })(deleteBtns[d].dataset.deletePreset);
         }
     }
 
@@ -143,7 +116,7 @@ function init(element, params, nui) {
             .then(function(r) { return r.json(); })
             .then(function() {
                 statusEl.innerHTML = '<span style="color:var(--color-highlight);">Preset deleted.</span>';
-                loadVoices();
+                loadAll();
             })
             .catch(function(err) {
                 statusEl.innerHTML = '<span style="color:var(--color-danger);">Delete failed: ' + err.message + '</span>';
@@ -175,7 +148,7 @@ function init(element, params, nui) {
                 idInput.value = '';
                 instructionsInput.value = '';
                 voiceSelect.selectedIndex = 0;
-                loadVoices();
+                loadAll();
             })
             .catch(function(err) {
                 statusEl.innerHTML = '<span style="color:var(--color-danger);">Save failed: ' + err.message + '</span>';
@@ -183,6 +156,6 @@ function init(element, params, nui) {
     }
 
     element.querySelector('#btn-save-preset button').addEventListener('click', savePreset);
-    element.show = function() { loadVoices(); };
+    element.show = function() { loadAll(); };
 }
 </script>
