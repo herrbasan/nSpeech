@@ -47,6 +47,8 @@
         <h3 style="margin-top: 0">Your Presets</h3>
         <div id="preset-list"><p style="color: var(--color-shade6)">Loading...</p></div>
     </nui-card>
+
+    <audio id="preset-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
 </div>
 
 <script type="nui/page">
@@ -58,7 +60,10 @@ function init(element, params, nui) {
     var nameInput = element.querySelector('#preset-name');
     var idInput = element.querySelector('#preset-id');
     var instructionsInput = element.querySelector('#preset-instructions');
+    var audioEl = element.querySelector('#preset-audio');
     var allVoices = [];
+    var abortController = null;
+    var mediaSource = null;
 
     function loadAll() {
         fetch('/v1/voices?engine=' + ENGINE)
@@ -97,11 +102,20 @@ function init(element, params, nui) {
             html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half);border:1px solid var(--border-shade1-4);border-radius:var(--border-radius1-3);">' +
                 '<div><strong>' + p.name + '</strong> <code style="font-size:0.85em;">' + p.voice_id + '</code><br>' +
                 '<span style="color:var(--color-shade6);font-size:0.85em;">voice: <code>' + p.base_voice + '</code>' + (p.instructions ? ' \u2014 ' + p.instructions.slice(0, 50) + '\u2026' : '') + '</span></div>' +
+                '<div style="display:flex;gap:var(--nui-space-half);">' +
+                '<nui-button data-preview-preset="' + p.voice_id + '"><button type="button">Preview</button></nui-button>' +
                 '<nui-button variant="danger" data-delete-preset="' + p.voice_id + '"><button type="button">Delete</button></nui-button>' +
-                '</div>';
+                '</div></div>';
         }
         html += '</div>';
         presetListEl.innerHTML = html;
+
+        var previewBtns = presetListEl.querySelectorAll('[data-preview-preset]');
+        for (var d = 0; d < previewBtns.length; d++) {
+            (function(id) {
+                previewBtns[d].querySelector('button').addEventListener('click', function() { previewPreset(id); });
+            })(previewBtns[d].dataset.previewPreset);
+        }
 
         var deleteBtns = presetListEl.querySelectorAll('[data-delete-preset]');
         for (var d = 0; d < deleteBtns.length; d++) {
@@ -109,6 +123,58 @@ function init(element, params, nui) {
                 deleteBtns[d].querySelector('button').addEventListener('click', function() { deletePreset(id); });
             })(deleteBtns[d].dataset.deletePreset);
         }
+    }
+
+    function stop() {
+        if (abortController) { abortController.abort(); abortController = null; }
+        if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+        if (mediaSource && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch (_) {} }
+        mediaSource = null;
+    }
+
+    function previewPreset(id) {
+        var preset = allVoices.find(function(v) { return v.voice_id === id && v.voice_type === 'preset'; });
+        if (!preset) return;
+        stop();
+
+        abortController = new AbortController();
+        audioEl.style.display = 'block';
+        mediaSource = new MediaSource();
+        audioEl.src = URL.createObjectURL(mediaSource);
+        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Playing preset: ' + preset.name + '</span>';
+
+        mediaSource.addEventListener('sourceopen', function() {
+            var sb = mediaSource.addSourceBuffer('audio/mpeg');
+            fetch('/v1/audio/speech', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: ENGINE, input: preset.name + '. This is a preview.', voice: id, response_format: 'mp3' }),
+                signal: abortController.signal,
+            }).then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.body.getReader();
+            }).then(function(reader) {
+                function pump() {
+                    reader.read().then(function(result) {
+                        if (result.done) {
+                            if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                            statusEl.innerHTML = '';
+                            return;
+                        }
+                        sb.appendBuffer(result.value);
+                        sb.addEventListener('updateend', function() {
+                            if (audioEl.paused) audioEl.play().catch(function() {});
+                        }, { once: true });
+                        pump();
+                    });
+                }
+                pump();
+            }).catch(function(err) {
+                if (err.name !== 'AbortError') {
+                    statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>';
+                }
+            });
+        }, { once: true });
     }
 
     function deletePreset(id) {
@@ -157,5 +223,5 @@ function init(element, params, nui) {
 
     element.querySelector('#btn-save-preset button').addEventListener('click', savePreset);
     element.show = function() { loadAll(); };
-}
+    loadAll();
 </script>
