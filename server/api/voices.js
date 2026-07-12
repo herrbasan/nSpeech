@@ -37,7 +37,10 @@ export function registerVoiceRoutes(app) {
     }
 
     try {
-      const data = await engine.listVoices();
+      // Clone the engine response so we don't mutate the engine's internal
+      // cache (e.g. cloud adapters cache the voices object by reference).
+      const engineData = await engine.listVoices();
+      const data = { voices: engineData.voices ? [...engineData.voices] : [] };
 
       // Normalize: ensure each voice has voice_id and engine fields
       if (data.voices) {
