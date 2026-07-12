@@ -36,6 +36,13 @@
             </nui-textarea>
         </nui-input-group>
 
+        <nui-input-group>
+            <label for="preset-test-phrase">Test Phrase</label>
+            <nui-textarea min-rows="1" max-rows="3">
+                <textarea id="preset-test-phrase" placeholder="This is a preview of the selected voice."></textarea>
+            </nui-textarea>
+        </nui-input-group>
+
         <nui-button-container gap="medium">
             <nui-button variant="primary" id="btn-save-preset">
                 <button type="button">Save Preset</button>
@@ -66,6 +73,7 @@ function init(element, params, nui) {
     var nameInput = element.querySelector('#preset-name');
     var idInput = element.querySelector('#preset-id');
     var instructionsInput = element.querySelector('#preset-instructions');
+    var testPhraseEl = element.querySelector('#preset-test-phrase');
     var audioEl = element.querySelector('#preset-audio');
     var allVoices = [];
     var abortController = null;
@@ -226,6 +234,7 @@ function init(element, params, nui) {
     }
 
     function previewCurrent() {
+        var text = testPhraseEl.value.trim() || 'This is a preview of the selected voice.';
         var voice = voiceSelectEl.value;
         var instructions = instructionsInput.value.trim();
         if (!voice) {
@@ -244,7 +253,7 @@ function init(element, params, nui) {
             fetch('/v1/audio/speech', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model: ENGINE, input: 'This is a preview of the selected voice.', voice: voice, instructions: instructions, response_format: 'mp3' }),
+                body: JSON.stringify({ model: ENGINE, input: text, voice: voice, instructions: instructions, response_format: 'mp3' }),
                 signal: abortController.signal,
             }).then(function(res) {
                 if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
