@@ -9,12 +9,14 @@
  *   POST   /v1/voices/clone     — persist a cloned voice (multipart)
  *   POST   /v1/voices/preview   — temporary clone + preview audio (multipart)
  *   POST   /v1/voices/mix       — blend two voices (JSON)
- *   DELETE /v1/voices/:voiceId  — delete a voice
+ *   POST   /v1/voices/preset    — create/update a voice preset (JSON)
+ *   DELETE /v1/voices/:voiceId  — delete a voice (or preset)
  */
 import { manager } from '../engine/manager.js';
 import { pipePcmToClient } from '../transcode.js';
 import { logger } from '../logger.js';
 import { parseMultipart } from './multipart.js';
+import * as presets from '../presets.js';
 
 /**
  * Register all voice management routes on a Fastify instance.
@@ -47,6 +49,15 @@ export function registerVoiceRoutes(app) {
           engine: v.engine ?? (typeof engine.engineName === 'string' ? engine.engineName : 'cloud'),
           ...v,
         }));
+      } else {
+        data.voices = [];
+      }
+
+      // Merge Node-managed presets into the voice list
+      const engineName = typeof engine.engineName === 'string' ? engine.engineName : null;
+      if (engineName) {
+        const presetVoices = presets.toVoiceList(engineName);
+        data.voices.push(...presetVoices);
       }
 
       reply.send(data);
@@ -179,11 +190,53 @@ export function registerVoiceRoutes(app) {
 
   app.post('/v1/voices/mix', mixVoicesHandler);
 
+  // ── POST /v1/voices/preset ────────────────────────────────────────────────
+
+  const presetHandler = async (request, reply) => {
+    const { engine: engineName, id, name, voice, instructions, speed, extra_body } = request.body || {};
+
+    if (!engineName || !id || !name || !voice) {
+      return reply.code(400).send({
+        error: {
+          message: 'Missing required fields: engine, id, name, voice',
+          type: 'invalid_request_error',
+          code: 'missing_fields',
+        },
+      });
+    }
+
+    try {
+      const result = presets.set(engineName, { id, name, voice, instructions, speed, extra_body });
+      reply.send({
+        voice_id: result.id,
+        name: result.name,
+        voice_type: 'preset',
+        engine: engineName,
+        base_voice: result.voice,
+        ...(result.instructions ? { instructions: result.instructions } : {}),
+        ...(result.speed != null ? { speed: result.speed } : {}),
+      });
+    } catch (err) {
+      reply.code(500).send({
+        error: { message: err.message, type: 'engine_error', code: 'preset_save_failed' },
+      });
+    }
+  };
+
+  app.post('/v1/voices/preset', presetHandler);
+
   // ── DELETE /v1/voices/:voiceId ────────────────────────────────────────────
 
   const deleteVoiceHandler = async (request, reply) => {
     const model = request.query.engine || manager.currentEngine;
     const { voiceId } = request.params;
+
+    // Check Node-managed presets first — if the ID matches a preset,
+    // delete it locally without involving the engine.
+    const engineName = model && typeof model === 'string' ? model : manager.currentEngine;
+    if (presets.remove(engineName, voiceId)) {
+      return reply.send({ deleted: true });
+    }
 
     let engine;
     try {

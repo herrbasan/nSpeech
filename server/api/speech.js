@@ -13,6 +13,7 @@ import { WorkerError } from '../engine/worker.js';
 import { getContentType, normalizeFormat } from './formats.js';
 import { logger } from '../logger.js';
 import { pipePcmToClient } from '../transcode.js';
+import * as presets from '../presets.js';
 
 const log = logger.child('speech');
 
@@ -60,14 +61,30 @@ export async function relaySpeech(request, reply, body) {
     return sendError(reply, err);
   }
 
+  // ── Resolve preset (Node-managed voice configuration) ──────────────────
+  let voiceName = body.voice ?? 'default';
+  let instructions = body.instructions;
+  let speed = body.speed ?? 1.0;
+  const engineName = typeof engine.engineName === 'string' ? engine.engineName : null;
+  if (engineName) {
+    const resolved = presets.resolve(engineName, voiceName);
+    if (resolved) {
+      log.info('preset resolved', { engine: engineName, preset: voiceName, to: resolved.voice });
+      voiceName = resolved.voice;
+      if (resolved.instructions) instructions = resolved.instructions;
+      if (resolved.speed != null) speed = resolved.speed;
+      if (resolved.extra_body) Object.assign(extraBody, resolved.extra_body);
+    }
+  }
+
   // ── Generate PCM stream ─────────────────────────────────────────────────
   let pcmStream;
   try {
     pcmStream = await engine.generatePcmStream({
       text: body.input,
-      voice_name: body.voice ?? 'default',
-      speed: body.speed ?? 1.0,
-      instruct_text: body.instructions,
+      voice_name: voiceName,
+      speed,
+      instruct_text: instructions,
       extra_body: extraBody,
       model: subModel,
     });
