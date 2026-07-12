@@ -36,9 +36,14 @@
             </nui-textarea>
         </nui-input-group>
 
-        <nui-button variant="primary" id="btn-save-preset">
-            <button type="button">Save Preset</button>
-        </nui-button>
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-save-preset">
+                <button type="button">Save Preset</button>
+            </nui-button>
+            <nui-button id="btn-preview-preset">
+                <button type="button">Preview</button>
+            </nui-button>
+        </nui-button-container>
 
         <div id="preset-status" style="margin-top: var(--nui-space);"></div>
     </nui-card>
@@ -212,7 +217,7 @@ function init(element, params, nui) {
                 nameInput.value = '';
                 idInput.value = '';
                 instructionsInput.value = '';
-                voiceSelect.selectedIndex = 0;
+                voiceSelectEl.selectedIndex = 0;
                 loadAll();
             })
             .catch(function(err) {
@@ -220,7 +225,56 @@ function init(element, params, nui) {
             });
     }
 
+    function previewCurrent() {
+        var voice = voiceSelectEl.value;
+        var instructions = instructionsInput.value.trim();
+        if (!voice) {
+            statusEl.innerHTML = '<span style="color:var(--color-danger);">Select a base voice first.</span>';
+            return;
+        }
+        stop();
+        abortController = new AbortController();
+        audioEl.style.display = 'block';
+        mediaSource = new MediaSource();
+        audioEl.src = URL.createObjectURL(mediaSource);
+        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Previewing...</span>';
+
+        mediaSource.addEventListener('sourceopen', function() {
+            var sb = mediaSource.addSourceBuffer('audio/mpeg');
+            fetch('/v1/audio/speech', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: ENGINE, input: 'This is a preview of the selected voice.', voice: voice, instructions: instructions, response_format: 'mp3' }),
+                signal: abortController.signal,
+            }).then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.body.getReader();
+            }).then(function(reader) {
+                function pump() {
+                    reader.read().then(function(result) {
+                        if (result.done) {
+                            if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                            statusEl.innerHTML = '';
+                            return;
+                        }
+                        sb.appendBuffer(result.value);
+                        sb.addEventListener('updateend', function() {
+                            if (audioEl.paused) audioEl.play().catch(function() {});
+                        }, { once: true });
+                        pump();
+                    });
+                }
+                pump();
+            }).catch(function(err) {
+                if (err.name !== 'AbortError') {
+                    statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>';
+                }
+            });
+        }, { once: true });
+    }
+
     element.querySelector('#btn-save-preset button').addEventListener('click', savePreset);
+    element.querySelector('#btn-preview-preset button').addEventListener('click', previewCurrent);
     element.show = function() { loadAll(); };
 }
 </script>
