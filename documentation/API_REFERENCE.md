@@ -24,6 +24,7 @@ Every engine emits raw PCM (s16le, 24 kHz, mono). Node owns format transcoding. 
 | POST | `/v1/admin/engine` | Switch active engine (SSE progress) |
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
+| GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
 | POST | `/v1/audio/transcriptions` | Speech-to-text (proxied to nVoice) |
 | POST | `/v1/audio/align` | Forced alignment (proxied to nVoice) |
 | GET | `/health` | `{"status":"ok","version":"3.0.0","engine":"<active>"}` |
@@ -138,7 +139,7 @@ The `model` field selects a provider. Each provider has different strengths, pri
 | `"minimax"` | Cloud | Best quality, sound effects, 332+ voices | ~1s | ✅ ($1.50/voice) | 10K chars |
 | `"elevenlabs"` | Cloud | Voice consistency, 32 languages | ~1s | ✅ (instant) | 5K chars |
 | `"gemini"` | Cloud | 80+ languages, auto-detect | ~1s | — | 5K chars |
-| `"xai"` | Cloud | Grok integration | ~1s | — | 5K chars |
+| `"xai"` | Cloud | Grok integration | ~1s | ✅ | 5K chars |
 
 The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). The local engines (kokoro, chatterbox, dots) are NOT exposed as model names — clients use `"nspeech"` and get whatever engine the dashboard selected.
 
@@ -294,6 +295,17 @@ curl -X POST http://127.0.0.1:2233/v1/voices/clone?engine=minimax \
 curl -N -X POST http://127.0.0.1:2233/v1/admin/engine \
   -H "Content-Type: application/json" -d '{"engine":"minimax"}'
 
-# List available engines
+# List engines
 curl http://127.0.0.1:2233/v1/admin/engines
+
+# Live event stream
+curl -N http://127.0.0.1:2233/v1/admin/events
+
+# One-shot clone + generate
+curl -X POST "http://127.0.0.1:2233/v1/audio/speech/clone?engine=minimax&response_format=mp3" \
+  -F "name=temp" -F "audio=@reference.wav" -F "text=Hello from my cloned voice." \
+  --output out.mp3
+
+# Manager status
+curl http://127.0.0.1:2233/v1/admin/status
 ```
