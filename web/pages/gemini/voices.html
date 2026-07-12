@@ -243,37 +243,68 @@ function init(element, params, nui) {
         }
         stop();
         abortController = new AbortController();
-        audioEl.style.display = 'block';
+        var startTime = performance.now();
+
+        var newAudio = document.createElement('audio');
+        newAudio.controls = true;
+        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space); display: block;';
+        if (audioEl.parentNode) audioEl.replaceWith(newAudio);
+        audioEl = newAudio;
+
         mediaSource = new MediaSource();
         audioEl.src = URL.createObjectURL(mediaSource);
         statusEl.innerHTML = '<span style="color:var(--color-shade6);">Previewing...</span>';
 
         mediaSource.addEventListener('sourceopen', function() {
             var sb = mediaSource.addSourceBuffer('audio/mpeg');
+            var queue = [];
+            var appending = false;
+            var ended = false;
+
+            function tryPlay() {
+                if (!audioEl.paused || sb.buffered.length === 0) return;
+                audioEl.play().catch(function() {});
+            }
+
+            function pumpQueue() {
+                if (appending || queue.length === 0) {
+                    if (ended && !appending && mediaSource.readyState === 'open') {
+                        mediaSource.endOfStream();
+                        statusEl.innerHTML = '';
+                    }
+                    return;
+                }
+                appending = true;
+                sb.appendBuffer(queue.shift());
+                sb.addEventListener('updateend', function() {
+                    appending = false;
+                    tryPlay();
+                    pumpQueue();
+                }, { once: true });
+            }
+
             fetch('/v1/audio/speech', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ model: ENGINE, input: text, voice: voice, instructions: instructions, response_format: 'mp3' }),
                 signal: abortController.signal,
             }).then(function(res) {
-                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                if (!res.ok) return res.json().then(function(d) { throw new Error(d.error?.message || 'HTTP ' + res.status); });
                 return res.body.getReader();
             }).then(function(reader) {
-                function pump() {
+                function readLoop() {
                     reader.read().then(function(result) {
                         if (result.done) {
-                            if (mediaSource.readyState === 'open') mediaSource.endOfStream();
-                            statusEl.innerHTML = '';
+                            ended = true;
+                            pumpQueue();
                             return;
                         }
-                        sb.appendBuffer(result.value);
-                        sb.addEventListener('updateend', function() {
-                            if (audioEl.paused) audioEl.play().catch(function() {});
-                        }, { once: true });
-                        pump();
+                        queue.push(result.value);
+                        pumpQueue();
+                        readLoop();
                     });
                 }
-                pump();
+                readLoop();
             }).catch(function(err) {
                 if (err.name !== 'AbortError') {
                     statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>';
