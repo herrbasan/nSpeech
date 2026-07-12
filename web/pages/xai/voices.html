@@ -77,21 +77,13 @@
         <nui-input-group>
             <label for="xai-preset-instructions">Instructions</label>
             <nui-textarea min-rows="2" max-rows="4">
-                <textarea id="xai-preset-instructions" placeholder="Speak in the cadence of a public intellectual.">Speak clearly and warmly.</textarea>
+                <textarea id="xai-preset-instructions" placeholder="Speak in the cadence of a public intellectual."></textarea>
             </nui-textarea>
         </nui-input-group>
 
-        <nui-input-group>
-            <label for="xai-preset-test-phrase">Test Phrase</label>
-            <nui-textarea min-rows="1" max-rows="3">
-                <textarea id="xai-preset-test-phrase" placeholder="This is a preview of the selected voice.">Hello, this is a preview of my voice.</textarea>
-            </nui-textarea>
-        </nui-input-group>
-
-        <nui-button-container gap="medium">
-            <nui-button variant="primary" id="btn-xai-save-preset"><button type="button">Save Preset</button></nui-button>
-            <nui-button id="btn-xai-preview-preset"><button type="button">Preview</button></nui-button>
-        </nui-button-container>
+        <nui-button variant="primary" id="btn-xai-save-preset">
+            <button type="button">Save Preset</button>
+        </nui-button>
 
         <div id="xai-preset-status" style="margin-top: var(--nui-space);"></div>
         <div id="xai-preset-list" style="margin-top: var(--nui-space-double);"></div>
@@ -261,34 +253,6 @@ function init(element, params, nui) {
     }
 
     element.querySelector('#btn-xai-save-preset button').addEventListener('click', savePreset);
-    element.querySelector('#btn-xai-preview-preset button').addEventListener('click', previewCurrent);
-
-    function previewCurrent() {
-        var testPhraseEl2 = element.querySelector('#xai-preset-test-phrase');
-        var text = (testPhraseEl2 ? testPhraseEl2.value.trim() : '') || 'This is a preview.';
-        var voice = element.querySelector('#xai-preset-voice').value;
-        var instructions = element.querySelector('#xai-preset-instructions').value.trim();
-        if (!voice) { element.querySelector('#xai-preset-status').innerHTML = '<span style="color:var(--color-danger);">Select a base voice first.</span>'; return; }
-        stop();
-        abortController = new AbortController();
-        element.querySelector('#xai-preset-status').innerHTML = '<span style="color:var(--color-shade6);">Previewing...</span>';
-        fetch('/v1/audio/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'xai', input: text, voice: voice, instructions: instructions, response_format: 'mp3' }), signal: abortController.signal })
-            .then(function(r) { if (!r.ok) return r.text().then(function(t) { throw new Error(t); }); return r.body.getReader(); })
-            .then(function(reader) {
-                var queue = [], appending = false, ended = false;
-                var newAudio = document.createElement('audio'); newAudio.controls = true; newAudio.style.cssText = 'width:100%;margin-top:var(--nui-space);display:block;';
-                if (previewAudio.parentNode) previewAudio.replaceWith(newAudio);
-                previewAudio = newAudio;
-                var ms = new MediaSource(); previewAudio.src = URL.createObjectURL(ms);
-                ms.addEventListener('sourceopen', function() {
-                    var sb = ms.addSourceBuffer('audio/mpeg');
-                    function tryPlay() { if (!previewAudio.paused || sb.buffered.length===0) return; previewAudio.play().catch(function(){}); }
-                    function pump() { if (appending||queue.length===0) { if (ended&&!appending&&ms.readyState==='open') { ms.endOfStream(); element.querySelector('#xai-preset-status').innerHTML=''; } return; } appending=true; sb.appendBuffer(queue.shift()); sb.addEventListener('updateend',function(){appending=false;tryPlay();pump();},{once:true}); }
-                    function readLoop() { reader.read().then(function(r){ if(r.done){ended=true;pump();return;} queue.push(r.value); pump(); readLoop(); }); }
-                    readLoop();
-                }, { once: true });
-            }).catch(function(err) { if (err.name!=='AbortError') element.querySelector('#xai-preset-status').innerHTML='<span style="color:var(--color-danger);">Preview failed: '+err.message+'</span>'; });
-    }
 
     function previewPreset(id) {
         var ENGINE = 'xai';
