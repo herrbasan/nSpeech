@@ -1,0 +1,320 @@
+<div class="page-gemini-voices">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Gemini — Voice Presets</h1>
+        <p class="lead">Combine a Gemini voice with instructions to create a reusable character preset.</p>
+    </header>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Create Preset</h3>
+        <p class="lead" style="margin-bottom: var(--nui-space)">Choose a base voice and write instructions that define how it speaks.</p>
+
+        <nui-input-group>
+            <label for="gemini-preset-name">Preset Name</label>
+            <nui-input>
+                <input type="text" id="gemini-preset-name" placeholder="Smart Lady">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="gemini-preset-id">ID (URL-safe slug)</label>
+            <nui-input>
+                <input type="text" id="gemini-preset-id" placeholder="smart-lady">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="gemini-preset-voice">Base Voice</label>
+            <nui-select id="gemini-preset-voice-select">
+                <select id="gemini-preset-voice"><option value="">Loading...</option></select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="gemini-preset-instructions">Instructions</label>
+            <nui-textarea min-rows="2" max-rows="4">
+                <textarea id="gemini-preset-instructions" placeholder="Speak in the cadence of a public intellectual.">Speak clearly and warmly, with a natural conversational flow.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="gemini-preset-test-phrase">Test Phrase</label>
+            <nui-textarea min-rows="1" max-rows="3">
+                <textarea id="gemini-preset-test-phrase" placeholder="This is a preview of the selected voice.">Hello, this is a preview of my voice. I hope you enjoy the sound of it.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-gemini-save-preset">
+                <button type="button">Save Preset</button>
+            </nui-button>
+            <nui-button id="btn-gemini-preview-preset">
+                <button type="button">Preview</button>
+            </nui-button>
+        </nui-button-container>
+
+        <div id="gemini-preset-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Your Presets</h3>
+        <div id="gemini-preset-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+    </nui-card>
+
+    <audio id="gemini-preset-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    var ENGINE = 'gemini';
+    var presetListEl = element.querySelector('#gemini-preset-list');
+    var statusEl = element.querySelector('#gemini-preset-status');
+    var voiceSelect = element.querySelector('#gemini-preset-voice-select');
+    var voiceSelectEl = element.querySelector('#gemini-preset-voice');
+    var nameInput = element.querySelector('#gemini-preset-name');
+    var idInput = element.querySelector('#gemini-preset-id');
+    var instructionsInput = element.querySelector('#gemini-preset-instructions');
+    var testPhraseEl = element.querySelector('#gemini-preset-test-phrase');
+    var audioEl = element.querySelector('#gemini-preset-audio');
+    var allVoices = [];
+    var abortController = null;
+    var mediaSource = null;
+
+    function loadAll() {
+        fetch('/v1/voices?engine=' + ENGINE)
+            .then(function(r) { return r.json(); })
+            .then(function(d) {
+                allVoices = d.voices || [];
+                populateVoiceDropdown();
+                loadPresets();
+            })
+            .catch(function(err) {
+                presetListEl.innerHTML = '<p style="color:var(--color-danger)">Failed to load: ' + err.message + '</p>';
+            });
+    }
+
+    function populateVoiceDropdown() {
+        var options = [];
+        for (var i = 0; i < allVoices.length; i++) {
+            if (allVoices[i].voice_type !== 'preset') {
+                options.push({ value: allVoices[i].voice_id, label: allVoices[i].name + ' \u2014 ' + (allVoices[i].description || '') });
+            }
+        }
+        voiceSelect.setItems([{ group: 'Gemini Voices', options: options }]);
+    }
+
+    function loadPresets() {
+        var presets = allVoices.filter(function(v) { return v.voice_type === 'preset'; });
+        if (!presets.length) {
+            presetListEl.innerHTML = '<p style="color: var(--color-shade6);">No presets yet.</p>';
+            return;
+        }
+        var html = '<div style="display: grid; gap: var(--nui-space-half);">';
+        for (var i = 0; i < presets.length; i++) {
+            var p = presets[i];
+            html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half);border:1px solid var(--border-shade1-4);border-radius:var(--border-radius1-3);">' +
+                '<div><strong>' + p.name + '</strong> <code style="font-size:0.85em;">' + p.voice_id + '</code><br>' +
+                '<span style="color:var(--color-shade6);font-size:0.85em;">voice: <code>' + p.base_voice + '</code>' + (p.instructions ? ' \u2014 ' + p.instructions.slice(0, 50) + '\u2026' : '') + '</span></div>' +
+                '<div style="display:flex;gap:var(--nui-space-half);">' +
+                '<nui-button data-preview-preset="' + p.voice_id + '"><button type="button">Preview</button></nui-button>' +
+                '<nui-button variant="danger" data-delete-preset="' + p.voice_id + '"><button type="button">Delete</button></nui-button>' +
+                '</div></div>';
+        }
+        html += '</div>';
+        presetListEl.innerHTML = html;
+
+        var previewBtns = presetListEl.querySelectorAll('[data-preview-preset]');
+        for (var d = 0; d < previewBtns.length; d++) {
+            (function(id) {
+                previewBtns[d].querySelector('button').addEventListener('click', function() { previewPreset(id); });
+            })(previewBtns[d].dataset.previewPreset);
+        }
+
+        var deleteBtns = presetListEl.querySelectorAll('[data-delete-preset]');
+        for (var d = 0; d < deleteBtns.length; d++) {
+            (function(id) {
+                deleteBtns[d].querySelector('button').addEventListener('click', function() { deletePreset(id); });
+            })(deleteBtns[d].dataset.deletePreset);
+        }
+    }
+
+    function stop() {
+        if (abortController) { abortController.abort(); abortController = null; }
+        if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+        if (mediaSource && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch (_) {} }
+        mediaSource = null;
+    }
+
+    function previewPreset(id) {
+        var preset = allVoices.find(function(v) { return v.voice_id === id && v.voice_type === 'preset'; });
+        if (!preset) return;
+        stop();
+
+        abortController = new AbortController();
+        audioEl.style.display = 'block';
+        mediaSource = new MediaSource();
+        audioEl.src = URL.createObjectURL(mediaSource);
+        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Playing preset: ' + preset.name + '</span>';
+
+        mediaSource.addEventListener('sourceopen', function() {
+            var sb = mediaSource.addSourceBuffer('audio/mpeg');
+            fetch('/v1/audio/speech', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: ENGINE, input: preset.name + '. This is a preview.', voice: id, response_format: 'mp3' }),
+                signal: abortController.signal,
+            }).then(function(res) {
+                if (!res.ok) return res.text().then(function(t) { throw new Error(t); });
+                return res.body.getReader();
+            }).then(function(reader) {
+                function pump() {
+                    reader.read().then(function(result) {
+                        if (result.done) {
+                            if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                            statusEl.innerHTML = '';
+                            return;
+                        }
+                        sb.appendBuffer(result.value);
+                        sb.addEventListener('updateend', function() {
+                            if (audioEl.paused) audioEl.play().catch(function() {});
+                        }, { once: true });
+                        pump();
+                    });
+                }
+                pump();
+            }).catch(function(err) {
+                if (err.name !== 'AbortError') {
+                    statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>';
+                }
+            });
+        }, { once: true });
+    }
+
+    function deletePreset(id) {
+        fetch('/v1/voices/' + id + '?engine=' + ENGINE, { method: 'DELETE' })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                statusEl.innerHTML = '<span style="color:var(--color-highlight);">Preset deleted.</span>';
+                loadAll();
+            })
+            .catch(function(err) {
+                statusEl.innerHTML = '<span style="color:var(--color-danger);">Delete failed: ' + err.message + '</span>';
+            });
+    }
+
+    function savePreset() {
+        var id = idInput.value.trim();
+        var name = nameInput.value.trim();
+        var voice = voiceSelectEl.value;
+        var instructions = instructionsInput.value.trim();
+
+        if (!name || !id || !voice) {
+            statusEl.innerHTML = '<span style="color:var(--color-danger);">Name, ID, and base voice are required.</span>';
+            return;
+        }
+
+        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Saving...</span>';
+
+        fetch('/v1/voices/preset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine: ENGINE, id: id, name: name, voice: voice, instructions: instructions }),
+        })
+            .then(function(r) { return r.json(); })
+            .then(function() {
+                statusEl.innerHTML = '<span style="color:var(--color-highlight);">Preset saved!</span>';
+                nameInput.value = '';
+                idInput.value = '';
+                instructionsInput.value = '';
+                voiceSelectEl.selectedIndex = 0;
+                loadAll();
+            })
+            .catch(function(err) {
+                statusEl.innerHTML = '<span style="color:var(--color-danger);">Save failed: ' + err.message + '</span>';
+            });
+    }
+
+    function previewCurrent() {
+        var text = testPhraseEl.value.trim() || 'This is a preview of the selected voice.';
+        var voice = voiceSelectEl.value;
+        var instructions = instructionsInput.value.trim();
+        if (!voice) {
+            statusEl.innerHTML = '<span style="color:var(--color-danger);">Select a base voice first.</span>';
+            return;
+        }
+        stop();
+        abortController = new AbortController();
+        var startTime = performance.now();
+
+        var newAudio = document.createElement('audio');
+        newAudio.controls = true;
+        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space); display: block;';
+        if (audioEl.parentNode) audioEl.replaceWith(newAudio);
+        audioEl = newAudio;
+
+        mediaSource = new MediaSource();
+        audioEl.src = URL.createObjectURL(mediaSource);
+        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Previewing...</span>';
+
+        mediaSource.addEventListener('sourceopen', function() {
+            var sb = mediaSource.addSourceBuffer('audio/mpeg');
+            var queue = [];
+            var appending = false;
+            var ended = false;
+
+            function tryPlay() {
+                if (!audioEl.paused || sb.buffered.length === 0) return;
+                audioEl.play().catch(function() {});
+            }
+
+            function pumpQueue() {
+                if (appending || queue.length === 0) {
+                    if (ended && !appending && mediaSource.readyState === 'open') {
+                        mediaSource.endOfStream();
+                        statusEl.innerHTML = '';
+                    }
+                    return;
+                }
+                appending = true;
+                sb.appendBuffer(queue.shift());
+                sb.addEventListener('updateend', function() {
+                    appending = false;
+                    tryPlay();
+                    pumpQueue();
+                }, { once: true });
+            }
+
+            fetch('/v1/audio/speech', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ model: ENGINE, input: text, voice: voice, instructions: instructions, response_format: 'mp3' }),
+                signal: abortController.signal,
+            }).then(function(res) {
+                if (!res.ok) return res.json().then(function(d) { throw new Error(d.error?.message || 'HTTP ' + res.status); });
+                return res.body.getReader();
+            }).then(function(reader) {
+                function readLoop() {
+                    reader.read().then(function(result) {
+                        if (result.done) {
+                            ended = true;
+                            pumpQueue();
+                            return;
+                        }
+                        queue.push(result.value);
+                        pumpQueue();
+                        readLoop();
+                    });
+                }
+                readLoop();
+            }).catch(function(err) {
+                if (err.name !== 'AbortError') {
+                    statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>';
+                }
+            });
+        }, { once: true });
+    }
+
+    element.querySelector('#btn-gemini-save-preset button').addEventListener('click', savePreset);
+    element.querySelector('#btn-gemini-preview-preset button').addEventListener('click', previewCurrent);
+    element.show = function() { loadAll(); };
+}
+</script>
