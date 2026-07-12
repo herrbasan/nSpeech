@@ -11,7 +11,7 @@
  *   get(engine, id)   → preset object or null
  *   set(engine, preset) → writes JSON file, returns preset
  *   remove(engine, id) → deletes from JSON file, returns boolean
- *   resolve(engine, voiceId) → expanded {voice, instructions?, speed?, extra_body?} or null
+ *   lookup(engine, voiceId) → expanded {voice, instructions?, speed?, extra_body?} or null
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -128,7 +128,7 @@ export function remove(engine, id) {
  * @param {string} voiceId — the voice ID to resolve
  * @returns {{voice: string, instructions?: string, speed?: number, extra_body?: object}|null}
  */
-export function resolve(engine, voiceId) {
+export function lookup(engine, voiceId) {
   const preset = get(engine, voiceId);
   if (!preset) return null;
   return {

@@ -67,7 +67,7 @@ export async function relaySpeech(request, reply, body) {
   let speed = body.speed ?? 1.0;
   const engineName = typeof engine.engineName === 'string' ? engine.engineName : null;
   if (engineName) {
-    const resolved = presets.resolve(engineName, voiceName);
+    const resolved = presets.lookup(engineName, voiceName);
     if (resolved) {
       log.info('preset resolved', { engine: engineName, preset: voiceName, to: resolved.voice });
       voiceName = resolved.voice;
