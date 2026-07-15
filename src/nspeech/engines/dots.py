@@ -198,8 +198,8 @@ class DotsAdapter:
 
         # Allow checkpoint override per-request via model param
         # (requires reloading runtime — expensive, so only if different)
-        num_steps = kwargs.get("steps", kwargs.get("num_steps", 4))
-        guidance_scale = kwargs.get("guidance_scale", 1.2)
+        num_steps = kwargs.get("inference_steps", kwargs.get("steps", kwargs.get("num_steps", 8)))
+        guidance_scale = kwargs.get("guidance_scale", 1.5)
         seed = kwargs.get("seed", 42)
         batch = kwargs.get("batch", kwargs.get("offline", False))
 
@@ -228,10 +228,8 @@ class DotsAdapter:
                 num_steps=num_steps,
                 guidance_scale=guidance_scale,
             )
-            audio = result["audio"]  # shape (1, samples) at native rate
-            pcm = audio.detach().float().cpu()
-            if pcm.dim() > 1:
-                pcm = pcm.squeeze(0)
+            audio = result["audio"]  # shape (1, samples) or (1, 1, samples) at native rate
+            pcm = audio.detach().float().cpu().flatten()
             if self.native_sample_rate != 24000:
                 pcm = self._resampler(pcm.unsqueeze(0)).squeeze(0)
             yield pcm, True
@@ -249,10 +247,8 @@ class DotsAdapter:
         )
 
         for chunk in stream:
-            # chunk is torch.Tensor shape (1, samples) at native sample rate
-            pcm = chunk.detach().float().cpu()
-            if pcm.dim() > 1:
-                pcm = pcm.squeeze(0)
+            # chunk may be (1, samples) or (1, 1, samples) at native sample rate
+            pcm = chunk.detach().float().cpu().flatten()
             # Resample 48kHz -> 24kHz per patch. The FIR filter's edge support is
             # ~50 samples vs ~7300 samples/patch, so boundary transients are
             # sub-percent — far better than the prompt-text mismatch blip. True
