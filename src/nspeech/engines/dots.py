@@ -11,8 +11,8 @@ dots.tts is architecturally different from Chatterbox:
 
 Three checkpoints share the same backbone:
 - dots.tts-base  (10-32 NFE, default 10)
-- dots.tts-soar  (10-32 NFE, best cloning quality)
-- dots.tts-mf    (4 NFE, MeanFlow distilled, fastest — default for nSpeech)
+- dots.tts-soar  (10-32 NFE, best cloning quality — default for nSpeech)
+- dots.tts-mf    (4 NFE, MeanFlow distilled, fastest)
 
 Output is 48 kHz. Adapter resamples to 24 kHz mono float32 to match nSpeech standard.
 
