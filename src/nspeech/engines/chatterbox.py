@@ -108,12 +108,13 @@ class ChatterboxAdapter:
     def clone(self, audio_path, voice_name, **kwargs):
         start_time = time.time()
         model = self._get_model()
-        exaggeration = kwargs.get("exaggeration", 0.5)
+        # Accept both 'expressiveness' (API standard) and 'exaggeration' (legacy)
+        expressiveness = kwargs.get("expressiveness", kwargs.get("exaggeration", 0.5))
 
         if self.model_type == "turbo":
-            model.prepare_conditionals(audio_path, exaggeration=exaggeration, norm_loudness=False)
+            model.prepare_conditionals(audio_path, exaggeration=expressiveness, norm_loudness=False)
         else:
-            model.prepare_conditionals(audio_path, exaggeration=exaggeration)
+            model.prepare_conditionals(audio_path, exaggeration=expressiveness)
 
         cache_path = self._cache_path(voice_name)
         model.conds.save(cache_path)
@@ -127,7 +128,8 @@ class ChatterboxAdapter:
 
     def generate(self, text, **kwargs):
         model = self._get_model()
-        exaggeration = kwargs.get("exaggeration", 0.5)
+        # Accept both 'expressiveness' (API standard) and 'exaggeration' (legacy)
+        expressiveness = kwargs.get("expressiveness", kwargs.get("exaggeration", 0.5))
         language = kwargs.get("language")
         language_id = LANGUAGE_MAP.get(language, "en") if language else "en"
 
@@ -140,9 +142,9 @@ class ChatterboxAdapter:
             if self.model_type == "turbo":
                 chunk_tensor = model.generate(text=sentence, audio_prompt_path="")
             elif self.model_type == "mtl":
-                chunk_tensor = model.generate(text=sentence, exaggeration=exaggeration, language_id=language_id)
+                chunk_tensor = model.generate(text=sentence, exaggeration=expressiveness, language_id=language_id)
             else:
-                chunk_tensor = model.generate(text=sentence, exaggeration=exaggeration)
+                chunk_tensor = model.generate(text=sentence, exaggeration=expressiveness)
             yield chunk_tensor, is_final
 
     def list_voices(self) -> list:

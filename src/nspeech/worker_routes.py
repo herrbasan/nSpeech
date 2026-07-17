@@ -247,8 +247,56 @@ def create_app(engine_name: str) -> FastAPI:
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"Engine load failed: {e}")
 
-        # Load voice if specified
-        if req.voice_name and req.voice_name != "default":
+        # ── Voice resolution: blend overrides voice_name ────────────────────
+        # If extra_body.blend is present, compute a weighted blend of voice
+        # styles and inject it as a synthetic voice. This is engine-specific
+        # (currently only Kokoro supports style extraction + blending).
+        blend_spec = req.extra_body.get("blend") if req.extra_body else None
+        if blend_spec and isinstance(blend_spec, list) and len(blend_spec) > 0:
+            if not hasattr(engine, "pipeline") or not hasattr(engine.pipeline, "get_voice_style"):
+                raise HTTPException(status_code=400, detail="Current engine does not support per-request voice blending")
+
+            def _do_blend():
+                import hashlib
+                # Deterministic synthetic name from blend spec
+                blend_key = "|".join(f"{b.get('voice_id')}:{b.get('weight',50)}" for b in blend_spec)
+                blend_hash = hashlib.md5(blend_key.encode()).hexdigest()[:12]
+                synthetic_name = f"__blend_{blend_hash}"
+
+                # Check cache first
+                with engine._voice_lock:
+                    if synthetic_name in engine.active_voices:
+                        return synthetic_name
+
+                # Compute weighted blend
+                total_weight = sum(b.get("weight", 50) for b in blend_spec)
+                if total_weight == 0:
+                    raise ValueError("Total blend weight is zero")
+
+                blended = None
+                for b in blend_spec:
+                    vid = b.get("voice_id")
+                    weight = b.get("weight", 50) / total_weight
+                    style = engine.pipeline.get_voice_style(vid)
+                    if not isinstance(style, torch.Tensor):
+                        style = torch.from_numpy(style)
+                    if blended is None:
+                        blended = style * weight
+                    else:
+                        blended = blended + style * weight
+
+                with engine._voice_lock:
+                    engine.active_voices[synthetic_name] = blended
+                return synthetic_name
+
+            try:
+                synthetic_voice = await asyncio.to_thread(_do_blend)
+                req.voice_name = synthetic_voice
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Blend failed: {e}")
+
+        # Load voice if specified (skip if we just synthesized a blend)
+        if req.voice_name and req.voice_name != "default" and not blend_spec:
             def _load_voice():
                 try:
                     import inspect
@@ -276,6 +324,7 @@ def create_app(engine_name: str) -> FastAPI:
 
         # Merge extra_body into kwargs
         gen_kwargs = dict(
+            voice_name=req.voice_name,
             exaggeration=req.exaggeration,
             speed=req.speed,
             instruct_text=req.instruct_text,
@@ -289,6 +338,8 @@ def create_app(engine_name: str) -> FastAPI:
         # via **kwargs; unknown keys are ignored.
         if req.extra_body:
             gen_kwargs.update(req.extra_body)
+        # Remove blend from gen_kwargs — already handled above
+        gen_kwargs.pop("blend", None)
 
         # Offline path: buffer all, validate, return single response
         if req.offline:

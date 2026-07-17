@@ -524,11 +524,8 @@ export class WorkerProcess {
     };
     if (instruct_text) workerBody.instruct_text = instruct_text;
     if (model) workerBody.model = model;
-    // Carry engine-specific top-level fields for older adapters
-    if (eb.expressiveness !== undefined) workerBody.exaggeration = eb.expressiveness;
+    // Seed is a top-level worker field for backward compat with older adapters
     if (eb.seed !== undefined) workerBody.seed = eb.seed;
-    if (eb.inference_steps !== undefined) workerBody.extra_body.steps = eb.inference_steps;
-    if (eb.guidance_scale !== undefined) workerBody.extra_body.guidance_scale = eb.guidance_scale;
     if (eb.language) workerBody.language = eb.language;
 
     const resp = await this.relay('POST', '/v1/audio/speech', {
