@@ -804,7 +804,19 @@ function sleep(ms) {
  */
 export class WorkerError extends Error {
   constructor(status, code, message) {
-    super(message);
+    // Try to parse worker's JSON error body for a cleaner message
+    let parsedMessage = message;
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed?.error?.message) {
+        parsedMessage = parsed.error.message;
+      } else if (parsed?.detail) {
+        parsedMessage = parsed.detail;
+      }
+    } catch {
+      // Not JSON — use raw text as-is
+    }
+    super(parsedMessage);
     this.name = 'WorkerError';
     this.status = status;
     this.code = code;

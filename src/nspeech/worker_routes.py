@@ -254,7 +254,10 @@ def create_app(engine_name: str) -> FastAPI:
         blend_spec = req.extra_body.get("blend") if req.extra_body else None
         if blend_spec and isinstance(blend_spec, list) and len(blend_spec) > 0:
             if not hasattr(engine, "pipeline") or not hasattr(engine.pipeline, "get_voice_style"):
-                raise HTTPException(status_code=400, detail="Current engine does not support per-request voice blending")
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": {"message": "Current engine does not support per-request voice blending", "type": "invalid_request_error", "code": "blend_not_supported"}},
+                )
 
             def _do_blend():
                 import hashlib
@@ -293,7 +296,10 @@ def create_app(engine_name: str) -> FastAPI:
                 synthetic_voice = await asyncio.to_thread(_do_blend)
                 req.voice_name = synthetic_voice
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Blend failed: {e}")
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": {"message": f"Blend failed: {e}", "type": "invalid_request_error", "code": "blend_failed"}},
+                )
 
         # Load voice if specified (skip if we just synthesized a blend)
         if req.voice_name and req.voice_name != "default" and not blend_spec:
@@ -320,7 +326,10 @@ def create_app(engine_name: str) -> FastAPI:
             try:
                 await asyncio.to_thread(_load_voice)
             except Exception as e:
-                raise HTTPException(status_code=404, detail=f"Voice not found: {req.voice_name}")
+                return JSONResponse(
+                    status_code=404,
+                    content={"error": {"message": f"Voice not found: {req.voice_name}", "type": "invalid_request_error", "code": "voice_not_found"}},
+                )
 
         # Merge extra_body into kwargs
         gen_kwargs = dict(
