@@ -364,6 +364,8 @@ Instant voice cloning. Clone + preview audio in one call. Cloned voice usable im
 {"voice_id": "my_voice_01"}
 ```
 
+**⚠️ Soft-delete behavior:** Deleted voices disappear from `/v1/get_voice` but the voice_id remains reserved on MiniMax's backend. Re-using the same voice_id for a new clone returns error `2039: voice clone voice id duplicate`. The duration of this reservation is unknown (likely tied to the 7-day TTL for unused voices). Workaround: use a different voice_id (e.g., append `_v2`, `_new`, or a timestamp).
+
 ---
 
 ## 6. Rate Limits & Constraints
