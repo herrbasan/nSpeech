@@ -69,6 +69,11 @@
         <div id="kv-mix-status" style="margin-top: var(--nui-space);"></div>
     </nui-card>
 
+    <nui-card>
+        <h3 style="margin-top: 0">Blended Voices</h3>
+        <div id="kv-voice-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+    </nui-card>
+
     <audio id="kv-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
 </div>
 
@@ -112,6 +117,35 @@ function init(element, params, nui) {
         const items = kokoroVoices.map(v => ({ value: v.name, label: v.name }));
         selectA.setItems(items);
         selectB.setItems(items);
+    }
+
+    function buildVoiceRow(name) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);';
+        const label = document.createElement('span');
+        label.textContent = name;
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.textContent = 'Delete';
+        delBtn.addEventListener('click', async () => {
+            await fetch(`/v1/voices/${encodeURIComponent(name)}?engine=kokoro`, { method: 'DELETE' });
+            loadVoiceList();
+        });
+        row.appendChild(label);
+        row.appendChild(delBtn);
+        return row;
+    }
+
+    function loadVoiceList() {
+        const listEl = element.querySelector('#kv-voice-list');
+        const blended = allVoices.filter(v => v.voice_type === 'blended');
+
+        if (blended.length === 0) {
+            listEl.innerHTML = '<p style="color: var(--color-shade6)">No blended voices yet.</p>';
+        } else {
+            listEl.innerHTML = '';
+            blended.forEach(v => listEl.appendChild(buildVoiceRow(v.name)));
+        }
     }
 
     blendSlider.addEventListener('input', () => {
@@ -303,6 +337,7 @@ function init(element, params, nui) {
             .then(d => {
                 allVoices = d.voices || [];
                 loadVoices();
+                loadVoiceList();
             });
     };
 
