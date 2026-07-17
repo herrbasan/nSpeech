@@ -55,8 +55,9 @@ function init(element, params, nui) {
                 const allVoices = d.voices || [];
                 const builtins = allVoices.filter(v => v.voice_type === 'builtin').map(v => ({ value: v.name, label: v.name }));
                 const blended = allVoices.filter(v => v.voice_type === 'blended').map(v => ({ value: v.name, label: v.name }));
-                const groups = [{ group: 'Built-in', options: builtins }];
+                const groups = [];
                 if (blended.length) groups.push({ group: 'Blended', options: blended });
+                groups.push({ group: 'Built-in', options: builtins });
                 voiceSelect.setItems(groups);
             })
             .catch(() => {
