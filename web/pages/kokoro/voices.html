@@ -124,16 +124,32 @@ function init(element, params, nui) {
         row.style.cssText = 'display: flex; align-items: center; justify-content: space-between; padding: var(--nui-space-half) 0; border-bottom: 1px solid var(--color-shade2);';
         const label = document.createElement('span');
         label.textContent = name;
+        const btnWrap = document.createElement('nui-button');
+        btnWrap.setAttribute('variant', 'danger');
         const delBtn = document.createElement('button');
         delBtn.type = 'button';
         delBtn.textContent = 'Delete';
-        delBtn.addEventListener('click', async () => {
-            await fetch(`/v1/voices/${encodeURIComponent(name)}?engine=kokoro`, { method: 'DELETE' });
-            loadVoiceList();
-        });
+        delBtn.setAttribute('data-action', 'delete-voice:' + name);
+        btnWrap.appendChild(delBtn);
         row.appendChild(label);
-        row.appendChild(delBtn);
+        row.appendChild(btnWrap);
         return row;
+    }
+
+    function onAction(e) {
+        if (e.detail.name !== 'delete-voice') return;
+        e.stopPropagation();
+        const voiceId = e.detail.param;
+        const nuiBtn = e.detail.target.closest('nui-button');
+        if (nuiBtn) nuiBtn.setLoading(true);
+
+        fetch('/v1/voices/' + encodeURIComponent(voiceId) + '?engine=kokoro', { method: 'DELETE' })
+            .then(r => r.json().then(d => ({ ok: r.ok, data: d })).catch(() => ({ ok: r.ok })))
+            .then(({ ok }) => {
+                if (ok) loadVoiceList();
+                else if (nuiBtn) nuiBtn.setLoading(false);
+            })
+            .catch(() => { if (nuiBtn) nuiBtn.setLoading(false); });
     }
 
     function loadVoiceList() {
@@ -332,6 +348,7 @@ function init(element, params, nui) {
     });
 
     element.show = () => {
+        element.addEventListener('nui-action', onAction);
         fetch('/v1/voices?engine=kokoro')
             .then(r => r.json())
             .then(d => {
@@ -341,6 +358,9 @@ function init(element, params, nui) {
             });
     };
 
-    element.hide = () => stopPreview();
+    element.hide = () => {
+        element.removeEventListener('nui-action', onAction);
+        stopPreview();
+    };
 }
 </script>
