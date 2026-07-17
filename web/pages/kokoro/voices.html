@@ -146,8 +146,17 @@ function init(element, params, nui) {
         fetch('/v1/voices/' + encodeURIComponent(voiceId) + '?engine=kokoro', { method: 'DELETE' })
             .then(r => r.json().then(d => ({ ok: r.ok, data: d })).catch(() => ({ ok: r.ok })))
             .then(({ ok }) => {
-                if (ok) loadVoiceList();
-                else if (nuiBtn) nuiBtn.setLoading(false);
+                if (ok) {
+                    // Re-fetch voices from server so the deleted one is gone
+                    return fetch('/v1/voices?engine=kokoro')
+                        .then(r => r.json())
+                        .then(d => {
+                            allVoices = d.voices || [];
+                            loadVoices();
+                            loadVoiceList();
+                        });
+                }
+                if (nuiBtn) nuiBtn.setLoading(false);
             })
             .catch(() => { if (nuiBtn) nuiBtn.setLoading(false); });
     }
