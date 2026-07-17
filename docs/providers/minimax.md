@@ -24,6 +24,29 @@
 
 **Pricing note:** 2.8 and 2.6 series are current. speech-02 and speech-01 are legacy. Voice cloning: $1.50/voice. Voice design: $3/voice.
 
+### Token Plan (Subscription) Pricing
+
+If you have a Token Plan (`sk-cp-` key), pay-as-you-go prices are converted to token usage from your monthly quota:
+
+| Plan | Price | Monthly Quota | 5h Rolling Window | Weekly Window |
+|------|-------|---------------|-------------------|---------------|
+| **Plus** | $20/month | ~3.2B tokens | Yes | Yes |
+| **Plus HighSpeed** | $40/month | ~3.2B tokens | Yes (faster priority) | Yes |
+| **Max** | $50/month | Higher quota | Yes | Yes |
+| **Ultra** | $120/month | Highest quota | Yes | Yes |
+
+**Key facts:**
+- **Text, image, speech, and music share one quota** — voice cloning burns tokens at ~$1.50/voice equivalent
+- **5-hour rolling window** is the primary constraint — burst capacity resets continuously
+- **Weekly window** provides longer-term pacing
+- **Unused quota does not carry over** to the next billing cycle
+- **HighSpeed** = priority admission for faster response times (~2x standard Plus price)
+
+**Cost estimation for voice cloning:**
+- Each clone = ~$1.50 worth of tokens from your 5h/weekly pool
+- At $60/M chars for TTS, that's roughly 25,000 characters worth of tokens per clone
+- Heavy cloning experimentation will hit the 5h window quickly
+
 ---
 
 ## Endpoints Summary
