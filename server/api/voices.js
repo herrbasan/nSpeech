@@ -175,7 +175,8 @@ export function registerVoiceRoutes(app) {
 
     let engine;
     try {
-      engine = await manager.getEngine(model);
+      const resolved = await manager.getEngine(model);
+      engine = resolved.engine;
     } catch (err) {
       return sendError(reply, err);
     }
