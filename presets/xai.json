@@ -4,5 +4,17 @@
     "name": "Kimi",
     "voice": "ara",
     "instructions": "Speak like an young, fiercely intelligent asian woman in a podcast mid conversation, in a introspective but conversational natural tone."
+  },
+  {
+    "id": "glm",
+    "name": "GLM",
+    "voice": "castor",
+    "instructions": "Middle aged, asian intellectual speaking naturally in a conversational but serious tone."
+  },
+  {
+    "id": "gemini",
+    "name": "Gemini",
+    "voice": "celeste",
+    "instructions": "Middle aged, asian intellectual with an academic background speaking in a conversational but serious tone in a lecture."
   }
 ]

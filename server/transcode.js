@@ -29,6 +29,12 @@ const FORMAT_ARGS = {
   aac:  ['-c:a', 'aac', '-b:a', '128k', '-f', 'adts'],
 };
 
+/** Loudness normalization for streaming. Uses dynaudnorm (dynamic audio
+ * normalization) which works in real-time without requiring two passes.
+ * Target: -16 LUFS equivalent peak level. Applied to all compressed outputs.
+ * Raw PCM/WAV outputs are not normalized — they pass through unchanged. */
+const LOUDNESS_FILTER = 'dynaudnorm=f=150:g=15:p=0.95:m=10';
+
 /**
  * Spawn an ffmpeg process that reads raw PCM from stdin and writes
  * compressed audio to stdout.
@@ -54,11 +60,12 @@ export function createTranscoder(outputFormat, opts = {}) {
     '-hide_banner', '-loglevel', 'error',
     '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels),
     '-i', 'pipe:0',
+    '-af', LOUDNESS_FILTER,
     ...encoderArgs,
     'pipe:1',
   ];
 
-  log.info(`spawning ffmpeg: ${outputFormat} ${sampleRate}Hz ${channels}ch`);
+  log.info(`spawning ffmpeg: ${outputFormat} ${sampleRate}Hz ${channels}ch dynaudnorm`);
 
   const proc = spawn(config.ffmpegPath, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
