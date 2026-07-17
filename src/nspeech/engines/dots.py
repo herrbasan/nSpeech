@@ -61,10 +61,11 @@ class DotsAdapter:
         if str(dots_repo_dir) not in sys.path:
             sys.path.insert(0, str(dots_repo_dir))
 
-        # Default to MeanFlow distilled (4 NFE) for speed.
+        # Default to soar (10-32 NFE) for best quality. Use NSPEECH_DOTS_CHECKPOINT
+        # env var to override: "mf" for speed, "base" for baseline, "soar" for quality.
         checkpoint = os.environ.get(
             "NSPEECH_DOTS_CHECKPOINT",
-            "rednote-hilab/dots.tts-mf"
+            "rednote-hilab/dots.tts-soar"
         )
         self._checkpoint_map = {
             "base": "rednote-hilab/dots.tts-base",
