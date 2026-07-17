@@ -197,9 +197,12 @@ class DotsAdapter:
         if voice_name and voice_name != "default" and voice_name != self._current_voice:
             self.load_voice(voice_name)
 
-        # Allow checkpoint override per-request via model param
-        # (requires reloading runtime — expensive, so only if different)
-        num_steps = kwargs.get("inference_steps", kwargs.get("steps", kwargs.get("num_steps", 8)))
+        # Checkpoint-specific defaults: soar uses 10 NFE (quality), mf uses 4 NFE (speed).
+        # The dashboard slider overrides via inference_steps, but the default must match
+        # the loaded checkpoint or quality suffers dramatically.
+        is_mf = "mf" in self._repo_id
+        default_steps = 4 if is_mf else 10
+        num_steps = kwargs.get("inference_steps", kwargs.get("steps", kwargs.get("num_steps", default_steps)))
         guidance_scale = kwargs.get("guidance_scale", 1.5)
         seed = kwargs.get("seed", 42)
         batch = kwargs.get("batch", kwargs.get("offline", False))
