@@ -31,9 +31,20 @@ const FORMAT_ARGS = {
 
 /** Loudness normalization for streaming. Uses dynaudnorm (dynamic audio
  * normalization) which works in real-time without requiring two passes.
- * Target: -16 LUFS equivalent peak level. Applied to all compressed outputs.
- * Raw PCM/WAV outputs are not normalized — they pass through unchanged. */
-const LOUDNESS_FILTER = 'dynaudnorm=f=150:g=15:p=0.95:m=10';
+ *
+ * Parameters tuned for speech:
+ *   f=50    — 50ms frame size (fast adaptation, speech-friendly)
+ *   g=5     — small Gaussian window (responsive, not sluggish)
+ *   p=0.95  — peak target 95% (prevents clipping)
+ *   m=5     — max gain 5x (14dB) — limits noise amplification for quiet sources
+ *   b=1     — altboundary=true: no fade-in/fade-out at stream boundaries
+ *
+ * The default dynaudnorm boundary mode assumes gain=1.0 for missing frames,
+ * causing a smooth but audible fade-in. b=1 disables this.
+ *
+ * Applied to all compressed outputs (MP3, Opus, AAC). Raw PCM/WAV outputs
+ * are not normalized — they pass through unchanged. */
+const LOUDNESS_FILTER = 'dynaudnorm=f=50:g=5:p=0.95:m=5:b=1';
 
 /**
  * Spawn an ffmpeg process that reads raw PCM from stdin and writes
