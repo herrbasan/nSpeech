@@ -101,6 +101,11 @@ export const config = {
   // nVideo / FFmpeg — for PCM→MP3 transcoding in the relay layer.
   // The ffmpeg binary ships with the nVideo submodule.
   ffmpegPath: resolve(PROJECT_ROOT, 'lib', 'nvideo', 'deps', 'win', 'bin', 'ffmpeg.exe'),
+
+  // Transcode settings
+  transcode: {
+    normalizationPeak: (configJson.transcode && configJson.transcode.normalization_peak) ?? 0.95,
+  },
 };
 
 // ── Validate required paths ─────────────────────────────────────────────────
