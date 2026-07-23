@@ -134,8 +134,22 @@ export async function relaySpeech(request, reply, body) {
  * Register the /v1/audio/speech route on a Fastify instance.
  */
 export function registerSpeechRoute(app) {
+  // POST — standard OpenAI-compatible JSON body
   app.post('/v1/audio/speech', async (request, reply) => {
     const body = typeof request.body === 'object' ? request.body : {};
+    await relaySpeech(request, reply, body);
+  });
+
+  // GET — query-param convenience for simple clients (chat app, browser fetch)
+  app.get('/v1/audio/speech', async (request, reply) => {
+    const q = request.query;
+    const body = {
+      model: q.model || undefined,
+      input: q.input || '',
+      voice: q.voice || undefined,
+      response_format: q.response_format || undefined,
+      speed: q.speed ? parseFloat(q.speed) : 1.0,
+    };
     await relaySpeech(request, reply, body);
   });
 }
