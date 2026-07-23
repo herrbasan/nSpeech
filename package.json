@@ -4,6 +4,8 @@
   "description": "nSpeech V3 — Node/Fastify API service managing isolated Python TTS child engines",
   "type": "module",
   "scripts": {
+    "setup": "git submodule update --init --recursive && npm install && cd lib/nlogger && npm install && cd ../nvideo && node scripts/download-ffmpeg.js",
+    "setup:engines": "python install.py install --engine all --models",
     "postinstall": "cd server && npm install",
     "start": "node server/index.js",
     "dev": "node --watch server/index.js"

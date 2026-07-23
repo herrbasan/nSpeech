@@ -48,7 +48,7 @@ CHATTERBOX_VARIANTS = ["chatterbox-turbo", "chatterbox-eng", "chatterbox-mtl"]
 # Engines not listed here use the system Python (whatever runs install.py).
 # dots.tts requires 3.10-3.12 (does NOT support 3.13).
 ENGINE_PYTHON_VERSIONS = {
-    "dots": "3.10",
+    "dots": "3.12",
 }
 
 ENGINE_PATCHES = {
@@ -198,11 +198,11 @@ def ensure_models_dir(engine):
 
 def install_core(python):
     print("[*] Installing core requirements ...")
-    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+    run([str(python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "pip"])
 
     core_req = REQUIREMENTS_DIR / "core.txt"
     if core_req.exists():
-        run([str(python), "-m", "pip", "install", "-r", str(core_req)])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "-r", str(core_req)])
 
     print("[+] Core requirements installed.")
 
@@ -212,23 +212,23 @@ def install_engine_deps(python, engine):
 
     engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
     if engine_req.exists():
-        run([str(python), "-m", "pip", "install", "-r", str(engine_req)])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "-r", str(engine_req)])
     else:
         print(f"    [!] No requirements file found: {engine_req}")
 
     if engine == "kokoro":
         print("[*] Installing PyTorch CPU for Kokoro ...")
-        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/cpu"])
 
     elif engine == "chatterbox":
         run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
-        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/nightly/cu128"])
 
     elif engine == "dots":
         run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
-        run([str(python), "-m", "pip", "install", "torch", "torchaudio",
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/cu128"])
 
     print("[+] Engine requirements installed.")
@@ -272,6 +272,8 @@ def patch_chatterbox(python):
             if skip:
                 continue
             if stripped.startswith("if PerthImplicitWatermarker") or stripped.startswith("if __all__"):
+                continue
+            if "PerthImplicitWatermarker" in stripped and "append" in stripped:
                 continue
             lines_to_keep.append(line)
         content = "\n".join(lines_to_keep) + "\n"
@@ -317,6 +319,101 @@ def patch_chatterbox(python):
     tts_py.write_text(content, encoding="utf-8")
     print(f"[+] {patches_applied} patch(es) applied.")
     return patches_applied
+
+
+def _install_pynini_windows(python):
+    """
+    Install pynini into the dots venv on Windows.
+
+    pynini (dependency: WeTextProcessing → dots.tts) cannot build from source
+    on Windows/MSVC — it requires OpenFST headers/libraries and uses GCC-specific
+    compile flags. conda-forge provides pre-built pynini + openfst for win-64.
+
+    Strategy: use micromamba (tiny standalone conda-compatible binary) to create
+    a throwaway environment with pynini, then copy the .pyd files and DLLs into
+    the dots venv. WeTextProcessing and dots.tts are then installed via pip.
+    """
+    site_packages = python.parent.parent / "Lib" / "site-packages"
+
+    # Check if pynini is already installed and working
+    result = run([str(python), "-c", "import pynini"], capture=True, check=False)
+    if result.returncode == 0:
+        print("    [+] pynini already installed and working.")
+        _install_wetextprocessing(python)
+        return
+
+    print("    [*] Bootstrapping pynini via micromamba (one-time setup) ...")
+
+    # Download micromamba if needed
+    micromamba_exe = VENV_BASE / "micromamba.exe"
+    if not micromamba_exe.exists():
+        print("        Downloading micromamba ...")
+        import urllib.request
+        url = "https://github.com/mamba-org/micromamba-releases/releases/latest/download/micromamba-win-64"
+        urllib.request.urlretrieve(url, str(micromamba_exe))
+        print(f"        [+] micromamba downloaded ({micromamba_exe.stat().st_size} bytes)")
+
+    mamba_root = VENV_BASE / "micromamba-root"
+    mamba_root.mkdir(parents=True, exist_ok=True)
+    env_name = "pynini-bootstrap"
+    mamba_env_dir = mamba_root / "envs" / env_name
+
+    if not mamba_env_dir.exists():
+        env = os.environ.copy()
+        env["MAMBA_ROOT_PREFIX"] = str(mamba_root)
+        print("        Creating micromamba env with pynini ...")
+        run([str(micromamba_exe), "create", "-n", env_name, "-c", "conda-forge",
+             "pynini=2.1.7", f"python={sys.version_info.major}.{sys.version_info.minor}",
+             "-y"], env=env)
+
+    # Copy pynini .pyd files and DLLs from micromamba env to dots venv
+    mamba_sp = mamba_env_dir / "Lib" / "site-packages"
+    mamba_bin = mamba_env_dir / "Library" / "bin"
+
+    import shutil
+    for pkg in ["pynini", "pywrapfst"]:
+        src = mamba_sp / pkg
+        if src.exists():
+            dst = site_packages / pkg
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+
+    for pattern in ["_pynini*.pyd", "_pywrapfst*.pyd"]:
+        for f in mamba_sp.glob(pattern):
+            shutil.copy2(f, site_packages / f.name)
+
+    for dist_info in mamba_sp.glob("pynini-*.dist-info"):
+        if (site_packages / dist_info.name).exists():
+            shutil.rmtree(site_packages / dist_info.name)
+        shutil.copytree(dist_info, site_packages / dist_info.name)
+
+    if mamba_bin.exists():
+        for dll in mamba_bin.glob("*.dll"):
+            shutil.copy2(dll, site_packages / dll.name)
+
+    # Verify pynini works
+    result = run([str(python), "-c", "import pynini"], capture=True, check=False)
+    if result.returncode != 0:
+        raise RuntimeError("pynini installation failed after micromamba bootstrap")
+
+    print("    [+] pynini installed via micromamba bootstrap.")
+
+    _install_wetextprocessing(python)
+
+
+def _install_wetextprocessing(python):
+    """
+    Install WeTextProcessing via pip. Must be called AFTER pynini is available.
+    """
+    result = run([str(python), "-c", "import tn"], capture=True, check=False)
+    if result.returncode == 0:
+        print("    [+] WeTextProcessing already installed.")
+        return
+
+    print("    [*] Installing WeTextProcessing ...")
+    run([str(python), "-m", "pip", "install", "--no-cache-dir", "WeTextProcessing"])
+    print("    [+] WeTextProcessing installed.")
 
 
 def download_models(python, engine):
@@ -380,6 +477,18 @@ def download_models(python, engine):
             run(["git", "clone", "https://github.com/rednote-hilab/dots.tts.git", str(dots_repo_dir)])
         else:
             print(f"    [+] dots.tts repo already exists at {dots_repo_dir}")
+
+        # pynini (dependency of WeTextProcessing → dots.tts) cannot build from
+        # source on Windows/MSVC — it needs OpenFST and GCC-specific compile flags.
+        # conda-forge provides pre-built pynini + openfst for win-64.
+        # Use micromamba (tiny standalone conda-compatible binary) to bootstrap
+        # pynini, then install WeTextProcessing + dots.tts around it.
+        _install_pynini_windows(python)
+
+        # Install dots.tts package itself (deps already handled by dots.txt + pynini step).
+        print(f"    [*] Installing dots.tts package ...")
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "--no-deps",
+             "-e", str(dots_repo_dir)])
 
         # Pre-download the default checkpoint (mf = 4 NFE, fastest)
         print(f"    [*] Pre-downloading dots.tts-mf checkpoint ...")
@@ -530,15 +639,15 @@ def cmd_update(args):
     python = _python(engine)
 
     print(f"[*] Updating {engine} ...")
-    run([str(python), "-m", "pip", "install", "--upgrade", "pip"])
+    run([str(python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "pip"])
 
     core_req = REQUIREMENTS_DIR / "core.txt"
     if core_req.exists():
-        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(core_req)])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "-r", str(core_req)])
 
     engine_req = REQUIREMENTS_DIR / f"{engine}.txt"
     if engine_req.exists():
-        run([str(python), "-m", "pip", "install", "--upgrade", "-r", str(engine_req)])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "-r", str(engine_req)])
 
     for patch_func in ENGINE_PATCHES.get(engine, []):
         if patch_func == "patch_chatterbox":

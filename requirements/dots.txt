@@ -1,11 +1,20 @@
 # dots.tts engine dependencies (GPU)
-# dots.tts installs from source via: pip install -e . -c constraints/recommended.txt
-# This file lists additional deps not covered by the dots.tts pyproject.toml.
-# The installer clones the repo and runs the source install separately.
-#
-# Python 3.10-3.12 required (NOT 3.13). The installer creates the venv with py -3.10.
-#
-# PyTorch CUDA is installed separately by install.py (cu128 nightly for RTX 5090 Blackwell).
-# transformers/torch pins come from dots.tts's own constraints file.
-soundfile>=0.12.1
+# dots.tts itself is installed --no-deps by install.py (pynini/OpenFST blocks Windows build).
+# pynini & WeTextProcessing are bootstrapped via micromamba (see _install_pynini_windows).
+# ALL other runtime deps listed here. PyTorch CUDA is installed separately by install.py.
+# gradio omitted — only needed for web demo, not TTS inference.
+soundfile>=0.13.1
 openai-whisper>=20231117
+librosa>=0.11.0
+huggingface-hub>=0.23.0
+transformers>=4.57.0
+safetensors>=0.8.0
+scipy>=1.10.0
+einops>=0.6.0
+loguru>=0.7.0
+langcodes[data]>=3.0.0
+lingua-language-detector>=2.0.0
+pydantic>=2.12.5,<3
+PyYAML>=6.0.3
+torchdiffeq>=0.2.0
+numpy>=2.2.6

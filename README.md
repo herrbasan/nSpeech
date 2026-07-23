@@ -55,7 +55,48 @@ Returns native, cloned, and preset voices. Use any `voice_id` in the `voice` fie
 
 ## Integration
 
-### Basic TTS
+### SDK (Recommended)
+
+The nSpeech Client SDK (`lib/nspeech-client/nspeech-client-v2.js`) is a zero-dependency vanilla JS client for browser and Node.js. It wraps the REST API with:
+
+- Event-driven TTS lifecycle (`start`, `ttfb`, `progress`, `complete`, `error`)
+- Retry with exponential backoff for network failures
+- Typed error classes (`VoiceNotFoundError`, `EngineError`, `RateLimitError`)
+- Format-aware audio playback
+- Optional voice cache with TTL
+- Debug logging with request IDs
+
+```javascript
+import { NSpeechClient } from './lib/nspeech-client/nspeech-client-v2.js';
+
+const nspeech = new NSpeechClient({
+  baseUrl: 'http://127.0.0.1:2233',
+  debug: true
+});
+
+// Streaming TTS with events
+const stream = nspeech.speechStream({
+  model: 'kokoro',
+  input: 'Hello world.',
+  voice: 'af_heart'
+});
+
+stream.on('ttfb', ({ timeMs }) => console.log(`First audio: ${timeMs}ms`));
+stream.on('complete', ({ audioUrl, durationMs }) => {
+  console.log(`Done in ${durationMs}ms`);
+  audio.src = audioUrl;  // play it
+});
+stream.on('error', (err) => console.error(err.name, err.message));
+
+// Convenience: fetch an audio blob and play
+const blob = await nspeech.speak({
+  model: 'kokoro',
+  input: 'Quick one-shot.',
+  voice: 'af_heart'
+});
+```
+
+### Basic TTS (raw API)
 
 ```javascript
 const response = await fetch('http://127.0.0.1:2233/v1/audio/speech', {

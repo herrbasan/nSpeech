@@ -31,6 +31,34 @@ const app = Fastify({
   bodyLimit: 50 * 1024 * 1024, // 50MB for audio uploads
 });
 
+// ── CORS ────────────────────────────────────────────────────────────────────
+// nSpeech is a local trusted service on a private LAN. Browser clients (the
+// LLM Gateway Chat app on :8080, the dashboard, etc.) need cross-origin
+// access for /v1/* endpoints. Plain hook — no @fastify/cors dependency.
+//
+// IMPORTANT: We set headers on BOTH reply.header() (normal Fastify paths)
+// AND reply.raw.setHeader() (survives reply.hijack() used by the speech
+// route's ffmpeg streaming). Without the raw fallback, hijacked responses
+// lose CORS headers and the browser blocks them.
+app.addHook('onRequest', async (req, reply) => {
+  const origin = req.headers.origin;
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Vary': 'Origin',
+  };
+  if (origin) headers['Access-Control-Allow-Origin'] = origin;
+  for (const [k, v] of Object.entries(headers)) {
+    reply.header(k, v);
+    // raw fallback for hijacked routes (speech streaming)
+    if (reply.raw && !reply.raw.headersSent) reply.raw.setHeader(k, v);
+  }
+  // Short-circuit preflight
+  if (req.method === 'OPTIONS') {
+    reply.code(204).send();
+  }
+});
+
 // ── Static mounts ───────────────────────────────────────────────────────────
 
 // /web → web/ (html=true so directory requests serve index.html)
