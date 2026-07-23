@@ -29,26 +29,22 @@ const FORMAT_ARGS = {
   aac:  ['-c:a', 'aac', '-b:a', '128k', '-f', 'adts'],
 };
 
-/** Build the dynaudnorm filter string for the given peak value.
+/** Loudness normalization for streaming. Uses dynaudnorm (dynamic audio
+ * normalization) which works in real-time without requiring two passes.
  *
  * Parameters tuned for speech:
  *   f=50    — 50ms frame size (fast adaptation, speech-friendly)
  *   g=5     — small Gaussian window (responsive, not sluggish)
- *   p=<peak> — peak target (0.80 = headroom, 0.95 = edge of distortion)
+ *   p=0.95  — peak target 95% (prevents clipping)
  *   m=5     — max gain 5x (14dB) — limits noise amplification for quiet sources
  *   b=1     — altboundary=true: no fade-in/fade-out at stream boundaries
  *
- * Applied to all compressed outputs (MP3, Opus, AAC). Raw PCM/WAV outputs
- * are not normalized — they pass through unchanged.
+ * The default dynaudnorm boundary mode assumes gain=1.0 for missing frames,
+ * causing a smooth but audible fade-in. b=1 disables this.
  *
- * @param {number} peak — target peak as fraction of full scale, must be in (0, 1]
- * @returns {string} ffmpeg dynaudnorm filter */
-function buildLoudnessFilter(peak) {
-  if (typeof peak !== 'number' || !isFinite(peak) || peak <= 0 || peak > 1) {
-    throw new Error(`normalize.peak must be a finite number in (0, 1], got: ${peak}`);
-  }
-  return `dynaudnorm=f=50:g=5:p=${peak}:m=5:b=1`;
-}
+ * Applied to all compressed outputs (MP3, Opus, AAC). Raw PCM/WAV outputs
+ * are not normalized — they pass through unchanged. */
+const LOUDNESS_FILTER = 'dynaudnorm=f=50:g=5:p=0.95:m=5:b=1';
 
 /**
  * Spawn an ffmpeg process that reads raw PCM from stdin and writes
@@ -61,7 +57,6 @@ function buildLoudnessFilter(peak) {
 export function createTranscoder(outputFormat, opts = {}) {
   const sampleRate = opts.sampleRate ?? 24000;
   const channels = opts.channels ?? 1;
-  const normalizePeak = opts.normalizePeak ?? config.transcode.normalizationPeak;
 
   const encoderArgs = FORMAT_ARGS[outputFormat];
   if (!encoderArgs) {
@@ -72,18 +67,16 @@ export function createTranscoder(outputFormat, opts = {}) {
     throw new Error(`ffmpeg not found at ${config.ffmpegPath}. Run nVideo setup (lib/nvideo/scripts/download-ffmpeg.js).`);
   }
 
-  const loudnessFilter = buildLoudnessFilter(normalizePeak);
-
   const args = [
     '-hide_banner', '-loglevel', 'error',
     '-f', 's16le', '-ar', String(sampleRate), '-ac', String(channels),
     '-i', 'pipe:0',
-    '-af', loudnessFilter,
+    '-af', LOUDNESS_FILTER,
     ...encoderArgs,
     'pipe:1',
   ];
 
-  log.info(`spawning ffmpeg: ${outputFormat} ${sampleRate}Hz ${channels}ch dynaudnorm p=${normalizePeak}`);
+  log.info(`spawning ffmpeg: ${outputFormat} ${sampleRate}Hz ${channels}ch dynaudnorm`);
 
   const proc = spawn(config.ffmpegPath, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -130,11 +123,10 @@ export function createTranscoder(outputFormat, opts = {}) {
 export function pipePcmToClient(pcmStream, rawResponse, outputFormat, opts = {}) {
   const streamMode = opts.streamMode ?? 'native';
   const extraHeaders = opts.extraHeaders ?? {};
-  const normalizePeak = opts.normalizePeak;
 
   let ff;
   try {
-    ff = createTranscoder(outputFormat, { normalizePeak });
+    ff = createTranscoder(outputFormat);
   } catch (err) {
     if (!rawResponse.destroyed) {
       rawResponse.writeHead(500, { 'Content-Type': 'application/json' });

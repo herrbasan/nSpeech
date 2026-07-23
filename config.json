@@ -5,8 +5,5 @@
   "nvoice_url": "https://192.168.0.100:2244",
   "voice_dir": "venv/{engine}/voices",
   "model_dir": "venv/{engine}/models",
-  "log_level": "INFO",
-  "transcode": {
-    "normalization_peak": 0.80
-  }
+  "log_level": "INFO"
 }

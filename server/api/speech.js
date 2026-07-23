@@ -125,12 +125,8 @@ export async function relaySpeech(request, reply, body) {
     pcmStream.destroy();
   });
 
-  // Per-request normalization override (optional, defaults to config.transcode.normalizationPeak)
-  const normalizePeak = extraBody.normalize?.peak;
-
   pipePcmToClient(pcmStream, rawResponse, clientFormat, {
     streamMode: isBatch ? 'chunked' : 'native',
-    normalizePeak,
   });
 }
 
