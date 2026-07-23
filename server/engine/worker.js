@@ -174,6 +174,29 @@ export class WorkerProcess {
   }
 
   /**
+   * Return a promise that resolves when the worker is ready, or rejects if
+   * it dies before becoming ready. Polls state every 100ms.
+   */
+  whenReady() {
+    if (this.state === 'ready') return Promise.resolve();
+    if (this.state === 'dead' || this.state === 'unhealthy') {
+      return Promise.reject(new WorkerError(503, 'engine_start_failed',
+        `Worker ${this.engineName} died before becoming ready`));
+    }
+    return new Promise((resolve, reject) => {
+      const check = () => {
+        if (this.state === 'ready') return resolve();
+        if (this.state === 'dead' || this.state === 'unhealthy') {
+          return reject(new WorkerError(503, 'engine_start_failed',
+            `Worker ${this.engineName} died before becoming ready`));
+        }
+        setTimeout(check, 100);
+      };
+      check();
+    });
+  }
+
+  /**
    * Forward the worker's stdout/stderr into the unified combined log.
    *
    * stdout carries nLogger JSONL lines from the worker's own logger, plus the

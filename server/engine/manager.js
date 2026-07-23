@@ -168,8 +168,9 @@ export class EngineManager {
         await existing.stop().catch(() => {});
         this.workers.delete(engineName);
       } else {
-        // Still spawning — wait for it
-        throw new WorkerError(503, 'engine_starting', `Engine ${engineName} is still starting`);
+        // Still spawning/warming — wait for it
+        await existing.whenReady();
+        return existing;
       }
     }
 
