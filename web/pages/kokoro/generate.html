@@ -104,6 +104,7 @@ function init(element, params, nui) {
 
         mediaSource = new MediaSource();
         audio.src = URL.createObjectURL(mediaSource);
+        const collector = nspeechAudioDownload.createCollector();
 
         let firstChunk = false;
 
@@ -134,6 +135,7 @@ function init(element, params, nui) {
                     }
                     await new Promise((res, rej) => {
                         sourceBuffer.appendBuffer(value);
+                        collector.push(value);
                         sourceBuffer.onupdateend = res;
                         sourceBuffer.onerror = rej;
                     });
@@ -147,6 +149,7 @@ function init(element, params, nui) {
                 if (mediaSource.readyState === 'open') {
                     mediaSource.endOfStream();
                 }
+                nspeechAudioDownload.attachDownload(audio, collector.buildURL('kokoro-speech.mp3'), 'kokoro-speech.mp3');
                 statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
             } catch (err) {
                 if (err.name === 'AbortError') {

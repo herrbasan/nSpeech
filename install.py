@@ -38,7 +38,7 @@ VENV_BASE = PROJECT_ROOT / "venv"
 # Installable engines. 'chatterbox' creates a shared venv for all three
 # model variants (chatterbox-turbo, chatterbox-eng, chatterbox-mtl).
 # At runtime, each variant is a separate engine entry in registry.json.
-ENGINES = ["kokoro", "chatterbox", "dots", "all"]
+ENGINES = ["kokoro", "chatterbox", "dots", "f5tts", "vibevoice", "all"]
 
 # Chatterbox variants — all share venv/chatterbox/env/ but have separate
 # voice directories. Created during chatterbox install.
@@ -55,6 +55,8 @@ ENGINE_PATCHES = {
     "chatterbox": ["patch_chatterbox"],
     "kokoro": [],
     "dots": [],
+    "f5tts": [],
+    "vibevoice": [],
 }
 
 
@@ -227,6 +229,18 @@ def install_engine_deps(python, engine):
              "--index-url", "https://download.pytorch.org/whl/nightly/cu128"])
 
     elif engine == "dots":
+        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/cu128"])
+
+    elif engine == "f5tts":
+        # F5-TTS needs torch with CUDA. Use nightly cu128 for RTX 4090.
+        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/cu128"])
+
+    elif engine == "vibevoice":
+        # VibeVoice needs torch with CUDA + flash-attn for best quality.
         run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
         run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/cu128"])
@@ -504,6 +518,28 @@ def download_models(python, engine):
             f"DotsTtsRuntime.from_pretrained('rednote-hilab/dots.tts-mf', precision='float32', optimize=False)"
         ], cwd=str(PROJECT_ROOT))
 
+    elif engine == "f5tts":
+        # F5-TTS auto-downloads from HuggingFace on first use.
+        # Pre-trigger the download so first request doesn't stall.
+        print(f"    [*] Pre-downloading F5-TTS model from HuggingFace ...")
+        run([
+            str(python), "-c",
+            f"import sys; sys.path.insert(0, 'src'); "
+            f"from f5_tts.api import F5TTS; "
+            f"F5TTS(device='cpu')"
+        ], cwd=str(PROJECT_ROOT))
+
+    elif engine == "vibevoice":
+        # VibeVoice model is cloned from HuggingFace into the model directory.
+        vv_dir = model_dir / "VibeVoice"
+        if not vv_dir.exists():
+            print(f"    [*] Cloning VibeVoice-1.5B from HuggingFace ...")
+            run(["git", "clone",
+                 "https://huggingface.co/vibevoice/VibeVoice-1.5B",
+                 str(vv_dir)])
+        else:
+            print(f"    [+] VibeVoice model already exists at {vv_dir}")
+
     print("[+] Models ready.")
 
 
@@ -525,6 +561,20 @@ def verify_engine(python, engine):
             print(f"    [+] dots.tts repo found at {repo_dir}")
         else:
             print(f"    [-] dots.tts repo NOT found at {repo_dir}")
+            all_ok = False
+
+    elif engine == "f5tts":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("F5-TTS", "import f5_tts; print('f5_tts OK')"))
+
+    elif engine == "vibevoice":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("VibeVoice", "import vibevoice; print('vibevoice OK')"))
+        vv_dir = _models_dir(engine) / "VibeVoice"
+        if vv_dir.exists():
+            print(f"    [+] VibeVoice model found at {vv_dir}")
+        else:
+            print(f"    [-] VibeVoice model NOT found at {vv_dir}")
             all_ok = False
 
     checks.append(("soundfile", "import soundfile; print('soundfile OK')"))

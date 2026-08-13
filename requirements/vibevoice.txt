@@ -1,0 +1,9 @@
+# TTS Engine: VibeVoice 1.5B (Microsoft Research, community fork)
+# LLM (Qwen2.5) + diffusion head, long-form multi-speaker conversational TTS
+# NOTE: Model weights are MIT licensed. Requires flash-attn on CUDA.
+#       Install from the community repo: https://github.com/vibevoice-community/VibeVoice
+vibevoice @ git+https://github.com/vibevoice-community/VibeVoice.git
+torch>=2.1.0
+torchaudio>=2.1.0
+soundfile
+scipy

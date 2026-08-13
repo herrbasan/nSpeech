@@ -67,7 +67,7 @@ export class ElevenLabsAdapter {
 
     const reqBody = {
       text,
-      model_id: model || 'eleven_turbo_v2_5',
+      model_id: model || 'eleven_v3',
       voice_settings: voiceSettings,
     };
     if (eb.seed !== undefined) reqBody.seed = eb.seed;

@@ -23,5 +23,15 @@
     "venv_python": "venv/dots/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
     "gpu": true
+  },
+  "f5tts": {
+    "venv_python": "venv/f5tts/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
+  },
+  "vibevoice": {
+    "venv_python": "venv/vibevoice/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true
   }
 }

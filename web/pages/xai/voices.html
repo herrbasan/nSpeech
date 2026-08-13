@@ -1,216 +1,213 @@
 <div class="page-xai-voices">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>xAI / Grok — Voice Presets</h1>
-        <p class="lead">Combine an xAI voice with instructions to create a reusable character preset.</p>
+        <h1>xAI / Grok — Voices</h1>
+        <p class="lead">Clone a voice from reference audio. xAI custom voices auto-expire after inactivity.</p>
     </header>
 
     <nui-card>
-        <h3 style="margin-top: 0">Create Preset</h3>
-        <p class="lead" style="margin-bottom: var(--nui-space)">Choose a base voice and write instructions that define how it speaks.</p>
-
+        <h3 style="margin-top: 0">Preview Voice</h3>
         <nui-input-group>
-            <label for="preset-name">Preset Name</label>
+            <label for="xa-clone-file">Reference Audio (.wav, .mp3, .m4a — max 120s)</label>
             <nui-input>
-                <input type="text" id="preset-name" placeholder="Smart Lady">
+                <input type="file" id="xa-clone-file" accept=".wav,.mp3,.m4a">
             </nui-input>
         </nui-input-group>
-
         <nui-input-group>
-            <label for="preset-id">ID (URL-safe slug)</label>
-            <nui-input>
-                <input type="text" id="preset-id" placeholder="smart-lady">
-            </nui-input>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="preset-voice">Base Voice</label>
-            <nui-select id="preset-voice-select">
-                <select id="preset-voice"><option value="">Loading...</option></select>
-            </nui-select>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="preset-instructions">Instructions</label>
-            <nui-textarea min-rows="2" max-rows="4">
-                <textarea id="preset-instructions" placeholder="Speak in the cadence of a public intellectual.">Speak clearly and warmly, with a natural conversational flow.</textarea>
+            <label for="xa-test-phrase">Test Phrase</label>
+            <nui-textarea max-rows="4" min-rows="2">
+                <textarea id="xa-test-phrase">This is a preview of the cloned voice. How does it sound?</textarea>
             </nui-textarea>
         </nui-input-group>
-
-        <nui-input-group>
-            <label for="preset-test-phrase">Test Phrase</label>
-            <nui-textarea min-rows="1" max-rows="3">
-                <textarea id="preset-test-phrase" placeholder="This is a preview of the selected voice.">Hello, this is a preview of my voice. I hope you enjoy the sound of it.</textarea>
-            </nui-textarea>
-        </nui-input-group>
-
         <nui-button-container gap="medium">
-            <nui-button variant="primary" id="btn-save-preset">
-                <button type="button">Save Preset</button>
-            </nui-button>
-            <nui-button id="btn-preview-preset">
+            <nui-button variant="primary" id="btn-preview">
                 <button type="button">Preview</button>
             </nui-button>
+            <nui-button id="btn-preview-stop">
+                <button type="button">Stop</button>
+            </nui-button>
         </nui-button-container>
-
-        <div id="preset-status" style="margin-top: var(--nui-space);"></div>
+        <audio id="xa-preview-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+        <div id="xa-preview-status" style="margin-top: var(--nui-space);"></div>
     </nui-card>
 
     <nui-card>
-        <h3 style="margin-top: 0">Your Presets</h3>
-        <div id="preset-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+        <h3 style="margin-top: 0">Save Voice</h3>
+        <nui-input-group>
+            <label for="xa-clone-name">Voice Name</label>
+            <nui-input>
+                <input type="text" id="xa-clone-name" placeholder="my_voice">
+            </nui-input>
+        </nui-input-group>
+        <nui-input-group>
+            <label for="xa-clone-desc">Description (optional)</label>
+            <nui-input>
+                <input type="text" id="xa-clone-desc" placeholder="Natural and pleasant voice.">
+            </nui-input>
+        </nui-input-group>
+        <nui-button id="btn-save" disabled>
+            <button type="button">Save Voice</button>
+        </nui-button>
+        <div id="xa-save-status" style="margin-top: var(--nui-space);"></div>
     </nui-card>
 
-    <audio id="preset-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+    <nui-card>
+        <h3 style="margin-top: 0">Cloned Voices</h3>
+        <div id="xa-cloned-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+    </nui-card>
 </div>
 
 <script type="nui/page">
 function init(element, params, nui) {
     var ENGINE = 'xai';
-    var presetListEl = element.querySelector('#preset-list');
-    var statusEl = element.querySelector('#preset-status');
-    var voiceSelect = element.querySelector('#preset-voice-select');
-    var voiceSelectEl = element.querySelector('#preset-voice');
-    var nameInput = element.querySelector('#preset-name');
-    var idInput = element.querySelector('#preset-id');
-    var instructionsInput = element.querySelector('#preset-instructions');
-    var testPhraseEl = element.querySelector('#preset-test-phrase');
-    var audioEl = element.querySelector('#preset-audio');
-    var allVoices = [];
-    var abortController = null;
-    var mediaSource = null;
 
-    function loadAll() {
-        fetch('/v1/voices?engine=' + ENGINE)
-            .then(function(r) { return r.json(); })
-            .then(function(d) {
-                allVoices = d.voices || [];
-                populateDropdown();
-                loadPresets();
-            })
-            .catch(function(err) {
-                presetListEl.innerHTML = '<p style="color:var(--color-danger)">Failed: ' + err.message + '</p>';
-            });
-    }
+    customElements.whenDefined('nui-button').then(function() { _bindAll(); });
 
-    function populateDropdown() {
-        var options = [];
-        for (var i = 0; i < allVoices.length; i++) {
-            if (allVoices[i].voice_type !== 'preset') {
-                options.push({ value: allVoices[i].voice_id, label: allVoices[i].name + ' — ' + (allVoices[i].description || '') });
-            }
-        }
-        voiceSelect.setItems([{ group: 'xAI Voices', options: options }]);
-    }
+    var fileInput, nameInput, descInput, testPhraseEl, btnPreview, btnPreviewStop, btnSave;
+    var previewStatusEl, saveStatusEl, clonedListEl, previewAudio;
+    var abortController = null, mediaSource = null;
 
-    function loadPresets() {
-        var presets = allVoices.filter(function(v) { return v.voice_type === 'preset'; });
-        if (!presets.length) {
-            presetListEl.innerHTML = '<p style="color: var(--color-shade6);">No presets yet.</p>';
-            return;
-        }
-        var html = '<div style="display: grid; gap: var(--nui-space-half);">';
-        for (var i = 0; i < presets.length; i++) {
-            var p = presets[i];
-            html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half);border:1px solid var(--border-shade1-4);border-radius:var(--border-radius1-3);">' +
-                '<div><strong>' + p.name + '</strong> <code style="font-size:0.85em;">' + p.voice_id + '</code><br>' +
-                '<span style="color:var(--color-shade6);font-size:0.85em;">voice: <code>' + p.base_voice + '</code>' + (p.instructions ? ' \u2014 ' + p.instructions.slice(0, 50) + '\u2026' : '') + '</span></div>' +
-                '<div style="display:flex;gap:var(--nui-space-half);">' +
-                '<nui-button data-preview-preset="' + p.voice_id + '"><button type="button">Preview</button></nui-button>' +
-                '<nui-button variant="danger" data-delete-preset="' + p.voice_id + '"><button type="button">Delete</button></nui-button>' +
-                '</div></div>';
-        }
-        html += '</div>';
-        presetListEl.innerHTML = html;
+    function _bindAll() {
+        fileInput = element.querySelector('#xa-clone-file');
+        nameInput = element.querySelector('#xa-clone-name');
+        descInput = element.querySelector('#xa-clone-desc');
+        testPhraseEl = element.querySelector('#xa-test-phrase');
+        btnPreview = element.querySelector('#btn-preview');
+        btnPreviewStop = element.querySelector('#btn-preview-stop');
+        btnSave = element.querySelector('#btn-save');
+        previewStatusEl = element.querySelector('#xa-preview-status');
+        saveStatusEl = element.querySelector('#xa-save-status');
+        clonedListEl = element.querySelector('#xa-cloned-list');
+        previewAudio = element.querySelector('#xa-preview-audio');
 
-        var previewBtns = presetListEl.querySelectorAll('[data-preview-preset]');
-        for (var d = 0; d < previewBtns.length; d++) {
-            (function(id) {
-                previewBtns[d].querySelector('button').addEventListener('click', function() { previewPreset(id); });
-            })(previewBtns[d].dataset.previewPreset);
-        }
+        btnPreviewStop.addEventListener('click', stop);
+        btnPreview.querySelector('button').addEventListener('click', doPreview);
+        btnSave.querySelector('button').addEventListener('click', doSave);
 
-        var deleteBtns = presetListEl.querySelectorAll('[data-delete-preset]');
-        for (var d = 0; d < deleteBtns.length; d++) {
-            (function(id) {
-                deleteBtns[d].querySelector('button').addEventListener('click', function() { deletePreset(id); });
-            })(deleteBtns[d].dataset.deletePreset);
-        }
+        element.addEventListener('nui-action', onAction);
+
+        loadClonedVoices();
     }
 
     function stop() {
         if (abortController) { abortController.abort(); abortController = null; }
-        if (audioEl) { audioEl.pause(); audioEl.src = ''; }
+        if (previewAudio) { previewAudio.pause(); previewAudio.src = ''; }
         if (mediaSource && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch (_) {} }
         mediaSource = null;
     }
 
-    function previewCurrent() {
-        var text = testPhraseEl.value.trim() || 'This is a preview of the selected voice.';
-        var voice = voiceSelectEl.value;
-        var instructions = instructionsInput.value.trim();
-        if (!voice) { statusEl.innerHTML = '<span style="color:var(--color-danger);">Select a base voice first.</span>'; return; }
+    function loadClonedVoices() {
+        fetch('/v1/voices?engine=' + ENGINE).then(function(r) { return r.json(); }).then(function(d) {
+            var voices = (d.voices || []).filter(function(v) { return v.category === 'cloned'; });
+            if (!voices.length) {
+                clonedListEl.innerHTML = '<p style="color: var(--color-shade6)">No cloned voices yet.</p>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < voices.length; i++) {
+                var v = voices[i];
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half) 0;border-bottom:1px solid var(--border-shade1-4);">' +
+                    '<span><strong>' + v.name + '</strong> <span style="color:var(--color-shade6);font-size:0.85em;">' + v.voice_id + '</span></span>' +
+                    '<nui-button variant="danger"><button type="button" data-action="delete-voice:' + v.voice_id + '">Delete</button></nui-button></div>';
+            }
+            clonedListEl.innerHTML = html;
+        }).catch(function(err) { clonedListEl.innerHTML = '<p style="color:var(--color-danger)">Failed: ' + err.message + '</p>'; });
+    }
+
+    function onAction(e) {
+        if (e.detail.name !== 'delete-voice') return;
+        e.stopPropagation();
+        var voiceId = e.detail.param;
+        var nuiBtn = e.detail.target.closest('nui-button');
+
+        nuiBtn.setLoading(true);
+        fetch('/v1/voices/' + encodeURIComponent(voiceId) + '?engine=' + ENGINE, { method: 'DELETE' })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, success: d.success }; }).catch(function() { return { ok: r.ok }; }); })
+            .then(function(d) {
+                if (d.ok || d.success) { loadClonedVoices(); }
+                else { saveStatusEl.textContent = 'Delete failed'; nuiBtn.setLoading(false); }
+            })
+            .catch(function(err) { saveStatusEl.textContent = 'Error: ' + err.message; nuiBtn.setLoading(false); });
+    }
+
+    function doPreview() {
+        var file = fileInput.files[0];
+        if (!file) { previewStatusEl.textContent = 'Select an audio file first.'; return; }
         stop();
-        abortController = new AbortController();
+
         var startTime = performance.now();
-        var newAudio = document.createElement('audio'); newAudio.controls = true; newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space); display: block;';
-        if (audioEl.parentNode) audioEl.replaceWith(newAudio); audioEl = newAudio;
-        mediaSource = new MediaSource(); audioEl.src = URL.createObjectURL(mediaSource);
-        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Previewing...</span>';
-        mediaSource.addEventListener('sourceopen', function() {
-            var sb = mediaSource.addSourceBuffer('audio/mpeg');
-            var queue = [], appending = false, ended = false;
-            function tryPlay() { if (!audioEl.paused || sb.buffered.length === 0) return; audioEl.play().catch(function() {}); }
-            function pumpQueue() { if (appending || queue.length === 0) { if (ended && !appending && mediaSource.readyState === 'open') { mediaSource.endOfStream(); statusEl.innerHTML = ''; } return; } appending = true; sb.appendBuffer(queue.shift()); sb.addEventListener('updateend', function() { appending = false; tryPlay(); pumpQueue(); }, { once: true }); }
-            fetch('/v1/audio/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: ENGINE, input: text, voice: voice, instructions: instructions, response_format: 'mp3' }), signal: abortController.signal })
-                .then(function(res) { if (!res.ok) return res.json().then(function(d) { throw new Error(d.error ? d.error.message : 'HTTP ' + res.status); }); return res.body.getReader(); })
-                .then(function(reader) { function readLoop() { reader.read().then(function(result) { if (result.done) { ended = true; pumpQueue(); return; } queue.push(result.value); pumpQueue(); readLoop(); }); } readLoop(); })
-                .catch(function(err) { if (err.name !== 'AbortError') statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>'; });
-        }, { once: true });
-    }
-
-    function previewPreset(id) {
-        var preset = allVoices.find(function(v) { return v.voice_id === id && v.voice_type === 'preset'; });
-        if (!preset) return;
-        stop();
+        var fd = new FormData();
+        fd.append('audio', file);
+        fd.append('preview_text', testPhraseEl.value.trim());
         abortController = new AbortController();
-        var newAudio = document.createElement('audio'); newAudio.controls = true; newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space); display: block;';
-        if (audioEl.parentNode) audioEl.replaceWith(newAudio); audioEl = newAudio;
-        mediaSource = new MediaSource(); audioEl.src = URL.createObjectURL(mediaSource);
-        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Playing preset: ' + preset.name + '</span>';
-        mediaSource.addEventListener('sourceopen', function() {
-            var sb = mediaSource.addSourceBuffer('audio/mpeg');
-            var queue = [], appending = false, ended = false;
-            function tryPlay() { if (!audioEl.paused || sb.buffered.length === 0) return; audioEl.play().catch(function() {}); }
-            function pumpQueue() { if (appending || queue.length === 0) { if (ended && !appending && mediaSource.readyState === 'open') { mediaSource.endOfStream(); statusEl.innerHTML = ''; } return; } appending = true; sb.appendBuffer(queue.shift()); sb.addEventListener('updateend', function() { appending = false; tryPlay(); pumpQueue(); }, { once: true }); }
-            fetch('/v1/audio/speech', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: ENGINE, input: preset.name + '. This is a preset preview.', voice: id, response_format: 'mp3' }), signal: abortController.signal })
-                .then(function(res) { if (!res.ok) return res.json().then(function(d) { throw new Error(d.error ? d.error.message : 'HTTP ' + res.status); }); return res.body.getReader(); })
-                .then(function(reader) { function readLoop() { reader.read().then(function(result) { if (result.done) { ended = true; pumpQueue(); return; } queue.push(result.value); pumpQueue(); readLoop(); }); } readLoop(); })
-                .catch(function(err) { if (err.name !== 'AbortError') statusEl.innerHTML = '<span style="color:var(--color-danger);">Preview failed: ' + err.message + '</span>'; });
-        }, { once: true });
+        previewStatusEl.textContent = 'Generating preview...';
+        btnPreview.setLoading(true);
+
+        fetch('/v1/voices/preview?engine=' + ENGINE, { method: 'POST', body: fd, signal: abortController.signal })
+        .then(async function(response) {
+            if (!response.ok) {
+                btnPreview.setLoading(false);
+                var ed = await response.json().catch(function() { return {}; });
+                throw new Error((ed.error && ed.error.message) || 'HTTP ' + response.status);
+            }
+            btnPreview.setLoading(false);
+            var newAudio = document.createElement('audio');
+            newAudio.controls = true;
+            newAudio.style.cssText = 'width:100%;margin-top:var(--nui-space);display:block;';
+            previewAudio.replaceWith(newAudio);
+            mediaSource = new MediaSource();
+            newAudio.src = URL.createObjectURL(mediaSource);
+
+            mediaSource.addEventListener('sourceopen', async function() {
+                var sb = mediaSource.addSourceBuffer('audio/mpeg');
+                var reader = response.body.getReader();
+                var first = true;
+                try {
+                    while (true) {
+                        var r = await reader.read();
+                        if (r.done) break;
+                        if (first && r.value && r.value.length) {
+                            first = false;
+                            previewStatusEl.textContent = 'TTFB: ' + (performance.now() - startTime).toFixed(0) + 'ms';
+                        }
+                        await new Promise(function(res, rej) { sb.appendBuffer(r.value); sb.onupdateend = res; sb.onerror = rej; });
+                        if (newAudio.paused && sb.buffered.length > 0) { newAudio.play().catch(function() {}); }
+                    }
+                    if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                    previewStatusEl.textContent = 'Preview ready (' + (performance.now() - startTime).toFixed(0) + 'ms)';
+                    btnSave.removeAttribute('disabled');
+                } catch (err) { if (err.name !== 'AbortError') throw err; }
+            }, { once: true });
+        })
+        .catch(function(err) {
+            btnPreview.setLoading(false);
+            if (err.name === 'AbortError') previewStatusEl.textContent = 'Stopped.';
+            else previewStatusEl.textContent = 'Error: ' + err.message;
+        });
     }
 
-    function deletePreset(id) {
-        fetch('/v1/voices/' + id + '?engine=' + ENGINE, { method: 'DELETE' })
-            .then(function(r) { return r.json(); })
-            .then(function() { statusEl.innerHTML = '<span style="color:var(--color-highlight);">Preset deleted.</span>'; loadAll(); })
-            .catch(function(err) { statusEl.innerHTML = '<span style="color:var(--color-danger);">Delete failed: ' + err.message + '</span>'; });
-    }
-
-    function savePreset() {
-        var id = idInput.value.trim();
+    function doSave() {
+        var file = fileInput.files[0];
         var name = nameInput.value.trim();
-        var voice = voiceSelectEl.value;
-        var instructions = instructionsInput.value.trim();
-        if (!name || !id || !voice) { statusEl.innerHTML = '<span style="color:var(--color-danger);">Name, ID, and base voice are required.</span>'; return; }
-        statusEl.innerHTML = '<span style="color:var(--color-shade6);">Saving...</span>';
-        fetch('/v1/voices/preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: ENGINE, id: id, name: name, voice: voice, instructions: instructions }) })
-            .then(function(r) { return r.json(); })
-            .then(function() { statusEl.innerHTML = '<span style="color:var(--color-highlight);">Preset saved!</span>'; nameInput.value = ''; idInput.value = ''; instructionsInput.value = ''; voiceSelectEl.selectedIndex = 0; loadAll(); })
-            .catch(function(err) { statusEl.innerHTML = '<span style="color:var(--color-danger);">Save failed: ' + err.message + '</span>'; });
+        if (!file) { saveStatusEl.textContent = 'Select an audio file first.'; return; }
+        if (!name) { saveStatusEl.textContent = 'Enter a voice name.'; return; }
+        var desc = descInput.value.trim();
+        var fd = new FormData();
+        fd.append('audio', file);
+        fd.append('name', name);
+        fd.append('voice_name', name);
+        if (desc) fd.append('prompt_text', desc);
+        saveStatusEl.textContent = 'Saving...';
+        btnSave.setLoading(true);
+        fetch('/v1/voices/clone?engine=' + ENGINE, { method: 'POST', body: fd })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, voice_id: d.voice_id, error: d.error }; }).catch(function() { return { ok: r.ok }; }); })
+            .then(function(d) {
+                if (d.ok || d.voice_id) { saveStatusEl.textContent = 'Saved "' + name + '"'; loadClonedVoices(); btnSave.setLoading(false); btnSave.setAttribute('disabled', 'true'); }
+                else { saveStatusEl.textContent = 'Save failed: ' + ((d.error && d.error.message) || 'unknown'); btnSave.setLoading(false); }
+            })
+            .catch(function(err) { saveStatusEl.textContent = 'Error: ' + err.message; btnSave.setLoading(false); });
     }
 
-    element.querySelector('#btn-save-preset button').addEventListener('click', savePreset);
-    element.querySelector('#btn-preview-preset button').addEventListener('click', previewCurrent);
-    element.show = function() { loadAll(); };
+    element.show = function() { loadClonedVoices(); previewStatusEl.textContent = ''; saveStatusEl.textContent = ''; btnSave.setAttribute('disabled', 'true'); };
+    element.hide = function() { stop(); };
 }
 </script>

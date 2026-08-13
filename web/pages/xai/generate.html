@@ -183,6 +183,7 @@ function init(element, params, nui) {
             const blob = await response.blob();
             const url = URL.createObjectURL(blob);
             audio.src = url;
+            nspeechAudioDownload.attachBlob(blob, audio, 'xai-speech.mp3');
             audio.style.display = 'block';
             audio.addEventListener('ended', () => URL.revokeObjectURL(url));
             statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms (${(blob.size / 1024).toFixed(1)} KB)`;

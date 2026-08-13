@@ -233,6 +233,13 @@ def create_app(engine_name: str) -> FastAPI:
                 voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
                 existing.add(base)
 
+        # F5-TTS sidecars (.f5tts.txt transcript files)
+        for txt_path in voice_dir.glob("*.f5tts.txt"):
+            base = txt_path.name[:-len(".f5tts.txt")]
+            if base not in existing:
+                voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
+                existing.add(base)
+
         return {"voices": voices, "engine": engine_name}
 
     # ── POST /v1/audio/speech ───────────────────────────────────────────────
@@ -433,6 +440,7 @@ def create_app(engine_name: str) -> FastAPI:
         audio: UploadFile = File(...),
         prompt_text: str = Form(None),
         preview_text: str = Form(None),
+        language: str = Form(None),
         model: str = Form(None),
         offline: bool = Form(False),
         output_format: str = Form("pcm"),
@@ -495,6 +503,8 @@ def create_app(engine_name: str) -> FastAPI:
         gen_kwargs = {}
         if model:
             gen_kwargs["model"] = model
+        if language:
+            gen_kwargs["language"] = language
         gen = engine.generate(phrase, **gen_kwargs)
 
         # Track preview cache files for cleanup after streaming completes.

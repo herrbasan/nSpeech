@@ -1,0 +1,8 @@
+# TTS Engine: F5-TTS (SWivid / Shanghai AI Lab)
+# Flow-matching + Diffusion Transformer, non-autoregressive
+# NOTE: Pretrained model is CC-BY-NC-4.0 (non-commercial).
+#       Code is MIT. Commercial use requires license from SWivid.
+f5-tts>=0.2.0
+torch>=2.1.0
+torchaudio>=2.1.0
+soundfile

@@ -1,7 +1,7 @@
 <div class="page-elevenlabs-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>ElevenLabs — Generate</h1>
-        <p class="lead">Cloud TTS with 10,000+ voices across 29 languages. <code>eleven_turbo_v2_5</code> by default.</p>
+        <p class="lead">Cloud TTS with 10,000+ voices across 29 languages. <code>eleven_v3</code> by default.</p>
     </header>
 
     <nui-card>
@@ -10,6 +10,19 @@
             <nui-select id="el-voice-select">
                 <select id="el-voice">
                     <option value="" disabled selected>Loading voices...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="el-model">Model</label>
+            <nui-select>
+                <select id="el-model">
+                    <option value="eleven_v3" selected>Eleven v3</option>
+                    <option value="eleven_turbo_v2_5">Eleven Turbo v2.5</option>
+                    <option value="eleven_multilingual_v2">Eleven Multilingual v2</option>
+                    <option value="eleven_flash_v2_5">Eleven Flash v2.5</option>
+                    <option value="eleven_turbo_v2">Eleven Turbo v2</option>
                 </select>
             </nui-select>
         </nui-input-group>
@@ -84,6 +97,7 @@ function init(element, params, nui) {
 
     const voiceSelect = element.querySelector('#el-voice-select');
     const selectEl = element.querySelector('#el-voice');
+    const modelEl = element.querySelector('#el-model');
     const textArea = element.querySelector('#el-text');
     const stabilityEl = element.querySelector('#el-stability');
     const stabilityValEl = element.querySelector('#el-stability-val');
@@ -166,6 +180,7 @@ function init(element, params, nui) {
 
         mediaSource = new MediaSource();
         audio.src = URL.createObjectURL(mediaSource);
+        var collector = nspeechAudioDownload.createCollector();
 
         var firstChunk = false;
 
@@ -183,6 +198,7 @@ function init(element, params, nui) {
                     response_format: 'mp3',
                     speed: parseFloat(speedEl.value),
                     extra_body: {
+                        model: modelEl.value,
                         stability: parseFloat(stabilityEl.value),
                         expressiveness: parseFloat(styleEl.value),
                         guidance_scale: parseFloat(similarityEl.value),
@@ -203,10 +219,11 @@ function init(element, params, nui) {
                         firstChunk = true;
                         statusEl.textContent = 'TTFB: ' + (performance.now() - startTime).toFixed(0) + 'ms';
                     }
-                    await new Promise(function(res, rej) { sourceBuffer.appendBuffer(r.value); sourceBuffer.onupdateend = res; sourceBuffer.onerror = rej; });
+                    await new Promise(function(res, rej) { sourceBuffer.appendBuffer(r.value); collector.push(r.value); sourceBuffer.onupdateend = res; sourceBuffer.onerror = rej; });
                     if (audio.paused && sourceBuffer.buffered.length > 0) { audio.play().catch(function() {}); }
                 }
                 if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                nspeechAudioDownload.attachDownload(audio, collector.buildURL('elevenlabs-speech.mp3'), 'elevenlabs-speech.mp3');
                 statusEl.textContent = 'Done in ' + (performance.now() - startTime).toFixed(0) + 'ms';
             })
             .catch(function(err) {

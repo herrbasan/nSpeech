@@ -12,6 +12,7 @@
 
 | Model | Description | Latency | Quality |
 |-------|-------------|---------|---------|
+| `eleven_v3` | Latest flagship, 29+ languages | Low | Best |
 | `eleven_turbo_v2` | Fast, English-only, agent-optimized | Lowest | Good |
 | `eleven_flash_v2_5` | Fastest multilingual (32 languages) | Very low | Good |
 | `eleven_multilingual_v2` | Full quality, 29 languages | Moderate | Best |
@@ -19,7 +20,7 @@
 | `eleven_v2_flash` | Legacy fast model | Low | Good |
 | `eleven_v2_5_flash` | Latest flash | Very low | Good |
 
-**nSpeech default:** `eleven_turbo_v2_5` — best quality/speed balance for production use.
+**nSpeech default:** `eleven_v3` — latest flagship, best quality (verified 2026-08-13).
 
 ---
 
