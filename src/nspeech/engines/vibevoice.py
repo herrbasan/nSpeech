@@ -19,6 +19,7 @@ This engine is intended for Arena slide rendering and long-form generation
 where quality and conversational flow matter more than latency.
 """
 import gc
+import re
 import time
 from pathlib import Path
 from typing import Tuple, Generator, Dict, Any
@@ -62,32 +63,23 @@ class VibevoiceAdapter:
         )
         from vibevoice.processor.vibevoice_processor import VibeVoiceProcessor
 
-        # CUDA uses bfloat16 + flash_attention_2; CPU/MPS use float32 + sdpa
+        # CUDA uses bfloat16; CPU/MPS use float32.
+        # flash-attn is opt-in via NSPEECH_VIBEVOICE_ATTN=flash_attention_2 —
+        # there is no prebuilt flash-attn wheel for Windows on PyPI, so sdpa
+        # (PyTorch native, still fused/efficient) is the default everywhere.
+        import os
         if self.device == "cuda":
             load_dtype = torch.bfloat16
-            attn_impl = "flash_attention_2"
         else:
             load_dtype = torch.float32
-            attn_impl = "sdpa"
+        attn_impl = os.environ.get("NSPEECH_VIBEVOICE_ATTN", "sdpa")
 
-        try:
-            self._model = VibeVoiceForConditionalGenerationInference.from_pretrained(
-                model_path,
-                torch_dtype=load_dtype,
-                device_map=self.device,
-                attn_implementation=attn_impl,
-            )
-        except Exception as e:
-            if attn_impl == "flash_attention_2":
-                print(f"flash_attention_2 failed ({e}), falling back to sdpa")
-                self._model = VibeVoiceForConditionalGenerationInference.from_pretrained(
-                    model_path,
-                    torch_dtype=load_dtype,
-                    device_map=self.device,
-                    attn_implementation="sdpa",
-                )
-            else:
-                raise
+        self._model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+            model_path,
+            torch_dtype=load_dtype,
+            device_map=self.device,
+            attn_implementation=attn_impl,
+        )
 
         self._processor = VibeVoiceProcessor.from_pretrained(model_path)
         self._model.eval()
@@ -124,7 +116,7 @@ class VibevoiceAdapter:
         so the LLM can understand context and dialogue flow.
 
         Text format for multi-speaker:
-            "Alice: Hello there.\\nFrank: Hi Alice, how are you?"
+            "Speaker 1: Hello there.\nSpeaker 2: Hi, how are you?"
 
         For single-speaker (simple TTS), the voice_name is used as the
         speaker label and the text is wrapped automatically.
@@ -133,13 +125,14 @@ class VibevoiceAdapter:
             cfg_scale: classifier-free guidance (default 1.3).
             disable_prefill: skip voice cloning, use default voice (default False).
         """
-        voice_name = kwargs.get("voice_name", "Speaker1")
+        voice_name = kwargs.get("voice_name", "default")
         cfg_scale = kwargs.get("cfg_scale", 1.3)
         disable_prefill = kwargs.get("disable_prefill", False)
 
-        # If text doesn't contain speaker labels, wrap it with the voice name
-        if ":" not in text[:50]:
-            script = f"{voice_name}: {text}"
+        # VibeVoice script format is strictly "Speaker N: text" (numeric IDs).
+        # If the caller passed raw text (no speaker labels), wrap as Speaker 1.
+        if not re.match(r"^\s*Speaker\s+\d+\s*:", text, re.IGNORECASE):
+            script = f"Speaker 1: {text}"
         else:
             script = text
 

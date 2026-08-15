@@ -192,6 +192,7 @@ def create_app(engine_name: str) -> FastAPI:
         # usable voice until the adapter extracts conditionals into a .pt file.
         # Only list .wav files that have a corresponding .pt cache.
         is_chatterbox = engine_name.startswith("chatterbox")
+        is_f5tts = engine_name == "f5tts"
         for wav_path in voice_dir.glob("*.wav"):
             base = wav_path.stem
             if base.startswith("__preview__"):
@@ -201,6 +202,11 @@ def create_app(engine_name: str) -> FastAPI:
             if is_chatterbox:
                 pt_check = wav_path.with_suffix(".pt")
                 if not pt_check.exists():
+                    continue
+            if is_f5tts:
+                # F5-TTS needs the transcript sidecar — a bare .wav is unusable.
+                txt_check = voice_dir / f"{base}.f5tts.txt"
+                if not txt_check.exists():
                     continue
             voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
             existing.add(base)

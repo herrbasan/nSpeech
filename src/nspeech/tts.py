@@ -91,6 +91,11 @@ def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
         "chatterbox-eng": "eng",
         "chatterbox-mtl": "mtl",
     }
+    # Explicit adapter class names for engines whose .title() doesn't match.
+    ADAPTER_CLASSES = {
+        "f5tts": "F5TtsAdapter",
+        "vibevoice": "VibevoiceAdapter",
+    }
     if engine_name in CHATTERBOX_MODELS:
         module = importlib.import_module("nspeech.engines.chatterbox")
         adapter_class = module.ChatterboxAdapter
@@ -103,16 +108,22 @@ def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
         except ModuleNotFoundError as e:
             raise ValueError(f"TTS Engine '{engine_name}' not found. Make sure src/nspeech/engines/{engine_name}.py exists.") from e
 
-        # Find the adapter class (convention: EngineName title cased + Adapter)
-        class_name = engine_name.title() + "Adapter"
-        if hasattr(module, class_name):
+        if engine_name in ADAPTER_CLASSES:
+            class_name = ADAPTER_CLASSES[engine_name]
+            if not hasattr(module, class_name):
+                raise TypeError(f"Module {engine_name}.py must contain class {class_name}.")
             adapter_class = getattr(module, class_name)
         else:
-            # Fallback: scan for any class ending in 'Adapter'
-            adapters = [v for k, v in module.__dict__.items() if isinstance(v, type) and k.endswith("Adapter")]
-            if not adapters:
-                raise TypeError(f"Module {engine_name}.py must contain a class implementing TTSAdapterProtocol.")
-            adapter_class = adapters[0]
+            # Convention: EngineName title cased + Adapter
+            class_name = engine_name.title() + "Adapter"
+            if hasattr(module, class_name):
+                adapter_class = getattr(module, class_name)
+            else:
+                # Fallback: scan for any class ending in 'Adapter'
+                adapters = [v for k, v in module.__dict__.items() if isinstance(v, type) and k.endswith("Adapter")]
+                if not adapters:
+                    raise TypeError(f"Module {engine_name}.py must contain a class implementing TTSAdapterProtocol.")
+                adapter_class = adapters[0]
 
         print(f"Loading engine {engine_name} into memory...")
         adapter_instance = adapter_class()
