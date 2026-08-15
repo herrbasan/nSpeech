@@ -20,6 +20,12 @@ A reliable, consistent TTS **and STT** service with a simple, powerful API that 
 | **ElevenLabs** | Premium cloud | — | Active |
 | **Gemini** | Instruction-driven style | — | Active |
 | **xAI** | Alternative cloud | — | Active |
+| **F5-TTS** | Flow-matching zero-shot cloning | ~1-2GB | E2E verified 2026-08-15 (torch 2.8+cu128) |
+| **VibeVoice** | Long-form multi-speaker dialogue | ~4-6GB | E2E verified 2026-08-15 (torch 2.11+cu128, sdpa) |
+
+**F5-TTS notes:** voices are `name.wav` + `name.f5tts.txt` transcript sidecar (both required). Internal chunking with cross-fade — pass full text, single yield. `nfe_step` (16=fast, 64=audiobook) via `extra_body`.
+
+**VibeVoice notes:** batch-only, no streaming. Script format is strictly `Speaker N: text` (numeric IDs — adapter wraps raw text as `Speaker 1:`). flash-attn has no Windows wheel → sdpa default; opt-in via `NSPEECH_VIBEVOICE_ATTN=flash_attention_2`. Model cloned to `venv/vibevoice/models/VibeVoice` (5GB). VRAM exceeds TTS budget if Chatterbox resident — use with GPU exclusion.
 
 **Hardware constraint:** BADKID server, RTX 4090 (24GB VRAM). 12GB reserved for Gemma 4 LLM, 4-6GB for STT service. **TTS budget: 4GB VRAM.**
 
