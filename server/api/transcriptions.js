@@ -1,95 +1,169 @@
 /**
- * STT and forced alignment proxy — forwards to nVoice service.
+ * STT and forced alignment — nSpeech's OWN offering (local STT worker).
  *
  * Routes:
- *   POST /v1/audio/transcriptions — speech-to-text (OpenAI-compatible)
- *   POST /v1/audio/align          — forced alignment (nSpeech extension)
+ *   POST /v1/audio/transcriptions — speech-to-text (faster-whisper large-v3
+ *                                   int8 CPU, via the "stt" engine worker)
+ *   POST /v1/audio/align          — forced alignment, text-constrained
+ *                                   (torchaudio MMS_FA CTC)
  *
- * Both are multipart endpoints. Node forwards the raw stream to nVoice
- * and streams the response back unchanged. Node is transport-only.
+ * Both multipart: field `file` (WAV/FLAC), optional `language`,
+ * `word_timestamps` (transcriptions) and `text` (align).
  *
- * nVoice URL comes from config.nvoiceUrl. If not configured, returns 503.
+ * Until 2026-08-14 these were a transparent proxy to nVoice — which made
+ * nSpeech's chunk stitching depend on nVoice's engine lifecycle (switching
+ * engines there could evict the aligner). The local worker is CPU-only and
+ * gpu:false: nothing can evict it, and transcription becomes a first-class
+ * nSpeech feature.
  */
-import { config } from '../config.js';
+import * as stt from '../stt.js';
+import { logger } from '../logger.js';
+
+const log = logger.child('stt-api');
 
 /**
- * Register STT and alignment routes on a Fastify instance.
+ * Extract file bytes and text fields from a raw multipart/form-data buffer.
+ * This server deliberately registers NO multipart parser plugin (see
+ * index.js — plugins drain request.raw); we get the raw bytes in
+ * request.body and parse them here, zero-dependency. The first file part
+ * wins; later duplicate fields overwrite earlier ones.
+ * @param {Buffer} raw — full multipart body
+ * @param {string} contentType — request content-type header (has the boundary)
+ * @returns {{ file: {buf: Buffer, filename: string}, fields: Record<string,string> }}
+ */
+function parseMultipart(raw, contentType) {
+  const m = /boundary=(?:(?:"([^"]+)")|([^;]+))/i.exec(contentType ?? '');
+  if (!m) throw Object.assign(new Error('missing multipart boundary'), { statusCode: 400, code: 'bad_multipart' });
+  const boundary = `--${(m[1] ?? m[2]).trim()}`;
+
+  const file = { buf: null, filename: 'audio' };
+  const fields = {};
+
+  // Split on CRLF-prefixed boundary (standard form-data framing)
+  let start = raw.indexOf(boundary);
+  while (start !== -1) {
+    const headStart = start + boundary.length;
+    // terminal boundary "--"
+    if (raw[headStart] === 0x2d && raw[headStart + 1] === 0x2d) break;
+    // skip CRLF after boundary
+    let pos = headStart + (raw[headStart] === 0x0d ? 2 : 0);
+    const headEnd = raw.indexOf('\r\n\r\n', pos);
+    if (headEnd === -1) break;
+    const head = raw.subarray(pos, headEnd).toString('utf8');
+    const bodyStart = headEnd + 4;
+    const next = raw.indexOf(boundary, bodyStart);
+    if (next === -1) break;
+    // body ends with CRLF before the next boundary
+    const bodyEnd = next - 2;
+    const body = raw.subarray(bodyStart, bodyEnd);
+
+    const nameM = /name="([^"]*)"/.exec(head);
+    const fileM = /filename="([^"]*)"/.exec(head);
+    if (nameM) {
+      if (fileM) {
+        if (file.buf === null) { file.buf = Buffer.from(body); file.filename = fileM[1]; }
+      } else {
+        fields[nameM[1]] = body.toString('utf8');
+      }
+    }
+    start = next;
+  }
+
+  if (file.buf === null) {
+    throw Object.assign(new Error("multipart field 'file' missing"), { statusCode: 400, code: 'missing_file' });
+  }
+  return { file, fields };
+}
+
+/**
+ * Register STT routes on a Fastify instance.
+ * @param {import('fastify').FastifyInstance} app
  */
 export function registerSttRoutes(app) {
 
   // ── POST /v1/audio/transcriptions ────────────────────────────────────────
 
-  app.post('/v1/audio/transcriptions', {
-    config: { rawBody: false },
-  }, async (request, reply) => {
-    await proxyToNVoice(request, reply, '/v1/audio/transcriptions');
+  app.post('/v1/audio/transcriptions', async (request, reply) => {
+    let parsed;
+    try {
+      parsed = parseMultipart(request.body, request.headers['content-type']);
+    } catch (err) {
+      return reply.code(err.statusCode ?? 400).send({
+        error: { message: err.message, type: 'invalid_request_error', code: err.code ?? 'bad_request' },
+      });
+    }
+
+    const audio = parsed.file.buf;
+    const fields = parsed.fields;
+
+    try {
+      const result = await stt.transcribe({
+        audio,
+        language: fields.language || undefined,
+        wordTimestamps: fields.word_timestamps === 'true' || fields.word_timestamps === true,
+        segmentTimestamps: true,
+      });
+      log.info('transcription complete', {
+        bytes: audio.length,
+        language: result.language,
+        duration: result.duration,
+      });
+      return reply.send(result);
+    } catch (err) {
+      log.error('transcription failed', { error: err.message });
+      return reply.code(err.statusCode ?? 500).send({
+        error: {
+          message: err.message,
+          type: err.code?.startsWith('stt_') ? 'engine_error' : 'api_error',
+          code: err.code ?? 'stt_error',
+        },
+      });
+    }
   });
 
   // ── POST /v1/audio/align ─────────────────────────────────────────────────
 
-  app.post('/v1/audio/align', {
-    config: { rawBody: false },
-  }, async (request, reply) => {
-    await proxyToNVoice(request, reply, '/v1/audio/align');
-  });
-}
-
-/**
- * Forward a raw multipart request to nVoice and stream the response back.
- */
-async function proxyToNVoice(request, reply, path) {
-  if (!config.nvoiceUrl) {
-    return reply.code(503).send({
-      error: {
-        message: 'nVoice URL not configured. Set nvoice_url in config.json.',
-        type: 'service_unavailable',
-        code: 'nvoice_not_configured',
-      },
-    });
-  }
-
-  const url = `${config.nvoiceUrl}${path}`;
-  const contentType = request.headers['content-type'];
-
-  try {
-    // Forward the buffered multipart body set by Fastify's parser.
-    const body = Buffer.isBuffer(request.body)
-      ? request.body
-      : Buffer.from(request.body || '');
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': contentType },
-      body,
-      signal: AbortSignal.timeout(120_000),  // 2 min timeout for long audio
-    });
-
-    // Forward status and content-type
-    reply.code(resp.status);
-    const respContentType = resp.headers.get('content-type');
-    if (respContentType) reply.type(respContentType);
-
-    if (resp.body) {
-      const buf = Buffer.from(await resp.arrayBuffer());
-      reply.send(buf);
-    } else {
-      reply.send();
+  app.post('/v1/audio/align', async (request, reply) => {
+    let parsed;
+    try {
+      parsed = parseMultipart(request.body, request.headers['content-type']);
+    } catch (err) {
+      return reply.code(err.statusCode ?? 400).send({
+        error: { message: err.message, type: 'invalid_request_error', code: err.code ?? 'bad_request' },
+      });
     }
-  } catch (err) {
-    if (err.name === 'TimeoutError') {
-      return reply.code(504).send({
+
+    const text = parsed.fields.text;
+    if (typeof text !== 'string' || !text.trim()) {
+      return reply.code(400).send({
         error: {
-          message: 'nVoice request timed out',
-          type: 'service_unavailable',
-          code: 'nvoice_timeout',
+          message: "Missing required field 'text'",
+          type: 'invalid_request_error',
+          code: 'missing_text',
+          param: 'text',
         },
       });
     }
-    return reply.code(502).send({
-      error: {
-        message: `nVoice proxy error: ${err.message}`,
-        type: 'engine_error',
-        code: 'nvoice_error',
-      },
-    });
-  }
+
+    const audio = parsed.file.buf;
+
+    try {
+      const result = await stt.alignPcm(audio, text);
+      log.info('alignment complete', {
+        bytes: audio.length,
+        duration: result.duration,
+        words: result.words.length,
+      });
+      return reply.send(result);
+    } catch (err) {
+      log.error('alignment failed', { error: err.message });
+      return reply.code(err.statusCode ?? 500).send({
+        error: {
+          message: err.message,
+          type: err.code?.startsWith('stt_') ? 'engine_error' : 'api_error',
+          code: err.code ?? 'stt_error',
+        },
+      });
+    }
+  });
 }

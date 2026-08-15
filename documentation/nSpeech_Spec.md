@@ -171,7 +171,24 @@ Prefix matching:
 
 Sub-model normalization: underscores → hyphens, version numbers use dots (`2_8` → `2.8`).
 
-### 4.5 server/transcode.js — PCM to Compressed Audio
+### 4.5 server/chunking.js — Auto-Chunking for Long-Form TTS
+
+Cloud engines have per-request text limits (ElevenLabs ~5000, MiniMax 10000, xAI 15000). When client text exceeds the engine's `maxChars`, `speech.js` routes through the chunking module instead of calling `generatePcmStream()` directly.
+
+**Flow:**
+
+1. `shouldChunk(text, engine)` — `text.length > engine.maxChars`?
+2. `splitIntoChunks(text, maxChars)` — split on natural boundaries: paragraph (`\n\n`) → sentence (`. ! ? …`) → clause (`, ;`) → hard cut. Accumulate into chunks under the limit.
+3. `generateChunked()` — for each chunk: inject `previous_text`/`next_text` continuity context into `extra_body`, call `engine.generatePcmStream()` in batch mode, collect PCM, append inter-chunk silence (default 1000ms, `extra_body.chunk_silence_ms`).
+4. Concatenate all PCM buffers → single `Readable` → normal transcode path.
+
+**Engine `maxChars` property:** every adapter and `WorkerProcess` exposes `maxChars` (cloud: API limit minus safety margin; local: `Infinity`). ElevenLabs is the only provider with native continuity fields — its adapter passes `previous_text`/`next_text` through to the API. Other providers ignore them (simple concatenation).
+
+**Client control:** `extra_body.auto_chunk` (default `true`) disables chunking; `extra_body.chunk_silence_ms` (default `1000`) tunes silence padding; `extra_body.chunk_tail_fade_ms` (default `75`) fades every chunk tail to zero so a mid-phoneme engine cutoff can't pop into the silence; batch-mode trim offsets snap to the nearest zero crossing (≤25ms) for click-free cuts.
+
+**Batch-only:** chunked generation always runs in batch mode internally (full PCM per chunk). The client receives one complete response with `X-Stream-Mode: chunked`. Streaming chunking (sequential upstream requests piped into one downstream stream) is a future extension.
+
+### 4.6 server/transcode.js — PCM to Compressed Audio
 
 `pipePcmToClient(pcmStream, rawResponse, format)`:
 
@@ -191,7 +208,7 @@ Format args:
 | `pcm` | — | — | Raw | s16le 24kHz mono |
 | `pcm_f32` | — | — | Raw | float32 24kHz mono (internal clients) |
 
-### 4.6 server/presets.js — Voice Preset Store
+### 4.7 server/presets.js — Voice Preset Store
 
 Node-managed JSON files in `presets/<engine>.json`. Presets are engine-scoped.
 

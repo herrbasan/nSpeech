@@ -222,7 +222,12 @@ export function registerAdminRoutes(app) {
     const { listEngines, getEntry, venvExists } = await import('../engine/registry.js');
     const { listCloudEngines } = await import('../cloud/registry.js');
 
-    const localEngines = listEngines().map(name => {
+    const localEngines = listEngines().filter(name => {
+      // "stt" is an internal worker (transcription/alignment), not a TTS
+      // engine — excluded from switching and the TTS engine surface.
+      const entry = getEntry(name);
+      return !entry.stt;
+    }).map(name => {
       const entry = getEntry(name);
       return {
         name,

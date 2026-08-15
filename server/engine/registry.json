@@ -4,6 +4,12 @@
     "worker_module": "nspeech.worker_server",
     "gpu": true
   },
+  "stt": {
+    "venv_python": "venv/stt/env/Scripts/python.exe",
+    "worker_module": "nspeech.stt_worker",
+    "gpu": false,
+    "stt": true
+  },
   "chatterbox-turbo": {
     "venv_python": "venv/chatterbox/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",

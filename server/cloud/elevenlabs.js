@@ -29,6 +29,23 @@ function mapExtraBody(eb) {
 }
 
 export class ElevenLabsAdapter {
+  /** Per-request char limit (API limit minus safety margin). Used by chunking.
+   * Note: this is the limit for the DEFAULT model (eleven_v3). For model-aware
+   * limits, use getMaxChars(model) — v3=5K, multilingual_v2=10K, flash_v2.5=40K. */
+  get maxChars() { return 4800; }
+
+  /** Model-aware char limit. Returns the limit for the given model ID minus safety margin. */
+  getMaxChars(model) {
+    const limits = {
+      'eleven_v3': 5000,
+      'eleven_multilingual_v2': 10000,
+      'eleven_flash_v2_5': 40000,
+      'eleven_flash_v2': 30000,
+    };
+    const limit = limits[model] ?? limits['eleven_v3'];
+    return Math.floor(limit * 0.96); // 4% safety margin
+  }
+
   constructor() {
     this._apiKey = null;
     this._voicesCache = null;
@@ -72,15 +89,28 @@ export class ElevenLabsAdapter {
     };
     if (eb.seed !== undefined) reqBody.seed = eb.seed;
     if (extra_body?.language) reqBody.language_code = extra_body.language;
+    // Continuity context for multi-request sequences (auto-chunking).
+    // previous_text/next_text give the engine prosody context across chunks.
+    // NOTE: eleven_v3 does NOT support these fields (HTTP 400 unsupported_model).
+    // Only inject for v2 models (eleven_multilingual_v2, eleven_turbo_v2_5, etc.).
+    const supportsContinuity = !reqBody.model_id.startsWith('eleven_v3');
+    if (supportsContinuity) {
+      if (extra_body?.previous_text) reqBody.previous_text = extra_body.previous_text;
+      if (extra_body?.next_text) reqBody.next_text = extra_body.next_text;
+    }
 
     log.info('ElevenLabs generate', {
       model: reqBody.model_id, voice: voiceId, textLen: text.length,
       batch: isBatch, textPreview: (text || '').slice(0, 200),
     });
 
+    // optimize_streaming_latency is deprecated AND rejected by eleven_v3.
+    // Only include it for legacy v2 models. New models should not see it.
+    const latencyParam = reqBody.model_id.startsWith('eleven_v3') ? '' : '&optimize_streaming_latency=3';
+
     if (isBatch) {
       // ── Batch: full render before first byte ────────────────────────────
-      const url = `${BASE_URL}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=pcm_24000&optimize_streaming_latency=3`;
+      const url = `${BASE_URL}/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=pcm_24000${latencyParam}`;
       const resp = await fetch(url, {
         method: 'POST',
         headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },

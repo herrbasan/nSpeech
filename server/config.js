@@ -80,7 +80,9 @@ export const config = {
 
   defaultEngine: configJson.default_engine ?? 'kokoro',
 
-  nvoiceUrl: configJson.nvoice_url ?? null,
+  // NOTE: nvoiceUrl was removed 2026-08-14 — transcription/alignment now run
+  // on the local stt worker. Direct nVoice access (realtime STT, archival)
+  // is caller-side; nSpeech no longer proxies it.
   voiceDir: configJson.voice_dir ?? 'venv/{engine}/voices',
   modelDir: configJson.model_dir ?? 'venv/{engine}/models',
 

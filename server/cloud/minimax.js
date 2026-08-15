@@ -63,6 +63,9 @@ function mapExtraBody(eb) {
 }
 
 export class MiniMaxAdapter {
+  /** Per-request char limit (API limit 10000 minus safety margin). Used by chunking. */
+  get maxChars() { return 9800; }
+
   constructor() {
     this._apiKey = null;
     this._voicesCache = null;

@@ -8,7 +8,7 @@
 
 ### Primary Goal
 
-A reliable, consistent TTS service with a simple, powerful API that can drive multiple speech engines — local GPU models and cloud providers — behind a single OpenAI-compatible interface.
+A reliable, consistent TTS **and STT** service with a simple, powerful API that can drive multiple speech engines — local GPU models and cloud providers — behind a single OpenAI-compatible interface. Transcription and text-constrained forced alignment run locally on CPU, independent of any GPU engine lifecycle.
 
 ### Engine Strategy (2026-07-17)
 
@@ -45,6 +45,61 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 ---
 
 ## Activity Log
+
+### 2026-08-15 — Stitch Pipeline Finalized + Progress Events
+
+**Focus:** Complete the batch-stitch workflow on a full 4-chunk real fixture; polish join quality; design progress reporting.
+
+**Fixture:** `logs/stitch-ghost/` — full Ghost article (14,123 chars) as 4 real `eleven_v3` chunks with correct rolling-paragraph overlaps (chunk 1 regenerated: the original audio predated the overlap planner). `scripts/gen-fixture-chunk.js` generates a single chunk from its saved text; `scripts/align-probe.js` benchmarks alignment against a manually started worker.
+
+**Join quality (all in `server/chunking.js`, verified by ear):**
+- `DEFAULT_SILENCE_MS` 300 → **1000** (narration pacing)
+- **Zero-crossing snap** on trim offsets (≤25ms scan) — click-free cuts
+- **75ms tail fade-out on every chunk** (`chunk_tail_fade_ms`) — ElevenLabs cuts audio mid-phoneme at text end (26% peak in final 10ms, zero decay); the cliff into silence popped without this
+- 15ms head fade-in kept as safety net
+
+**Alignment speed:** STT worker thread cap default 4 → 12 (`NSPEECH_STT_THREADS` still overrides) — 1.6–1.8× faster (61.5s prefix: 18.7s → 11.5s). Prefix estimate tightened `(w/2.6)×1.6+8` → `×1.3+4`. Total align ~13s per 4-chunk batch.
+
+**API rename:** `extra_body.mode`: `'stream'` (default) / `'stitch'` / `'off'`. `batch:true` and `auto_chunk:false` kept as deprecated aliases. Docs updated (API_REFERENCE.md, nSpeech_Spec.md, README.md).
+
+**Progress events (model B — one bar + stage):** `tts` events on `/v1/admin/events` carry `percent` 0–100 (equal share per chunk; generation ticks every ≥5s from streamed bytes, self-calibrating bytes/char seeded at 3827 from fixture) + stage label (`plan`/`generating`/`aligning`/`trimmed`/`done`/`failed`).
+
+**Pending:**
+- E2E test driven by the RAUM curator (real external caller), which also validates progress events live
+- MP3 transcode efficiency: mono 64kbps 44.1kHz target (currently stereo 128kbps)
+- STT worker spawn-from-throwaway-script failure seen once (parent-pid watcher suspected) — verify in E2E
+
+### 2026-08-14 — Batch Stitching Fixed + Local STT Worker
+
+**Focus:** Repair batch-mode chunk stitching; decouple it (and transcription) from nVoice entirely.
+
+**Three root-cause bugs in stitching found & fixed (zero ElevenLabs quota burned — offline fake-engine harness with Kokoro-generated ground truth):**
+
+1. `chunking.js` sent headerless raw PCM to nVoice → ffmpeg format detection crash (garbage exit codes). Fixed with WAV wrapping.
+2. Alignment engines returned no word timestamps (parakeet pipeline ignores `return_timestamps`; transducers can't constrain to text at all).
+3. Odd byte-offset trim (`Math.floor` on samples) corrupted the PCM stream downstream — half-sample misalignment. Fixed to sample-aligned even offsets.
+
+**Architecture decision — STT is now a first-class nSpeech offering (own worker: `venv/stt`, registry engine `stt`, `gpu:false`):**
+
+- `/v1/audio/transcriptions` — faster-whisper large-v3 int8 CPU (model reused from existing HF cache)
+- `/v1/audio/align` — torchaudio MMS_FA **CTC forced alignment**: Viterbi path constrained to the given text — word count mathematically guaranteed to equal `text.split().length`. This is what boundary trimming depends on (user insight: "the true precision comes from that alignment"). Chose CTC constrained alignment over ASR-based timestamps (whisper DTW is unconstrained; parakeet TDT cannot constrain).
+- STT worker cannot be evicted by engine switching in nSpeech or nVoice (CPU-only; excluded from TTS engine surface via `stt:true` registry flag).
+- Old nVoice proxy kept as `server/api/transcriptions.js.nvoice-proxy.bak`.
+
+**Validated E2E offline:** truthful fixture (Kokoro speaks exactly the chunk texts) → align boundary `There` at 18.940s (20ms precision, prob 0.998), trim + fade + stitch clean (RMS join analysis + transcript cross-check: no duplicated overlap, no lost content).
+
+**Discoveries:**
+
+- CTC alignment MUST receive audio that actually speaks the given text — mismatched audio yields smeared but "successful" spans (Viterbi finds a global path anyway).
+- MMS tokenizer needs uroman romanization + lowercase + punctuation stripping (no umlauts/caps in its dict).
+- nVoice `/v1/audio/align` silently ignores its `text` field (G5 comment in its source) — it is transcription, not alignment.
+- Multipart fields must be added before the closing boundary (a field after `--boundary--` is never sent).
+
+**Pending:**
+
+- Real `eleven_v3` batch run (~12K chars) to confirm v3 speaks the prepended overlap naturally — local pipeline proven and waiting.
+- Smoke script for live STT routes: `scripts/smoke-stt-routes.js` (needs the restarted server).
+- `nvoice_url` in config.json now unused by chunking (kept for reference).
 
 ### 2026-07-17 — Kimi K3 Session
 
@@ -115,7 +170,8 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 - **LLM-native codebase:** Structure optimized for LLM parsing, not human conventions.
 - **Zero dependencies:** Standard library first. Dependencies only when truly necessary.
 - **.env is NEVER committed:** API keys stay local.
+- **Never start/stop the server:** The assistant must NEVER run `npm start`, restart, or kill the nSpeech server. If a restart is needed, ask the user to do it.
 
 ---
 
-*Last updated: 2026-07-17*
+*Last updated: 2026-08-14*

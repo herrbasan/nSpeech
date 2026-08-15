@@ -1,6 +1,6 @@
 # nSpeech API Reference (V3)
 
-nSpeech V3 is a multi-engine TTS service. A Node.js (Fastify) server proxies an OpenAI-compatible HTTP API, manages per-engine Python workers and cloud adapters, and transcodes raw PCM→compressed audio via bundled ffmpeg. This is the canonical reference for the `/v1/*` surface.
+nSpeech V3 is a multi-engine TTS **and** STT service. A Node.js (Fastify) server exposes an OpenAI-compatible HTTP API, manages per-engine Python workers and cloud adapters, and transcodes raw PCM→compressed audio via bundled ffmpeg. This is the canonical reference for the `/v1/*` surface.
 
 **Base URL:** `http://<host>:<port>` (default `http://127.0.0.1:2233`).
 
@@ -8,7 +8,9 @@ nSpeech V3 is a multi-engine TTS service. A Node.js (Fastify) server proxies an 
 
 `client → Node (Fastify) → engine (Python worker or cloud adapter) → Node (ffmpeg) → client`
 
-Every engine emits raw PCM (s16le, 24 kHz, mono). Node owns format transcoding. Cloud adapters run directly in Node — no Python process.
+Every TTS engine emits raw PCM (s16le, 24 kHz, mono). Node owns format transcoding. Cloud adapters run directly in Node — no Python process.
+
+STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 int8 for transcription, torchaudio MMS_FA for text-constrained forced alignment. It is registered as engine `stt` (`gpu: false`) — engine switching never touches it — and is excluded from the TTS engine surface.
 
 ## Endpoints
 
@@ -26,8 +28,8 @@ Every engine emits raw PCM (s16le, 24 kHz, mono). Node owns format transcoding. 
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
 | GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
-| POST | `/v1/audio/transcriptions` | Speech-to-text (proxied to nVoice) |
-| POST | `/v1/audio/align` | Forced alignment (proxied to nVoice) |
+| POST | `/v1/audio/transcriptions` | Speech-to-text (local faster-whisper, CPU) |
+| POST | `/v1/audio/align` | Forced alignment, text-constrained (local MMS CTC, CPU) |
 | GET | `/health` | `{"status":"ok","version":"3.0.0","engine":"<active>"}` |
 | GET | `/engine` | `{"engine":"<active>"}` |
 
@@ -123,6 +125,26 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 | `pronunciation` | object | `{tone: ["original/replacement"]}`. IPA, pinyin, jyutping, kana. |
 | `ssml` | boolean | Interpret input as SSML. |
 | `language` | string | ISO-639-1 hint or `auto`. |
+
+#### Long-Form / Auto-Chunking
+
+When `input` exceeds the engine's per-request char limit, nSpeech transparently splits the text on natural boundaries (paragraph → sentence → clause), generates each chunk sequentially, and stitches the PCM into one continuous response. Clients don't need to know about engine limits.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `mode` | string | `'stream'` | `'stream'` = simple chunks, silence-padded joins, progressive delivery. `'stitch'` = seamless joins via spoken overlap + forced alignment + trim (buffered: first byte after full render). `'off'` = no chunking (fails over the engine's char limit). |
+| `batch` | boolean | — | Deprecated alias: `true` ≡ `mode:'stitch'`. |
+| `auto_chunk` | boolean | — | Deprecated alias: `false` ≡ `mode:'off'`. |
+| `chunk_silence_ms` | int | `1000` | Silence inserted between chunks, in milliseconds. `0` = none. |
+| `chunk_fade_ms` | int | `15` | Fade-in at the trim boundary to smooth the cut. |
+| `chunk_tail_fade_ms` | int | `75` | Fade-out at every chunk tail. Engines may cut the final phoneme with zero decay; without this fade the cliff into the inter-chunk silence is audible as a pop. |
+| `chunk_overlap` | int | `1` | Number of trailing paragraphs prepended as overlap in batch mode. |
+
+Engine char limits (model-aware): eleven_v3 4800, eleven_multilingual_v2 9600, eleven_flash_v2_5 38400, MiniMax ~9800, Gemini ~4800, xAI ~14800, local engines unlimited.
+
+**Stream vs stitch:** `stream` (default) uses simple chunks with silence padding — first byte early, no overlap. `stitch` renders everything before first byte but produces seamless joints: the overlap paragraph is generated as part of each next chunk (warming the engine's prosody), located in the audio via **forced alignment constrained to the known text** (word count is mathematically guaranteed), trimmed at the exact word boundary snapped to the nearest zero crossing (click-free cut), and faded in. Alignment runs on nSpeech's own CPU worker — no external service, unaffected by engine switching anywhere.
+
+**Progress events:** stitch runs emit `tts` events on the admin SSE bus (`/v1/admin/events`) with a single overall progress model: `percent` 0–100 (each chunk owns an equal share; during generation, streamed bytes advance the share, self-calibrating bytes/char after the first chunk) plus a stage label — `plan`, `generating N/M`, `aligning N/M`, `trimmed N/M`, `done`, `failed`.
 
 ### Response
 
@@ -261,7 +283,75 @@ Cloud engines (MiniMax, ElevenLabs) emit a single `switch_done` status event sin
 
 ---
 
-## 4. Errors
+## 4. Speech-to-Text — `POST /v1/audio/transcriptions`
+
+Transcribe an audio file with faster-whisper large-v3 (int8, CPU). First request lazily spawns the STT worker (~10–60s cold start while models load; ~1–3s warm).
+
+### Request (multipart)
+
+| Part | Type | Required | Description |
+|------|------|----------|-------------|
+| `file` | file | **yes** | Audio bytes. WAV/FLAC (soundfile-readable containers). Raw PCM works if wrapped — the OpenAI SDK convention of `audio.wav` naming is expected. |
+| `language` | field | no | ISO-639-1 code. Omit for auto-detect. |
+| `word_timestamps` | field | no | `"true"` to include per-word timestamps. |
+
+```bash
+curl -X POST http://127.0.0.1:2233/v1/audio/transcriptions \
+  -F "file=@audio.wav" \
+  -F "word_timestamps=true"
+```
+
+### Response
+
+```json
+{
+  "text": "A data model fixed. Each choice is a door closing.",
+  "language": "en",
+  "duration": 12.0,
+  "segments": [{"text": "...", "start": 0.0, "end": 5.2, "words": [{"word": "A", "start": 0.0, "end": 0.08}]}],
+  "words": [{"word": "A", "start": 0.0, "end": 0.08}]
+}
+```
+
+Word timestamps on transcription are **unconstrained ASR output** — whisper may drop or hallucinate words on hard audio. If you know the text and need guaranteed word↔time correspondence, use `/v1/audio/align`.
+
+---
+
+## 5. Forced Alignment — `POST /v1/audio/align`
+
+Align **known text** to audio with torchaudio MMS_FA — wav2vec2 CTC forced alignment (multilingual, ~1100 languages incl. DE/EN). The Viterbi path is constrained to the given text: **words cannot be dropped, added, or hallucinated**. Output word count always equals `text.split().length`. This is what powers batch-stitch boundary trimming.
+
+### Request (multipart)
+
+| Part | Type | Required | Description |
+|------|------|----------|-------------|
+| `file` | file | **yes** | WAV audio bytes. |
+| `text` | field | **yes** | The exact text spoken in the audio. |
+
+```bash
+curl -X POST http://127.0.0.1:2233/v1/audio/align \
+  -F "file=@audio.wav" \
+  -F "text=Der Korridor war eine Wahl und keine Notwendigkeit."
+```
+
+### Response
+
+```json
+{
+  "text": "Der Korridor war eine Wahl und keine Notwendigkeit.",
+  "duration": 4.2,
+  "words": [
+    {"word": "Der", "start": 0.08, "end": 0.24, "probability": 0.99},
+    {"word": "Korridor", "start": 0.3, "end": 0.95, "probability": 0.98}
+  ]
+}
+```
+
+Timestamps resolve to 20ms frames (MMS emission stride). Text is uroman-romanized internally (umlauts, non-Latin scripts handled); words with no romanizable content (pure punctuation/numbers) collapse onto neighbors but keep their slot. **Caveat:** the audio must actually contain the given text — CTC alignment against mismatched audio produces smeared, meaningless spans (it will still "succeed"). Accuracy on clean speech: word boundaries to ~20–40ms.
+
+---
+
+## 6. Errors
 
 OpenAI-compatible shape:
 
@@ -280,7 +370,7 @@ OpenAI-compatible shape:
 
 ---
 
-## 5. Examples
+## 7. Examples
 
 ```bash
 # Local engine (whatever dashboard selected) — generate MP3
@@ -325,6 +415,20 @@ curl http://127.0.0.1:2233/v1/admin/engines
 
 # Live event stream
 curl -N http://127.0.0.1:2233/v1/admin/events
+
+# Transcribe audio (auto-detect language, word timestamps)
+curl -X POST http://127.0.0.1:2233/v1/audio/transcriptions \
+  -F "file=@audio.wav" -F "word_timestamps=true"
+
+# Forced alignment — known text, guaranteed word count
+curl -X POST http://127.0.0.1:2233/v1/audio/align \
+  -F "file=@audio.wav" -F "text=A data model fixed. Each choice is a door closing."
+
+# Long-form stitching (seamless joints, overlap-trimmed)
+curl -X POST http://127.0.0.1:2233/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{"model":"elevenlabs","input":"<6000 chars of text...>","voice":"JBFqnCBsd6RMkjVDRZzb","extra_body":{"mode":"stitch"}}' \
+  --output long.mp3
 
 # One-shot clone + generate
 curl -X POST "http://127.0.0.1:2233/v1/audio/speech/clone?engine=minimax&response_format=mp3" \

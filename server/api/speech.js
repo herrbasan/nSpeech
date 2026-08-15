@@ -14,6 +14,7 @@ import { getContentType, normalizeFormat } from './formats.js';
 import { logger } from '../logger.js';
 import { pipePcmToClient } from '../transcode.js';
 import * as presets from '../presets.js';
+import * as chunking from '../chunking.js';
 
 const log = logger.child('speech');
 
@@ -78,16 +79,60 @@ export async function relaySpeech(request, reply, body) {
   }
 
   // ── Generate PCM stream ─────────────────────────────────────────────────
+  // Auto-chunking: when text exceeds the engine's per-request limit, split
+  // on natural boundaries, generate sequentially, stitch the PCM.
+  //
+  // Client control via extra_body.mode:
+  //   'stream' (default) — simple chunks with silence padding, progressive
+  //     delivery where the engine supports it. Fast, joins are audible.
+  //   'stitch' — seamless joins: each chunk is generated with the previous
+  //     chunk's last paragraph as spoken overlap, aligned (local STT worker),
+  //     trimmed at the word boundary (zero-crossing snapped), faded in/out.
+  //     Buffered: first byte after the full render.
+  //   'off' — no chunking; text passed through as-is (fails over the limit).
+  //
+  // Deprecated aliases: batch=true → 'stitch', auto_chunk=false → 'off'.
   let pcmStream;
   try {
-    pcmStream = await engine.generatePcmStream({
-      text: body.input,
-      voice_name: voiceName,
-      speed,
-      instruct_text: instructions,
-      extra_body: extraBody,
-      model: subModel,
-    });
+    const mode = extraBody.mode
+      ?? (extraBody.batch === true ? 'stitch' : null)
+      ?? (extraBody.auto_chunk === false ? 'off' : null)
+      ?? 'stream';
+    if (mode !== 'off' && chunking.shouldChunk(body.input, engine)) {
+      if (mode === 'stitch') {
+        pcmStream = await chunking.generateChunkedBatch({
+          text: body.input,
+          engine,
+          voiceName,
+          speed,
+          instructions,
+          extraBody,
+          subModel,
+          // Progress flows to the admin SSE bus (/v1/admin/events) via emit()
+          // inside chunking. The callback hook exists for future job APIs.
+          onProgress: undefined,
+        });
+      } else {
+        pcmStream = await chunking.generateChunked({
+          text: body.input,
+          engine,
+          voiceName,
+          speed,
+          instructions,
+          extraBody,
+          subModel,
+        });
+      }
+    } else {
+      pcmStream = await engine.generatePcmStream({
+        text: body.input,
+        voice_name: voiceName,
+        speed,
+        instruct_text: instructions,
+        extra_body: extraBody,
+        model: subModel,
+      });
+    }
   } catch (err) {
     return sendError(reply, err);
   }

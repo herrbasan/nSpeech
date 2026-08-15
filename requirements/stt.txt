@@ -1,0 +1,11 @@
+# nSpeech STT worker — transcription + forced alignment
+# CPU-only. No torch CUDA, no GPU awareness needed.
+faster-whisper==1.2.1
+torch>=2.4.0
+torchaudio>=2.4.0
+uroman
+numpy>=2.0.0
+soundfile>=0.12.1
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.6

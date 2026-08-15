@@ -50,6 +50,9 @@ function mapExtraBody(eb) {
 }
 
 export class XaiAdapter {
+  /** Per-request char limit (API limit 15000 minus safety margin). Used by chunking. */
+  get maxChars() { return 14800; }
+
   constructor() {
     this._apiKey = null;
     this._voicesCache = null;

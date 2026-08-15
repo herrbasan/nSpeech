@@ -149,6 +149,9 @@ function _extractPcmFromResponse(data) {
 }
 
 export class GeminiAdapter {
+  /** Per-request char limit (approximate — Gemini has no documented hard limit). Used by chunking. */
+  get maxChars() { return 4800; }
+
   constructor() {
     this._apiKey = null;
   }

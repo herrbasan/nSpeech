@@ -1,6 +1,6 @@
 # nSpeech
 
-Multi-engine Text-to-Speech with a unified OpenAI-compatible API. Run local GPU models (Kokoro, Chatterbox) and cloud providers (MiniMax, ElevenLabs, Gemini, xAI) behind one simple HTTP interface.
+Multi-engine Text-to-Speech **and Speech-to-Text** with a unified OpenAI-compatible API. Run local GPU models (Kokoro, Chatterbox) and cloud providers (MiniMax, ElevenLabs, Gemini, xAI) behind one simple HTTP interface — plus local CPU transcription (faster-whisper) and text-constrained forced alignment (MMS CTC).
 
 ## What You Get
 
@@ -8,6 +8,9 @@ Multi-engine Text-to-Speech with a unified OpenAI-compatible API. Run local GPU 
 - **Multiple engines** — local (Kokoro, Chatterbox Turbo) + cloud (MiniMax, ElevenLabs, Gemini, xAI)
 - **Voice library** — native system voices, cloned voices, and saved presets
 - **Streaming** — real-time PCM → MP3/Opus/AAC via ffmpeg
+- **Long-form stitching** — texts beyond engine limits are chunked and seamlessly stitched (`extra_body.mode:'stitch'`: spoken overlap + forced-alignment trim)
+- **Transcription** — `POST /v1/audio/transcriptions` (faster-whisper large-v3, CPU, word timestamps)
+- **Forced alignment** — `POST /v1/audio/align` (MMS CTC — constrained to your text, word count guaranteed, DE/EN + 1100 languages)
 - **Simple integration** — standard JSON in, audio out
 
 ## Quick Start
@@ -52,6 +55,16 @@ curl http://127.0.0.1:2233/v1/voices?engine=kokoro
 ```
 
 Returns native, cloned, and preset voices. Use any `voice_id` in the `voice` field.
+
+### 4. Transcribe Audio
+
+```bash
+curl -X POST http://127.0.0.1:2233/v1/audio/transcriptions \
+  -F "file=@audio.wav" \
+  -F "word_timestamps=true"
+```
+
+Local CPU (faster-whisper large-v3 int8). First call spawns the STT worker; subsequent calls are warm. If you already know the text, `POST /v1/audio/align` pins it to the audio with guaranteed word correspondence (used internally for seamless chunk stitching).
 
 ## Integration
 
@@ -149,6 +162,21 @@ Pass `extra_body` for engine-specific options. Unsupported fields are silently i
 
 See [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) for the full `extra_body` field support matrix.
 
+### Long Texts (Seamless Stitching)
+
+When text exceeds the engine's char limit, choose the join quality with `extra_body.mode`:
+
+```javascript
+{
+  model: 'elevenlabs',
+  input: '<a full article...>',
+  voice: 'my_narrator',
+  extra_body: { mode: 'stitch' }   // seamless joins; default 'stream' is fast but has audible seams
+}
+```
+
+`stitch` renders each chunk with the previous chunk's last paragraph as spoken overlap, locates the boundary via local forced alignment (CPU, no external service), trims at the zero-crossing nearest the word boundary, and fades both sides. Progress events (percent + stage) stream on `/v1/admin/events` (SSE).
+
 ### Voice Blending (Per-Request)
 
 Blend up to 4 voices on the fly without saving:
@@ -196,6 +224,7 @@ Clients do not need the dashboard — they use the API directly.
 | **ElevenLabs** | Cloud | 10,000+ | Professional | Premium quality |
 | **Gemini** | Cloud | 30 system | — | Instruction-driven style |
 | **xAI** | Cloud | System | — | Alternative cloud option |
+| **STT worker** | Local (CPU) | — | — | faster-whisper v3 + MMS alignment; internal engine `stt`, never evicted by TTS switching |
 
 ## Requirements
 

@@ -104,6 +104,10 @@ export class WorkerProcess {
       NSPEECH_ENGINE: this.engineName,
       NSPEECH_VOICE_DIR: engineVoiceDir,
       NSPEECH_MODEL_DIR: engineModelDir,
+      // Parent liveness anchor: workers exit themselves if this pid dies
+      // (prevents orphaned CPU burners when the spawner crashes or exits
+      // without cleanup — 2026-08-12 incident class).
+      NSPEECH_PARENT_PID: String(process.pid),
       PYTHONPATH: this.srcDir + (process.env.PYTHONPATH ? delimiter + process.env.PYTHONPATH : ''),
     };
 
@@ -530,6 +534,9 @@ export class WorkerProcess {
   //  engine.generatePcmStream() instead of worker.relay() directly.
   //  Same surface as cloud adapters; handlers don't know the difference.
   // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Local engines have no per-request char limit — chunking never triggers. */
+  get maxChars() { return Infinity; }
 
   health() {
     return { status: this.state, engine: this.engineName };
