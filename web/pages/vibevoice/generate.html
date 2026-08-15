@@ -5,14 +5,7 @@
     </header>
 
     <nui-card>
-        <nui-input-group>
-            <label for="vv-voice">Voice (Speaker 1)</label>
-            <nui-select id="voice-select">
-                <select id="vv-voice">
-                    <option value="default" selected>Select a cloned voice...</option>
-                </select>
-            </nui-select>
-        </nui-input-group>
+        <div id="vv-speaker-voices"></div>
 
         <nui-input-group>
             <label for="vv-text">Script</label>
@@ -20,7 +13,7 @@
                 <textarea id="vv-text" placeholder="Raw text, or multi-speaker script...">Speaker 1: Welcome to the show. Today we're talking about flow matching and diffusion models for speech synthesis.</textarea>
             </nui-textarea>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">
-                Multi-speaker format: one line per turn — <code>Speaker 1: text</code>, <code>Speaker 2: text</code>. Raw text without labels is wrapped as Speaker 1 using the selected voice.
+                Multi-speaker format: one line per turn — <code>Speaker 1: text</code>, <code>Speaker 2: text</code>. Speaker voice selectors appear above when speaker labels are detected.
             </p>
         </nui-input-group>
 
@@ -55,9 +48,9 @@
 function init(element, params, nui) {
     let mediaSource = null;
     let abortController = null;
+    let availableVoices = [];
 
-    const voiceSelect = element.querySelector('#voice-select');
-    const selectEl = element.querySelector('#vv-voice');
+    const speakerVoicesEl = element.querySelector('#vv-speaker-voices');
     const textArea = element.querySelector('#vv-text');
     const arenaBtn = element.querySelector('#btn-arena-sample');
     const arenaInfo = element.querySelector('#vv-arena-info');
@@ -72,7 +65,55 @@ function init(element, params, nui) {
         ta.style.height = 'auto';
         ta.style.height = ta.scrollHeight + 'px';
     }
-    textArea.addEventListener('input', () => autoResize(textArea));
+
+    function detectSpeakers(text) {
+        const ids = new Set();
+        for (const m of text.matchAll(/^\s*Speaker\s+(\d+)\s*:/gim)) {
+            ids.add(parseInt(m[1], 10));
+        }
+        return [...ids].sort((a, b) => a - b);
+    }
+
+    function buildSpeakerSelectors() {
+        const speakers = detectSpeakers(textArea.value);
+        if (speakers.length === 0) speakers.push(1);
+
+        speakerVoicesEl.innerHTML = '';
+        for (const sid of speakers) {
+            const group = document.createElement('nui-input-group');
+            const label = document.createElement('label');
+            label.textContent = `Speaker ${sid} Voice`;
+            label.setAttribute('for', `vv-voice-${sid}`);
+            group.appendChild(label);
+
+            const selWrap = document.createElement('nui-select');
+            selWrap.id = `vv-voice-select-${sid}`;
+            const sel = document.createElement('select');
+            sel.id = `vv-voice-${sid}`;
+            sel.dataset.speakerId = sid;
+            selWrap.appendChild(sel);
+            group.appendChild(selWrap);
+            speakerVoicesEl.appendChild(group);
+
+            const items = [{ value: '', label: 'Select voice...' }];
+            for (const v of availableVoices) items.push({ value: v, label: v });
+            selWrap.setItems?.(items) || (() => {
+                sel.innerHTML = items.map(i => `<option value="${i.value}">${i.label}</option>`).join('');
+            })();
+        }
+    }
+
+    function getSpeakerVoiceMap() {
+        const map = {};
+        for (const sel of speakerVoicesEl.querySelectorAll('select[data-speaker-id]')) {
+            const sid = sel.dataset.speakerId;
+            const val = sel.value;
+            if (val) map[sid] = val;
+        }
+        return map;
+    }
+
+    textArea.addEventListener('input', () => { autoResize(textArea); buildSpeakerSelectors(); });
     autoResize(textArea);
 
     cfgEl.addEventListener('input', () => { cfgVal.textContent = cfgEl.value; });
@@ -84,6 +125,7 @@ function init(element, params, nui) {
                 if (d.text) {
                     textArea.value = 'Speaker 1: ' + d.text;
                     autoResize(textArea);
+                    buildSpeakerSelectors();
                     arenaInfo.textContent = `From: ${d.speaker} — "${d.topic}"`;
                 }
             })
@@ -96,13 +138,10 @@ function init(element, params, nui) {
         fetch('/v1/voices?engine=vibevoice')
             .then(r => r.json())
             .then(d => {
-                const allVoices = d.voices || [];
-                const cloned = allVoices
+                availableVoices = (d.voices || [])
                     .filter(v => v.voice_type === 'cloned')
-                    .map(v => ({ value: v.name, label: v.name }));
-                const items = [{ value: 'default', label: 'Select a cloned voice...' }];
-                if (cloned.length) items.push(...cloned);
-                voiceSelect.setItems(items);
+                    .map(v => v.name);
+                buildSpeakerSelectors();
             })
             .catch(() => {
                 statusEl.textContent = 'Failed to load voices';
@@ -127,7 +166,13 @@ function init(element, params, nui) {
         if (!text) return;
         stop();
 
-        const voice = selectEl.value || 'default';
+        const voices = getSpeakerVoiceMap();
+        const voiceValues = Object.values(voices);
+        if (voiceValues.length === 0) {
+            statusEl.textContent = 'Select at least one voice.';
+            return;
+        }
+
         abortController = new AbortController();
         const startTime = performance.now();
 
@@ -144,11 +189,12 @@ function init(element, params, nui) {
 
             const body = {
                 input: text,
-                voice: voice,
+                voice: voiceValues[0],
                 response_format: 'mp3',
                 extra_body: {
                     batch: true,
                     cfg_scale: parseFloat(cfgEl.value),
+                    voices: voices,
                 },
             };
 

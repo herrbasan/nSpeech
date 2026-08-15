@@ -124,10 +124,14 @@ class VibevoiceAdapter:
         Engine-specific kwargs:
             cfg_scale: classifier-free guidance (default 1.3).
             disable_prefill: skip voice cloning, use default voice (default False).
+            voices: dict mapping speaker number (int) to voice name (str).
+                    e.g. {1: "Alice", 2: "Bob"}. Falls back to voice_name
+                    for Speaker 1 when not provided.
         """
         voice_name = kwargs.get("voice_name", "default")
         cfg_scale = kwargs.get("cfg_scale", 1.3)
         disable_prefill = kwargs.get("disable_prefill", False)
+        speaker_voices = kwargs.get("voices") or {}
 
         # VibeVoice script format is strictly "Speaker N: text" (numeric IDs).
         # If the caller passed raw text (no speaker labels), wrap as Speaker 1.
@@ -136,9 +140,19 @@ class VibevoiceAdapter:
         else:
             script = text
 
-        # Resolve voice samples
-        voice_wav = str(self._voice_wav_path(voice_name))
-        voice_samples = [voice_wav] if not disable_prefill else []
+        # Resolve voice samples — positional: index 0 → first unique speaker,
+        # index 1 → second, etc. (processor maps voice_samples[:len(speakers)])
+        speaker_ids = sorted({int(m.group(1)) for m in re.finditer(r"^\s*Speaker\s+(\d+)\s*:", script, re.IGNORECASE | re.MULTILINE)})
+        voice_samples = []
+        if not disable_prefill:
+            for sid in speaker_ids:
+                vname = speaker_voices.get(str(sid)) or speaker_voices.get(sid) or (voice_name if sid == 1 else None)
+                if vname is None:
+                    raise ValueError(f"VibeVoice: no voice assigned for Speaker {sid}. Provide voices mapping or use voice_name for Speaker 1.")
+                wav = self._voice_wav_path(vname)
+                if not wav.exists():
+                    raise FileNotFoundError(f"VibeVoice voice '{vname}' missing reference audio: {wav}")
+                voice_samples.append(str(wav))
 
         # Prepare inputs
         inputs = self.processor(
