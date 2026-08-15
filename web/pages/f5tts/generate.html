@@ -27,11 +27,43 @@
         <p id="f5-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
 
         <nui-input-group>
+            <label for="f5-speed">Speed (duration divisor): <span id="f5-speed-val">1.0</span></label>
+            <nui-input>
+                <input type="range" id="f5-speed" min="0.6" max="1.3" step="0.05" value="1.0" style="width: 100%">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Lower = slower/longer. 0.8 = 25% longer. Speaking rate derives from the reference clip; this stretches it.</p>
+        </nui-input-group>
+
+        <nui-input-group>
             <label for="f5-nfe">ODE Steps (nfe_step): <span id="f5-nfe-val">32</span></label>
             <nui-input>
                 <input type="range" id="f5-nfe" min="16" max="64" step="8" value="32" style="width: 100%">
             </nui-input>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">16 = fast, 32 = balanced, 64 = audiobook quality</p>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">2.0</span></label>
+            <nui-input>
+                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="2.0" style="width: 100%">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Guidance toward the reference voice. Higher = closer timbre match, lower = more variation.</p>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="f5-sway">Sway Sampling: <span id="f5-sway-val">-1.0</span></label>
+            <nui-input>
+                <input type="range" id="f5-sway" min="-1.0" max="1.0" step="0.1" value="-1.0" style="width: 100%">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">-1 = off (deterministic sampling). Positive values add prosodic variation.</p>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="f5-seed">Seed (empty = random)</label>
+            <nui-input>
+                <input type="number" id="f5-seed" placeholder="random" style="width: 12rem">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Set a seed for reproducible output.</p>
         </nui-input-group>
 
         <nui-button-container gap="medium">
@@ -60,6 +92,13 @@ function init(element, params, nui) {
     const arenaInfo = element.querySelector('#f5-arena-info');
     const nfeEl = element.querySelector('#f5-nfe');
     const nfeVal = element.querySelector('#f5-nfe-val');
+    const speedEl = element.querySelector('#f5-speed');
+    const speedVal = element.querySelector('#f5-speed-val');
+    const cfgEl = element.querySelector('#f5-cfg');
+    const cfgVal = element.querySelector('#f5-cfg-val');
+    const swayEl = element.querySelector('#f5-sway');
+    const swayVal = element.querySelector('#f5-sway-val');
+    const seedEl = element.querySelector('#f5-seed');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
     const audio = element.querySelector('#f5-audio');
@@ -73,6 +112,9 @@ function init(element, params, nui) {
     autoResize(textArea);
 
     nfeEl.addEventListener('input', () => { nfeVal.textContent = nfeEl.value; });
+    speedEl.addEventListener('input', () => { speedVal.textContent = speedEl.value; });
+    cfgEl.addEventListener('input', () => { cfgVal.textContent = cfgEl.value; });
+    swayEl.addEventListener('input', () => { swayVal.textContent = swayEl.value; });
 
     arenaBtn.addEventListener('nui-click', () => {
         fetch('/arena-samples')
@@ -139,14 +181,20 @@ function init(element, params, nui) {
             const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
             statusEl.textContent = 'Buffering...';
 
+            const eb = {
+                batch: true,
+                nfe_step: parseInt(nfeEl.value, 10),
+                speed: parseFloat(speedEl.value),
+                cfg_strength: parseFloat(cfgEl.value),
+                sway_sampling_coef: parseFloat(swayEl.value),
+            };
+            if (seedEl.value !== '') eb.seed = parseInt(seedEl.value, 10);
+
             const body = {
                 input: text,
                 voice: voice,
                 response_format: 'mp3',
-                extra_body: {
-                    batch: true,
-                    nfe_step: parseInt(nfeEl.value, 10),
-                },
+                extra_body: eb,
             };
 
             try {

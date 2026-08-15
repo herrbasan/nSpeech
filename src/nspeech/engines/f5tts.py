@@ -78,13 +78,21 @@ class F5TtsAdapter:
 
         Engine-specific kwargs:
             nfe_step: ODE steps (default 32). 16=faster, 64=audiobook quality.
-            speed: speech rate multiplier (default 1.0).
+            speed: duration divisor (default 1.0). 0.8 = 25% longer/slower.
+            cfg_strength: guidance strength (default 2.0).
+            sway_sampling_coef: variation sampling, -1=off (default -1).
+            cross_fade_duration: chunk cross-fade seconds (default 0.15).
+            target_rms: loudness normalization target (default 0.1).
             seed: deterministic generation (default None = random).
         """
         voice_name = kwargs.get("voice_name", "default")
         nfe_step = kwargs.get("nfe_step", kwargs.get("inference_steps", 32))
         speed = kwargs.get("speed", 1.0)
         seed = kwargs.get("seed")
+        cfg_strength = kwargs.get("cfg_strength", 2.0)
+        sway_sampling_coef = kwargs.get("sway_sampling_coef", -1)
+        cross_fade_duration = kwargs.get("cross_fade_duration", 0.15)
+        target_rms = kwargs.get("target_rms", 0.1)
 
         wav_path = str(self._voice_wav_path(voice_name))
         ref_text = self._read_ref_text(voice_name)
@@ -96,6 +104,10 @@ class F5TtsAdapter:
             nfe_step=nfe_step,
             speed=speed,
             seed=seed,
+            cfg_strength=cfg_strength,
+            sway_sampling_coef=sway_sampling_coef,
+            cross_fade_duration=cross_fade_duration,
+            target_rms=target_rms,
             file_wave=None,
             file_spec=None,
         )
@@ -119,9 +131,6 @@ class F5TtsAdapter:
         start_time = time.time()
 
         prompt_text = kwargs.get("prompt_text") or kwargs.get("instruct_text") or ""
-        if not prompt_text:
-            from nspeech.transcribe import transcribe
-            prompt_text = transcribe(audio_path)
 
         # Copy reference audio to voice directory. The Node clone route writes
         # the wav to the target path BEFORE calling clone() — skip the copy
@@ -130,6 +139,36 @@ class F5TtsAdapter:
         if Path(audio_path).resolve() != dest_wav.resolve():
             import shutil
             shutil.copy2(audio_path, dest_wav)
+
+        # F5-TTS clips reference audio to ~12s internally. If the stored wav is
+        # longer, the transcript no longer matches the clipped audio and the
+        # chars/sec rate estimate distorts (fast speech, oscillating pace).
+        # Trim to 12s (at a low-energy point to avoid cutting mid-phoneme),
+        # resample to 24kHz mono, and re-transcribe if no prompt given.
+        import soundfile as sf
+        import numpy as np
+        data, sr = sf.read(str(dest_wav))
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        max_samples = 12 * sr
+        if len(data) > max_samples:
+            # Find the quietest 50ms window near the 12s mark to cut cleanly
+            window = int(0.05 * sr)
+            scan_start = max_samples - int(2 * sr)
+            scan_end = max_samples
+            energies = np.array([np.abs(data[i:i+window]).mean() for i in range(scan_start, scan_end, window)])
+            cut_offset = int(energies.argmin()) * window
+            data = data[:scan_start + cut_offset + window]
+            prompt_text = ""  # force re-transcribe of the trimmed audio
+        if sr != 24000:
+            from scipy.signal import resample
+            data = resample(data, int(len(data) * 24000 / sr)).astype("float32")
+            sr = 24000
+        sf.write(str(dest_wav), data, sr)
+
+        if not prompt_text:
+            from nspeech.transcribe import transcribe
+            prompt_text = transcribe(str(dest_wav))
 
         # Save transcript
         text_path = self._voice_text_path(voice_name)

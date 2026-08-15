@@ -12,27 +12,35 @@ engine worker process.
 import torch
 
 _model = None
+_backend = None
 
 
 def transcribe(audio_path):
     """Transcribe an audio file to text using local Whisper.
 
-    Returns the transcribed string, or empty string on failure.
-    The model loads lazily on first call (~2-3s on CPU) and stays resident.
+    Prefers faster-whisper (ctranslate2, int8 CPU) when available;
+    falls back to openai-whisper. Model loads lazily and stays resident.
     """
-    global _model
+    global _model, _backend
     if _model is None:
-        import whisper
-        _model = whisper.load_model("base")
+        try:
+            from faster_whisper import WhisperModel
+            _model = WhisperModel("base", device="cpu", compute_type="int8")
+            _backend = "faster"
+        except ModuleNotFoundError:
+            import whisper
+            _model = whisper.load_model("base")
+            _backend = "openai"
 
     try:
-        # fp16=False forces CPU float32 — GPU engines may have CUDA available
-        # but Whisper on CPU is fast enough for short clips and avoids VRAM
-        # contention with the TTS model.
-        result = _model.transcribe(audio_path, fp16=False)
-        text = result.get("text", "").strip()
+        if _backend == "faster":
+            segments, _ = _model.transcribe(audio_path)
+            text = " ".join(s.text.strip() for s in segments).strip()
+        else:
+            result = _model.transcribe(audio_path, fp16=False)
+            text = result.get("text", "").strip()
         if text:
-            print(f"[whisper] transcribed: {text[:80]}...")
+            print(f"[whisper:{_backend}] transcribed: {text[:80]}...")
         return text
     except Exception as e:
         print(f"[whisper] transcription failed: {e}")
