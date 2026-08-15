@@ -24,7 +24,7 @@ const log = logger.child('transcode');
  * MediaSource Extensions reject ID3-tagged MP3 in some browsers.
  * Without tags, the stream starts directly with MP3 frame sync (0xFF). */
 const FORMAT_ARGS = {
-  mp3:  ['-c:a', 'libmp3lame', '-b:a', '128k', '-id3v2_version', '0', '-write_id3v1', '0', '-f', 'mp3'],
+  mp3:  ['-c:a', 'libmp3lame', '-b:a', '64k', '-ar', '32000', '-id3v2_version', '0', '-write_id3v1', '0', '-f', 'mp3'],
   opus: ['-c:a', 'libopus', '-b:a', '96k', '-f', 'ogg', '-ar', '48000'],
   aac:  ['-c:a', 'aac', '-b:a', '128k', '-f', 'adts'],
 };
