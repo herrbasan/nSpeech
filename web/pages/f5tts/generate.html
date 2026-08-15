@@ -1,0 +1,195 @@
+<div class="page-f5tts-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>F5-TTS — Generate</h1>
+        <p class="lead">Flow-matching zero-shot cloning. Internal chunking with cross-fade — pass full text, single render.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="f5-voice">Voice</label>
+            <nui-select id="voice-select">
+                <select id="f5-voice">
+                    <option value="default" selected>Select a cloned voice...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="f5-text">Text</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="5">
+                <textarea id="f5-text" placeholder="Text to synthesize...">This is a test of the F5 TTS system. Flow matching produces natural prosody without autoregressive drift.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-button id="btn-arena-sample">
+            <button type="button">Random Arena Sample</button>
+        </nui-button>
+        <p id="f5-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
+
+        <nui-input-group>
+            <label for="f5-nfe">ODE Steps (nfe_step): <span id="f5-nfe-val">32</span></label>
+            <nui-input>
+                <input type="range" id="f5-nfe" min="16" max="64" step="8" value="32" style="width: 100%">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">16 = fast, 32 = balanced, 64 = audiobook quality</p>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+            <nui-button id="btn-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="f5-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="f5-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let mediaSource = null;
+    let abortController = null;
+
+    const voiceSelect = element.querySelector('#voice-select');
+    const selectEl = element.querySelector('#f5-voice');
+    const textArea = element.querySelector('#f5-text');
+    const arenaBtn = element.querySelector('#btn-arena-sample');
+    const arenaInfo = element.querySelector('#f5-arena-info');
+    const nfeEl = element.querySelector('#f5-nfe');
+    const nfeVal = element.querySelector('#f5-nfe-val');
+    const generateBtn = element.querySelector('#btn-generate');
+    const stopBtn = element.querySelector('#btn-stop');
+    const audio = element.querySelector('#f5-audio');
+    const statusEl = element.querySelector('#f5-status');
+
+    function autoResize(ta) {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    }
+    textArea.addEventListener('input', () => autoResize(textArea));
+    autoResize(textArea);
+
+    nfeEl.addEventListener('input', () => { nfeVal.textContent = nfeEl.value; });
+
+    arenaBtn.addEventListener('nui-click', () => {
+        fetch('/arena-samples')
+            .then(r => r.json())
+            .then(d => {
+                if (d.text) {
+                    textArea.value = d.text;
+                    autoResize(textArea);
+                    arenaInfo.textContent = `From: ${d.speaker} — "${d.topic}"`;
+                }
+            })
+            .catch(() => {
+                arenaInfo.textContent = 'No arena samples available.';
+            });
+    });
+
+    function loadVoices() {
+        fetch('/v1/voices?engine=f5tts')
+            .then(r => r.json())
+            .then(d => {
+                const allVoices = d.voices || [];
+                const cloned = allVoices
+                    .filter(v => v.voice_type === 'cloned')
+                    .map(v => ({ value: v.name, label: v.name }));
+                const items = [{ value: 'default', label: 'Select a cloned voice...' }];
+                if (cloned.length) items.push(...cloned);
+                voiceSelect.setItems(items);
+            })
+            .catch(() => {
+                statusEl.textContent = 'Failed to load voices';
+            });
+    }
+
+    function stop() {
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
+        }
+        audio.pause();
+        if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch (_) {}
+        mediaSource = null;
+        statusEl.textContent = '';
+    }
+
+    stopBtn.addEventListener('click', stop);
+
+    generateBtn.querySelector('button').addEventListener('click', () => {
+        const text = textArea.value.trim();
+        if (!text) return;
+        stop();
+
+        const voice = selectEl.value || 'default';
+        abortController = new AbortController();
+        const startTime = performance.now();
+
+        audio.style.display = 'block';
+        mediaSource = new MediaSource();
+        audio.src = URL.createObjectURL(mediaSource);
+        const collector = nspeechAudioDownload.createCollector();
+
+        let firstChunk = false;
+
+        mediaSource.addEventListener('sourceopen', async () => {
+            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            statusEl.textContent = 'Buffering...';
+
+            const body = {
+                input: text,
+                voice: voice,
+                response_format: 'mp3',
+                extra_body: {
+                    batch: true,
+                    nfe_step: parseInt(nfeEl.value, 10),
+                },
+            };
+
+            try {
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: abortController.signal,
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const reader = response.body.getReader();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!firstChunk && value?.length) {
+                        firstChunk = true;
+                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
+                    }
+                    await new Promise((res, rej) => {
+                        sourceBuffer.appendBuffer(value);
+                        collector.push(value);
+                        sourceBuffer.onupdateend = res;
+                        sourceBuffer.onerror = rej;
+                    });
+                    if (audio.paused && sourceBuffer.buffered.length > 0) {
+                        audio.play().catch(() => {});
+                    }
+                }
+                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                nspeechAudioDownload.attachDownload(audio, collector.buildURL('f5tts-speech.mp3'), 'f5tts-speech.mp3');
+                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    statusEl.textContent = 'Stopped.';
+                } else {
+                    statusEl.textContent = `Error: ${err.message}`;
+                }
+            }
+        }, { once: true });
+    });
+
+    element.show = () => loadVoices();
+    element.hide = () => stop();
+}
+</script>

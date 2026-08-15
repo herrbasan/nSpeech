@@ -29,6 +29,8 @@ const ENGINES = {
     'chatterbox-eng': { label: 'CB English', icon: 'headphones' },
     'chatterbox-mtl': { label: 'CB Multilingual', icon: 'headphones' },
     dots: { label: 'dots.tts', icon: 'headphones' },
+    f5tts: { label: 'F5-TTS', icon: 'headphones' },
+    vibevoice: { label: 'VibeVoice', icon: 'headphones' },
     minimax: { label: 'MiniMax', icon: 'cloud' },
     elevenlabs: { label: 'ElevenLabs', icon: 'cloud' },
     xai: { label: 'xAI / Grok', icon: 'cloud' },

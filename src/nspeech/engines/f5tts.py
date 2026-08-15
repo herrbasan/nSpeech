@@ -123,10 +123,13 @@ class F5TtsAdapter:
             from nspeech.transcribe import transcribe
             prompt_text = transcribe(audio_path)
 
-        # Copy reference audio to voice directory
+        # Copy reference audio to voice directory. The Node clone route writes
+        # the wav to the target path BEFORE calling clone() — skip the copy
+        # when source and destination are the same file.
         dest_wav = self._voice_wav_path(voice_name)
-        import shutil
-        shutil.copy2(audio_path, dest_wav)
+        if Path(audio_path).resolve() != dest_wav.resolve():
+            import shutil
+            shutil.copy2(audio_path, dest_wav)
 
         # Save transcript
         text_path = self._voice_text_path(voice_name)

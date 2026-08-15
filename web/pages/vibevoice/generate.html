@@ -1,0 +1,198 @@
+<div class="page-vibevoice-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>VibeVoice — Generate</h1>
+        <p class="lead">Long-form multi-speaker dialogue (1.5B LLM + diffusion head). Batch-only, no streaming.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="vv-voice">Voice (Speaker 1)</label>
+            <nui-select id="voice-select">
+                <select id="vv-voice">
+                    <option value="default" selected>Select a cloned voice...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="vv-text">Script</label>
+            <nui-textarea auto-resize max-rows="10" min-rows="5">
+                <textarea id="vv-text" placeholder="Raw text, or multi-speaker script...">Speaker 1: Welcome to the show. Today we're talking about flow matching and diffusion models for speech synthesis.</textarea>
+            </nui-textarea>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">
+                Multi-speaker format: one line per turn — <code>Speaker 1: text</code>, <code>Speaker 2: text</code>. Raw text without labels is wrapped as Speaker 1 using the selected voice.
+            </p>
+        </nui-input-group>
+
+        <nui-button id="btn-arena-sample">
+            <button type="button">Random Arena Sample</button>
+        </nui-button>
+        <p id="vv-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
+
+        <nui-input-group>
+            <label for="vv-cfg">CFG Scale: <span id="vv-cfg-val">1.3</span></label>
+            <nui-input>
+                <input type="range" id="vv-cfg" min="1.0" max="2.0" step="0.1" value="1.3" style="width: 100%">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Classifier-free guidance. Higher = closer to reference voice, lower = more expressive.</p>
+        </nui-input-group>
+
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+            <nui-button id="btn-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+
+        <audio id="vv-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
+        <p id="vv-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    let mediaSource = null;
+    let abortController = null;
+
+    const voiceSelect = element.querySelector('#voice-select');
+    const selectEl = element.querySelector('#vv-voice');
+    const textArea = element.querySelector('#vv-text');
+    const arenaBtn = element.querySelector('#btn-arena-sample');
+    const arenaInfo = element.querySelector('#vv-arena-info');
+    const cfgEl = element.querySelector('#vv-cfg');
+    const cfgVal = element.querySelector('#vv-cfg-val');
+    const generateBtn = element.querySelector('#btn-generate');
+    const stopBtn = element.querySelector('#btn-stop');
+    const audio = element.querySelector('#vv-audio');
+    const statusEl = element.querySelector('#vv-status');
+
+    function autoResize(ta) {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    }
+    textArea.addEventListener('input', () => autoResize(textArea));
+    autoResize(textArea);
+
+    cfgEl.addEventListener('input', () => { cfgVal.textContent = cfgEl.value; });
+
+    arenaBtn.addEventListener('nui-click', () => {
+        fetch('/arena-samples')
+            .then(r => r.json())
+            .then(d => {
+                if (d.text) {
+                    textArea.value = 'Speaker 1: ' + d.text;
+                    autoResize(textArea);
+                    arenaInfo.textContent = `From: ${d.speaker} — "${d.topic}"`;
+                }
+            })
+            .catch(() => {
+                arenaInfo.textContent = 'No arena samples available.';
+            });
+    });
+
+    function loadVoices() {
+        fetch('/v1/voices?engine=vibevoice')
+            .then(r => r.json())
+            .then(d => {
+                const allVoices = d.voices || [];
+                const cloned = allVoices
+                    .filter(v => v.voice_type === 'cloned')
+                    .map(v => ({ value: v.name, label: v.name }));
+                const items = [{ value: 'default', label: 'Select a cloned voice...' }];
+                if (cloned.length) items.push(...cloned);
+                voiceSelect.setItems(items);
+            })
+            .catch(() => {
+                statusEl.textContent = 'Failed to load voices';
+            });
+    }
+
+    function stop() {
+        if (abortController) {
+            abortController.abort();
+            abortController = null;
+        }
+        audio.pause();
+        if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch (_) {}
+        mediaSource = null;
+        statusEl.textContent = '';
+    }
+
+    stopBtn.addEventListener('click', stop);
+
+    generateBtn.querySelector('button').addEventListener('click', () => {
+        const text = textArea.value.trim();
+        if (!text) return;
+        stop();
+
+        const voice = selectEl.value || 'default';
+        abortController = new AbortController();
+        const startTime = performance.now();
+
+        audio.style.display = 'block';
+        mediaSource = new MediaSource();
+        audio.src = URL.createObjectURL(mediaSource);
+        const collector = nspeechAudioDownload.createCollector();
+
+        let firstChunk = false;
+
+        mediaSource.addEventListener('sourceopen', async () => {
+            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+            statusEl.textContent = 'Buffering...';
+
+            const body = {
+                input: text,
+                voice: voice,
+                response_format: 'mp3',
+                extra_body: {
+                    batch: true,
+                    cfg_scale: parseFloat(cfgEl.value),
+                },
+            };
+
+            try {
+                const response = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(body),
+                    signal: abortController.signal,
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const reader = response.body.getReader();
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!firstChunk && value?.length) {
+                        firstChunk = true;
+                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
+                    }
+                    await new Promise((res, rej) => {
+                        sourceBuffer.appendBuffer(value);
+                        collector.push(value);
+                        sourceBuffer.onupdateend = res;
+                        sourceBuffer.onerror = rej;
+                    });
+                    if (audio.paused && sourceBuffer.buffered.length > 0) {
+                        audio.play().catch(() => {});
+                    }
+                }
+                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                nspeechAudioDownload.attachDownload(audio, collector.buildURL('vibevoice-speech.mp3'), 'vibevoice-speech.mp3');
+                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
+            } catch (err) {
+                if (err.name === 'AbortError') {
+                    statusEl.textContent = 'Stopped.';
+                } else {
+                    statusEl.textContent = `Error: ${err.message}`;
+                }
+            }
+        }, { once: true });
+    });
+
+    element.show = () => loadVoices();
+    element.hide = () => stop();
+}
+</script>

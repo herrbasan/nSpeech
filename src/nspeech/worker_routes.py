@@ -477,7 +477,10 @@ def create_app(engine_name: str) -> FastAPI:
 
             preview_name = f"__preview__{os.urandom(4).hex()}"
 
-            # Redirect cache to previews dir
+            # Redirect cache to previews dir. MUST stay redirected until the
+            # generate() generator is fully consumed — engines like F5-TTS
+            # resolve their reference files (wav + transcript) from cache_dir
+            # lazily at generation time, not at clone/load time.
             saved_cache = getattr(engine, "cache_dir", None)
             previews_dir = _voice_dir() / "previews"
             previews_dir.mkdir(parents=True, exist_ok=True)
@@ -499,9 +502,10 @@ def create_app(engine_name: str) -> FastAPI:
                 if isinstance(clone_meta, dict) and clone_meta.get("prompt_text"):
                     stt_transcript = clone_meta["prompt_text"]
                 await asyncio.to_thread(engine.load_voice, preview_name)
-            finally:
+            except Exception:
                 if saved_cache is not None:
                     engine.cache_dir = saved_cache
+                raise
         finally:
             os.unlink(tmp_wav.name)
 
@@ -511,6 +515,7 @@ def create_app(engine_name: str) -> FastAPI:
             gen_kwargs["model"] = model
         if language:
             gen_kwargs["language"] = language
+        gen_kwargs["voice_name"] = preview_name
         gen = engine.generate(phrase, **gen_kwargs)
 
         # Track preview cache files for cleanup after streaming completes.
@@ -520,6 +525,8 @@ def create_app(engine_name: str) -> FastAPI:
 
         def _cleanup_preview():
             """Clean up preview cache files — previews are temporary."""
+            if saved_cache is not None:
+                engine.cache_dir = saved_cache
             for cache_file in preview_cache_files:
                 try:
                     cache_file.unlink()
