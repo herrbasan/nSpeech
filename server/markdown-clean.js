@@ -106,6 +106,11 @@ function digitWord(d) {
 }
 
 export function expandAcronyms(t) {
+  // File extensions: "religion.md" → "religion dot m d". Without this,
+  // engines read the dot as sentence end and "md" as the word "midi".
+  // Run FIRST — the dot must not survive into other rules.
+  t = t.replace(/\b([A-Za-z0-9_\-]+)\.(md|txt|json|js|ts|py|wav|mp3|pdf|html|css|yml|yaml|xml|png|jpg|jpeg|log|csv)\b/g,
+    (_m, name, ext) => `${name} dot ${ext.split('').join(' ')}`);
   // Hyphen directly before an acronym run becomes a space ("F5-TTS" → "F5 TTS")
   t = t.replace(/([A-Za-z0-9])-(?=[A-Z]{2,}\b)/g, '$1 ');
   // Letter-run + trailing digits: GLM5, GPT4, RTX4090. Single digit → word,

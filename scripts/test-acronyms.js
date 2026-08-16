@@ -13,6 +13,9 @@ const cases = [
   ['the API key', 'the A P I key'],
   ['GPT4 vs GPT-4', 'G P T four vs G P T-4'],
   ['2026 and 4090 stay numeric', '2026 and 4090 stay numeric'],
+  ['see religion.md for the docs', 'see religion dot m d for the docs'],
+  ['config.json and main.ts', 'config dot j s o n and main dot t s'],
+  ['render-f5tts.py output.wav', 'render-f5tts dot p y output dot w a v'],
 ];
 
 let pass = 0;
