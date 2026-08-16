@@ -12,8 +12,12 @@ No native voice catalog. The "voice" is a directory containing:
   <voice_name>.wav        — reference audio (5-15s)
   <voice_name>.f5tts.txt  — transcript of the reference audio
 
-F5-TTS does its own text chunking internally (chunk_text with cross-fade),
-so we pass full text and yield the complete audio as a single chunk.
+STREAMING generate(): text is split with the library's own chunk_text()
+(~135-char batches on sentence boundaries), all batches are submitted to the
+ThreadPoolExecutor upfront (GPU-parallel, same speed as the batch path), and
+each batch is yielded the moment it completes — cross-faded against the held
+back tail of the previous batch. First audio after ~1 batch (~1-2s) instead
+of after the full render.
 """
 import gc
 import time
@@ -21,8 +25,10 @@ from pathlib import Path
 from typing import Tuple, Generator, Dict, Any
 
 import torch
+import torchaudio
 import numpy as np
 from nspeech import config
+from f5_tts.model.utils import seed_everything
 
 
 class F5TtsAdapter:
@@ -70,11 +76,18 @@ class F5TtsAdapter:
 
     def generate(self, text: str, **kwargs) -> Generator[Tuple[torch.Tensor, bool], None, None]:
         """
-        Generate speech from text using F5-TTS flow-matching.
+        Generate speech from text using F5-TTS flow-matching, STREAMING.
 
-        F5-TTS handles its own text chunking internally (with cross-fade between
-        chunks), so we pass the full text and yield the complete result as one
-        chunk. This preserves prosody continuity across sentence boundaries.
+        Text is split with the library's chunk_text() (identical split to the
+        batch path), batches are rendered SEQUENTIALLY, and each batch is
+        yielded the moment it is rendered — cross-faded against the held-back
+        tail of the previous batch. Audio starts flowing after the first
+        batch (~1-2s). (Upfront threadpool submission does NOT lower TTFB:
+        one CUDA context time-slices all concurrent batches, so every future
+        completes at total-render time — chunks arrive together at the end.)
+
+        Cross-fade increments are yielded with the HEAD of the next yield (the
+        join exists only once both sides exist), so joins are never re-sent.
 
         Engine-specific kwargs:
             nfe_step: ODE steps (default 32). 16=faster, 64=audiobook quality.
@@ -85,6 +98,11 @@ class F5TtsAdapter:
             target_rms: loudness normalization target (default 0.1).
             seed: deterministic generation (default None = random).
         """
+        from f5_tts.infer.utils_infer import (
+            chunk_text as f5_chunk_text,
+            preprocess_ref_audio_text,
+        )
+
         voice_name = kwargs.get("voice_name", "default")
         nfe_step = kwargs.get("nfe_step", kwargs.get("inference_steps", 32))
         speed = kwargs.get("speed", 1.0)
@@ -94,27 +112,93 @@ class F5TtsAdapter:
         cross_fade_duration = kwargs.get("cross_fade_duration", 0.15)
         target_rms = kwargs.get("target_rms", 0.1)
 
-        wav_path = str(self._voice_wav_path(voice_name))
-        ref_text = self._read_ref_text(voice_name)
+        wav_path, ref_text = str(self._voice_wav_path(voice_name)), self._read_ref_text(voice_name)
+        if seed is not None:
+            seed_everything(seed)
+        else:
+            seed_everything(torch.randint(0, 2**31 - 1, (1,)).item())
+        ref_file, ref_text = preprocess_ref_audio_text(wav_path, ref_text)
+        audio, sr = torchaudio.load(ref_file)
+        if audio.shape[0] > 1:
+            audio = torch.mean(audio, dim=0, keepdim=True)
 
-        wav, sr, _ = self.model.infer(
-            ref_file=wav_path,
-            ref_text=ref_text,
-            gen_text=text,
-            nfe_step=nfe_step,
-            speed=speed,
-            seed=seed,
-            cfg_strength=cfg_strength,
-            sway_sampling_coef=sway_sampling_coef,
-            cross_fade_duration=cross_fade_duration,
-            target_rms=target_rms,
-            file_wave=None,
-            file_spec=None,
-        )
+        # Loudness normalization of the reference (identical to infer_batch_process)
+        rms = torch.sqrt(torch.mean(torch.square(audio)))
+        if rms < target_rms:
+            audio = audio * target_rms / rms
+        if sr != 24000:
+            audio = torchaudio.transforms.Resample(sr, 24000)(audio)
+        audio = audio.to(self.device)
 
-        # F5-TTS outputs numpy float32 at 24kHz mono — already nSpeech standard.
-        pcm = torch.from_numpy(wav).float().cpu().flatten()
-        yield pcm, True
+        if len(ref_text[-1].encode("utf-8")) == 1:
+            ref_text = ref_text + " "
+
+        # Same batch split the library's batch path uses (ref-length-derived
+        # max_chars, sentence boundaries, rolling suffix).
+        audio_dur = audio.shape[-1] / 24000
+        max_chars = int(len(ref_text.encode("utf-8")) / audio_dur * (22 - audio_dur) * speed)
+        batches = f5_chunk_text(text, max_chars=max_chars)
+
+        m = self.model  # loads F5TTS
+        from f5_tts.model.utils import convert_char_to_pinyin
+
+        hop = 256
+        ref_len_frames = audio.shape[-1] // hop
+        ref_text_len = max(len(ref_text.encode("utf-8")), 1)
+
+        def infer_batch(gen_text: str) -> np.ndarray:
+            """One batch render — same math as _infer_basic()."""
+            local_speed = 0.3 if len(gen_text.encode("utf-8")) < 10 else speed
+            text_list = [ref_text + gen_text]
+            final_text_list = convert_char_to_pinyin(text_list)
+            gen_len = len(gen_text.encode("utf-8"))
+            duration = ref_len_frames + int(ref_len_frames / ref_text_len * gen_len / local_speed)
+            with torch.inference_mode():
+                generated, _ = m.ema_model.sample(
+                    cond=audio,
+                    text=final_text_list,
+                    duration=duration,
+                    steps=nfe_step,
+                    cfg_strength=cfg_strength,
+                    sway_sampling_coef=sway_sampling_coef,
+                )
+                generated = generated.to(torch.float32)  # fp16 mel → fp32 for vocoder
+                mel = generated[:, ref_len_frames:, :].permute(0, 2, 1)
+                wave = m.vocoder.decode(mel)
+                if rms < target_rms:
+                    wave = wave * rms / target_rms
+                return wave.squeeze().cpu().numpy()
+
+        # SEQUENTIAL batch loop. A naive "submit all upfront" pipeline does
+        # NOT lower TTFB: all batches share one CUDA context, the GPU
+        # time-slices kernels round-robin, and every future completes at
+        # roughly the total render time — chunks arrive together at the end.
+        # Sequential = batch i is yielded the moment it is rendered.
+        fade_samples = int(cross_fade_duration * 24000)
+        held_tail = None  # tail of the previous batch, reserved for the next join
+        for idx, gen_text_i in enumerate(batches):
+            wave = infer_batch(gen_text_i)
+            is_last = idx == len(batches) - 1
+
+            if held_tail is not None:
+                # Join: fade-out held tail + fade-in new head, then this
+                # join rides with the current yield (sent exactly once).
+                xf = min(fade_samples, len(held_tail), len(wave))
+                if xf > 0:
+                    t = np.linspace(0, 1, xf)
+                    joined = held_tail[-xf:] * (1 - t) + wave[:xf] * t
+                    out = np.concatenate([joined, wave[xf:]])
+                else:
+                    out = wave
+            else:
+                out = wave
+
+            if is_last:
+                yield torch.from_numpy(out).float().cpu().flatten(), True
+            else:
+                hold = min(fade_samples, len(out) // 2)
+                yield torch.from_numpy(out[:-hold]).float().cpu().flatten(), False
+                held_tail = out[len(out) - hold:]
 
     def list_voices(self) -> list:
         """F5-TTS has no native voice catalog — all voices are user-created."""

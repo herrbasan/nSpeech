@@ -60,8 +60,11 @@ print(f"Text: {len(text)} chars, voice: {voice}, nfe_step: {nfe_step}, speed: {s
 adapter = F5TtsAdapter()
 adapter.load_voice(voice)
 t0 = time.time()
+import numpy as _np
+_parts = []
 for pcm, is_final in adapter.generate(text, voice_name=voice, nfe_step=nfe_step, speed=speed):
-    import soundfile as sf
-    sf.write(str(out_path), pcm.numpy(), 24000)
-    print(f"Generated: {len(pcm)} samples ({len(pcm)/24000:.1f}s) in {time.time()-t0:.0f}s", flush=True)
-print("DONE", flush=True)
+    _parts.append(pcm.numpy())
+    print(f"Chunk: {len(pcm)} samples ({len(pcm)/24000:.1f}s) at t={time.time()-t0:.1f}s", flush=True)
+import soundfile as sf
+sf.write(str(out_path), _np.concatenate(_parts), 24000)
+print(f"DONE total {len(_np.concatenate(_parts))/24000:.1f}s in {time.time()-t0:.0f}s", flush=True)

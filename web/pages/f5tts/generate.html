@@ -27,9 +27,9 @@
         <p id="f5-arena-info" style="margin-top: var(--nui-space-half); color: var(--color-shade6); font-size: 0.85em;"></p>
 
         <nui-input-group>
-            <label for="f5-speed">Speed (duration divisor): <span id="f5-speed-val">1.0</span></label>
+            <label for="f5-speed">Speed (duration divisor): <span id="f5-speed-val">0.9</span></label>
             <nui-input>
-                <input type="range" id="f5-speed" min="0.6" max="1.3" step="0.05" value="1.0" style="width: 100%">
+                <input type="range" id="f5-speed" min="0.6" max="1.3" step="0.05" value="0.9" style="width: 100%">
             </nui-input>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Lower = slower/longer. 0.8 = 25% longer. Speaking rate derives from the reference clip; this stretches it.</p>
         </nui-input-group>
@@ -43,9 +43,9 @@
         </nui-input-group>
 
         <nui-input-group>
-            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">2.0</span></label>
+            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">1.5</span></label>
             <nui-input>
-                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="2.0" style="width: 100%">
+                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="1.5" style="width: 100%">
             </nui-input>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Guidance toward the reference voice. Higher = closer timbre match, lower = more variation.</p>
         </nui-input-group>
@@ -64,6 +64,25 @@
                 <input type="number" id="f5-seed" placeholder="random" style="width: 12rem">
             </nui-input>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Set a seed for reproducible output.</p>
+        </nui-input-group>
+
+        <nui-input-group>
+            <nui-input>
+                <input type="checkbox" id="f5-batch">
+                <label for="f5-batch">Batch mode (full render before playback — no streaming)</label>
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="f5-clean">Text cleaning</label>
+            <nui-checkbox>
+                <input type="checkbox" id="f5-clean" checked>
+                <span>LLM prosody pass — stress marks &amp; pauses via local gateway (~1.5s/paragraph). Adds latency, best narration.</span>
+            </nui-checkbox>
+            <nui-checkbox>
+                <input type="checkbox" id="f5-regex-clean">
+                <span>Regex clean only — fast strip of markdown, no gateway call.</span>
+            </nui-checkbox>
         </nui-input-group>
 
         <nui-button-container gap="medium">
@@ -99,6 +118,9 @@ function init(element, params, nui) {
     const swayEl = element.querySelector('#f5-sway');
     const swayVal = element.querySelector('#f5-sway-val');
     const seedEl = element.querySelector('#f5-seed');
+    const batchEl = element.querySelector('#f5-batch');
+    const llmCleanEl = element.querySelector('#f5-clean');
+    const regexCleanEl = element.querySelector('#f5-regex-clean');
     const generateBtn = element.querySelector('#btn-generate');
     const stopBtn = element.querySelector('#btn-stop');
     const audio = element.querySelector('#f5-audio');
@@ -110,6 +132,13 @@ function init(element, params, nui) {
     }
     textArea.addEventListener('input', () => autoResize(textArea));
     autoResize(textArea);
+
+    llmCleanEl.addEventListener('change', () => {
+        if (llmCleanEl.checked) regexCleanEl.checked = false;
+    });
+    regexCleanEl.addEventListener('change', () => {
+        if (regexCleanEl.checked) llmCleanEl.checked = false;
+    });
 
     nfeEl.addEventListener('input', () => { nfeVal.textContent = nfeEl.value; });
     speedEl.addEventListener('input', () => { speedVal.textContent = speedEl.value; });
@@ -182,13 +211,15 @@ function init(element, params, nui) {
             statusEl.textContent = 'Buffering...';
 
             const eb = {
-                batch: true,
                 nfe_step: parseInt(nfeEl.value, 10),
                 speed: parseFloat(speedEl.value),
                 cfg_strength: parseFloat(cfgEl.value),
                 sway_sampling_coef: parseFloat(swayEl.value),
             };
+            if (batchEl.checked) eb.batch = true;
             if (seedEl.value !== '') eb.seed = parseInt(seedEl.value, 10);
+            if (llmCleanEl.checked) eb.markdown = 'llm';
+            else if (regexCleanEl.checked) eb.markdown = true;
 
             const body = {
                 input: text,
