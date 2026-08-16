@@ -10,26 +10,26 @@
 
 A reliable, consistent TTS **and STT** service with a simple, powerful API that can drive multiple speech engines — local GPU models and cloud providers — behind a single OpenAI-compatible interface. Transcription and text-constrained forced alignment run locally on CPU, independent of any GPU engine lifecycle.
 
-### Engine Strategy (2026-07-17)
+### Engine Strategy (2026-08-16)
 
 | Engine | Role | VRAM | Status |
 |--------|------|------|--------|
 | **Kokoro** | Always-available workhorse | ~500MB | Primary CPU/slim GPU option |
-| **Chatterbox Turbo** | Primary GPU quality engine | ~2GB | Candidate for permanent GPU residency |
+| **F5-TTS** | Primary GPU quality engine | ~1-2GB | **User verdict: "fast and better than Chatterbox"** (2026-08-16) |
+| **Chatterbox Turbo** | GPU alternative | ~2GB | Paralinguistic tags, exaggeration param |
+| **VibeVoice** | Multi-speaker dialogue | ~4-6GB | Parked — works but flat delivery. Unique value: multi-speaker |
 | **MiniMax** | High-quality cloud | — | Active |
 | **ElevenLabs** | Premium cloud | — | Active |
 | **Gemini** | Instruction-driven style | — | Active |
 | **xAI** | Alternative cloud | — | Active |
-| **F5-TTS** | Flow-matching zero-shot cloning | ~1-2GB | E2E verified 2026-08-15 (torch 2.8+cu128) |
-| **VibeVoice** | Long-form multi-speaker dialogue | ~4-6GB | E2E verified 2026-08-15 (torch 2.11+cu128, sdpa) |
 
-**F5-TTS notes:** voices are `name.wav` + `name.f5tts.txt` transcript sidecar (both required). Internal chunking with cross-fade — pass full text, single yield. `nfe_step` (16=fast, 64=audiobook) via `extra_body`.
+**F5-TTS notes:** voices are `name.wav` + `name.f5tts.txt` transcript sidecar (both required). Clone auto-trims ref to ~12s at a silence, resamples to 24kHz, auto-transcribes (faster-whisper). Internal chunking with cross-fade — pass full text, single yield. Tunables via `extra_body`: `speed` (duration divisor, 0.8=25% slower), `nfe_step` (16=fast, 64=audiobook), `cfg_strength`, `sway_sampling_coef`, `seed`. Render ~4-7× real-time on 4090.
 
-**VibeVoice notes:** batch-only, no streaming. Script format is strictly `Speaker N: text` (numeric IDs — adapter wraps raw text as `Speaker 1:`). flash-attn has no Windows wheel → sdpa default; opt-in via `NSPEECH_VIBEVOICE_ATTN=flash_attention_2`. Model cloned to `venv/vibevoice/models/VibeVoice` (5GB). VRAM exceeds TTS budget if Chatterbox resident — use with GPU exclusion.
+**VibeVoice notes:** batch-only, no streaming. Script format strictly `Speaker N: text` (numeric IDs). Multi-speaker voice mapping via `extra_body.voices: {1: "Alice", 2: "Bob"}`. flash-attn has no Windows wheel → sdpa default; opt-in via `NSPEECH_VIBEVOICE_ATTN=flash_attention_2`. Model at `venv/vibevoice/models/VibeVoice` (5GB). VRAM exceeds TTS budget if another GPU engine resident.
 
-**Hardware constraint:** BADKID server, RTX 4090 (24GB VRAM). 12GB reserved for Gemma 4 LLM, 4-6GB for STT service. **TTS budget: 4GB VRAM.**
+**Hardware constraint:** BADKID server, RTX 4090 (24GB VRAM). 12GB reserved for Gemma 4 LLM, 4-6GB for STT service. **TTS budget: 4GB VRAM.** F5-TTS + Kokoro fit within budget simultaneously.
 
-**Switching policy (target):** Kokoro always resident. Chatterbox Turbo never unloaded once loaded. Cloud providers stateless. No GPU exclusion needed — the GPU engine is fixed.
+**Switching policy (target):** Kokoro always resident. F5-TTS preferred GPU engine. Cloud providers stateless.
 
 ### Voice Model
 
@@ -52,6 +52,40 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-08-16 — F5-TTS & VibeVoice Engines Shipped + Markdown Cleaner
+
+**Focus:** Finish the experimental engine integrations started 2026-08-13; quality-tune F5-TTS; add markdown→speech preprocessing.
+
+**F5-TTS — new primary GPU engine** (user verdict: "fast and better than Chatterbox"):
+- Adapter + venv + model fully working. Dashboard pages (generate with speed/nfe_step/cfg_strength/sway/seed sliders, voices with transcript field).
+- **Critical discovery:** F5-TTS clips ref audio to ~12s internally. A 17.5s ref with full-length transcript inflates the chars/sec rate estimate by 45% → fast, oscillating speech. Fix: `clone()` auto-trims to ~12s at a silence boundary, resamples to 24kHz, re-transcribes via faster-whisper.
+- `speed` is a duration divisor (0.8 = 25% longer), not playback rate. Render ~4-7× real-time on 4090.
+- Monotone intonation = the reference's register, not a model limitation. Expressive refs → expressive output.
+- Long-form verified: full articles (8.6K and 14.2K chars) render in ~1-2 min, 53-86 internal chunks, clean cross-fades.
+
+**VibeVoice — parked** (user verdict: "ok, but nothing special in terms of feeling natural"):
+- Works, multi-speaker voice mapping via `extra_body.voices: {1: "Alice", 2: "Bob"}`.
+- Unique value: multi-speaker long-form dialogue (65K token context). Flat delivery.
+- 30s stream stall timeout kills long batch renders through Node — needs per-engine timeout (not fixed, engine parked).
+- flash-attn has no Windows wheel → sdpa default. Model at `venv/vibevoice/models/VibeVoice` (5GB).
+
+**Markdown cleaner** (`server/markdown-clean.js`):
+- `extra_body.markdown: true` — regex strip: frontmatter, images, code blocks, URLs, HTML, formatting markers. Headers get trailing period. Italic → em-dash for prosodic stress.
+- `extra_body.markdown: 'llm'` — LLM rewrite via local gateway (Gemma 4, `GATEWAY_API_KEY` in .env). Better emphasis/metadata handling. Fails loud if gateway down.
+
+**Bugs fixed during integration:**
+- `tts.py` class-name resolution: `f5tts.title()` ≠ `F5TtsAdapter` — added explicit `ADAPTER_CLASSES` map.
+- Worker preview: `cache_dir` restored before `generate()` — F5-TTS reads ref files lazily at generation time. Fixed to restore after generator consumed.
+- Worker preview: `voice_name` not passed to `generate()` — F5-TTS resolves files by name, not ambient state.
+- F5-TTS clone self-copy: Node pre-writes wav to target path, `shutil.copy2(src, src)` → WinError 32.
+- VibeVoice script format: strictly `Speaker N: text` (numeric), adapter was wrapping with voice name.
+
+**Pending:**
+- Stream stall timeout is 30s fixed — batch engines (VibeVoice, F5-TTS long renders through Node) need per-engine timeout or heartbeat. Currently F5-TTS works through Node only for texts that render in <30s.
+- F5-TTS + stitch pipeline untested (F5 has `maxChars: Infinity` — nSpeech chunking never triggers for it).
+- UX gap: byte-tick progress events go to SSE bus only, not main-0.log.
+- Curator-side gotcha: PowerShell `curl` alias mangles JSON bodies (use `curl.exe` or `--data @file`).
+
 ### 2026-08-15 — Stitch Pipeline Finalized + Progress Events
 
 **Focus:** Complete the batch-stitch workflow on a full 4-chunk real fixture; polish join quality; design progress reporting.
@@ -72,7 +106,7 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 **Pending:**
 - ~~E2E test driven by the RAUM curator~~ — **PASSED 2026-08-15**: curator rendered all articles via `mode:'stitch'` ("The Intellectual Corset", 8,679 chars, 2 chunks, ~125s/chunk on v3, alignment + trim + fades applied server-side). STT worker spawned fine in the server context (throwaway-script spawn failure did not reproduce).
-- MP3 transcode efficiency: mono 64kbps 44.1kHz target (currently stereo 128kbps)
+- ~~MP3 transcode efficiency~~ — **DONE 2026-08-15**: 64kbps mono 32kHz, speech-optimized, 50% smaller. Verified by ear.
 - UX gap found in E2E: byte-tick progress events go to the SSE bus only, not main-0.log — the log is silent ~2min per chunk during generation and reads as "stuck". Log ticks at INFO.
 - Curator-side gotcha: PowerShell `curl` alias mangles JSON bodies (use `curl.exe` or `--data @file`).
 
