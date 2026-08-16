@@ -95,6 +95,11 @@ export const config = {
   geminiApiKey: envFile.GEMINI_API_KEY ?? process.env.GEMINI_API_KEY ?? null,
   minimaxApiKey: envFile.MINIMAX_API_KEY ?? process.env.MINIMAX_API_KEY ?? null,
   xaiApiKey: envFile.XAI_API_KEY ?? process.env.XAI_API_KEY ?? null,
+  gatewayApiKey: envFile.GATEWAY_API_KEY ?? process.env.GATEWAY_API_KEY ?? null,
+
+  // LLM Gateway — used for markdown→speech text cleaning (extra_body.markdown='llm')
+  gatewayUrl: pick('NSPEECH_GATEWAY_URL', process.env, envFile) ?? configJson.gateway_url ?? 'http://192.168.0.100:3400',
+  gatewayModel: pick('NSPEECH_GATEWAY_MODEL', process.env, envFile) ?? configJson.gateway_model ?? 'badkid-llama-chat',
 
   // Static dirs
   webDir: resolve(PROJECT_ROOT, 'web'),

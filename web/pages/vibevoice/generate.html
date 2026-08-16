@@ -75,6 +75,9 @@ function init(element, params, nui) {
     }
 
     function buildSpeakerSelectors() {
+        // Preserve current selections across rebuilds
+        const prev = getSpeakerVoiceMap();
+
         const speakers = detectSpeakers(textArea.value);
         if (speakers.length === 0) speakers.push(1);
 
@@ -100,6 +103,12 @@ function init(element, params, nui) {
             selWrap.setItems?.(items) || (() => {
                 sel.innerHTML = items.map(i => `<option value="${i.value}">${i.label}</option>`).join('');
             })();
+
+            // Restore previous selection
+            if (prev[sid]) {
+                sel.value = prev[sid];
+                selWrap.setValue?.(prev[sid]);
+            }
         }
     }
 
@@ -111,6 +120,18 @@ function init(element, params, nui) {
             if (val) map[sid] = val;
         }
         return map;
+    }
+
+    function validateSpeakers() {
+        const speakers = detectSpeakers(textArea.value);
+        if (speakers.length === 0) speakers.push(1);
+        const map = getSpeakerVoiceMap();
+        const missing = speakers.filter(sid => !map[sid]);
+        if (missing.length > 0) {
+            statusEl.textContent = `Select a voice for: ${missing.map(s => 'Speaker ' + s).join(', ')}`;
+            return false;
+        }
+        return true;
     }
 
     textArea.addEventListener('input', () => { autoResize(textArea); buildSpeakerSelectors(); });
@@ -164,6 +185,7 @@ function init(element, params, nui) {
     generateBtn.querySelector('button').addEventListener('click', () => {
         const text = textArea.value.trim();
         if (!text) return;
+        if (!validateSpeakers()) return;
         stop();
 
         const voices = getSpeakerVoiceMap();

@@ -13,6 +13,7 @@ import { WorkerError } from '../engine/worker.js';
 import { getContentType, normalizeFormat } from './formats.js';
 import { logger } from '../logger.js';
 import { pipePcmToClient } from '../transcode.js';
+import { cleanMarkdown } from '../markdown-clean.js';
 import * as presets from '../presets.js';
 import * as chunking from '../chunking.js';
 
@@ -92,16 +93,31 @@ export async function relaySpeech(request, reply, body) {
   //   'off' — no chunking; text passed through as-is (fails over the limit).
   //
   // Deprecated aliases: batch=true → 'stitch', auto_chunk=false → 'off'.
+  //
+  // Markdown cleaning: extra_body.markdown
+  //   true  — regex strip (fast, deterministic)
+  //   'llm' — LLM rewrite via local gateway (better emphasis/metadata handling)
+  let inputText = body.input;
+  if (extraBody.markdown === 'llm') {
+    const before = inputText.length;
+    inputText = await cleanMarkdownLLM(inputText);
+    log.info('markdown cleaned (llm)', { before, after: inputText.length });
+  } else if (extraBody.markdown === true) {
+    const before = inputText.length;
+    inputText = cleanMarkdown(inputText);
+    log.info('markdown cleaned', { before, after: inputText.length });
+  }
+
   let pcmStream;
   try {
     const mode = extraBody.mode
       ?? (extraBody.batch === true ? 'stitch' : null)
       ?? (extraBody.auto_chunk === false ? 'off' : null)
       ?? 'stream';
-    if (mode !== 'off' && chunking.shouldChunk(body.input, engine)) {
+    if (mode !== 'off' && chunking.shouldChunk(inputText, engine)) {
       if (mode === 'stitch') {
         pcmStream = await chunking.generateChunkedBatch({
-          text: body.input,
+          text: inputText,
           engine,
           voiceName,
           speed,
@@ -114,7 +130,7 @@ export async function relaySpeech(request, reply, body) {
         });
       } else {
         pcmStream = await chunking.generateChunked({
-          text: body.input,
+          text: inputText,
           engine,
           voiceName,
           speed,
@@ -125,7 +141,7 @@ export async function relaySpeech(request, reply, body) {
       }
     } else {
       pcmStream = await engine.generatePcmStream({
-        text: body.input,
+        text: inputText,
         voice_name: voiceName,
         speed,
         instruct_text: instructions,
