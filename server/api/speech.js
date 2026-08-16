@@ -13,7 +13,7 @@ import { WorkerError } from '../engine/worker.js';
 import { getContentType, normalizeFormat } from './formats.js';
 import { logger } from '../logger.js';
 import { pipePcmToClient } from '../transcode.js';
-import { cleanMarkdown } from '../markdown-clean.js';
+import { cleanMarkdown, cleanMarkdownLLM } from '../markdown-clean.js';
 import * as presets from '../presets.js';
 import * as chunking from '../chunking.js';
 
