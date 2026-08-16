@@ -61,7 +61,7 @@ class SpeechRequest(BaseModel):
     text: str
     voice_name: str = "default"
     output_format: str = "wav"
-    speed: float = 1.0
+    speed: Optional[float] = None  # None = engine default (F5 uses 0.9, Kokoro 1.0)
     exaggeration: float = 0.5
     instruct_text: Optional[str] = None
     language: Optional[str] = None
@@ -83,6 +83,24 @@ class MixVoiceRequest(BaseModel):
 def create_app(engine_name: str) -> FastAPI:
     """Create a FastAPI app bound to a specific engine."""
     app = FastAPI(title=f"nSpeech Worker — {engine_name}", docs_url=None)
+
+    # ── Startup preload (NSPEECH_PRELOAD_MODEL=true) ────────────────────────
+    # Loads the model at worker start instead of on first request. Eliminates
+    # the multi-second warmup on the first generation after engine switch.
+    if config.NSPEECH_PRELOAD_MODEL:
+        @app.on_event("startup")
+        async def preload_model():
+            def _preload():
+                adapter = get_engine(engine_name)
+                # Touch the heavy attribute — adapters load models lazily
+                # behind a property (e.g. F5TtsAdapter.model).
+                if hasattr(adapter, "model"):
+                    _ = adapter.model
+                info(
+                    f"model preloaded: {engine_name}",
+                    extra={"meta": {"engine": engine_name}, "category": "worker"},
+                )
+            await asyncio.to_thread(_preload)
 
     app.add_middleware(
         CORSMiddleware,
@@ -348,13 +366,16 @@ def create_app(engine_name: str) -> FastAPI:
         gen_kwargs = dict(
             voice_name=req.voice_name,
             exaggeration=req.exaggeration,
-            speed=req.speed,
             instruct_text=req.instruct_text,
             language=req.language,
             model=req.model,
             seed=req.seed,
             offline=req.offline,
         )
+        # Pass speed through only when the client sent one — otherwise the
+        # engine's own default applies (F5: 0.9, Kokoro: 1.0).
+        if req.speed is not None:
+            gen_kwargs["speed"] = req.speed
         # Engine-specific params (steps, guidance_scale, blend, ...) ride in
         # extra_body. Merge them into kwargs so each adapter picks what it needs
         # via **kwargs; unknown keys are ignored.

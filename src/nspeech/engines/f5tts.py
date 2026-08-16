@@ -104,10 +104,10 @@ class F5TtsAdapter:
         )
 
         voice_name = kwargs.get("voice_name", "default")
-        nfe_step = kwargs.get("nfe_step", kwargs.get("inference_steps", 32))
-        speed = kwargs.get("speed", 1.0)
+        nfe_step = kwargs.get("nfe_step", kwargs.get("inference_steps", 64))
+        speed = kwargs.get("speed", 0.9)
         seed = kwargs.get("seed")
-        cfg_strength = kwargs.get("cfg_strength", 2.0)
+        cfg_strength = kwargs.get("cfg_strength", 1.5)
         sway_sampling_coef = kwargs.get("sway_sampling_coef", -1)
         cross_fade_duration = kwargs.get("cross_fade_duration", 0.15)
         target_rms = kwargs.get("target_rms", 0.1)

@@ -548,10 +548,10 @@ export class WorkerProcess {
       text,
       voice_name: voice_name || 'default',
       output_format: 'pcm',
-      speed: speed ?? 1.0,
       offline: eb.batch ?? false,
       extra_body: eb,
     };
+    if (speed !== undefined && speed !== null) workerBody.speed = speed;
     if (instruct_text) workerBody.instruct_text = instruct_text;
     if (model) workerBody.model = model;
     // Seed is a top-level worker field for backward compat with older adapters

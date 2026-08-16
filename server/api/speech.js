@@ -66,7 +66,7 @@ export async function relaySpeech(request, reply, body) {
   // ── Resolve preset (Node-managed voice configuration) ──────────────────
   let voiceName = body.voice ?? 'default';
   let instructions = body.instructions;
-  let speed = body.speed ?? 1.0;
+  let speed = body.speed; // undefined = engine default (worker-side per-engine)
   const engineName = body.model || manager.currentEngine;
   if (engineName) {
     const resolved = presets.lookup(engineName, voiceName);
@@ -213,7 +213,7 @@ export function registerSpeechRoute(app) {
       input: q.input || '',
       voice: q.voice || undefined,
       response_format: q.response_format || undefined,
-      speed: q.speed ? parseFloat(q.speed) : 1.0,
+      speed: q.speed ? parseFloat(q.speed) : undefined,
     };
     await relaySpeech(request, reply, body);
   });
