@@ -129,7 +129,11 @@ export async function relaySpeech(request, reply, body) {
           onProgress: undefined,
         });
       } else {
-        pcmStream = await chunking.generateChunked({
+        // NOTE: 'stream' mode previously called chunking.generateChunked,
+        // which never existed (503 'not a function', silent until sendError
+        // learned to log). Map to the stitch pipeline — it is the only
+        // chunked implementation and the quality path.
+        pcmStream = await chunking.generateChunkedBatch({
           text: inputText,
           engine,
           voiceName,
@@ -224,6 +228,13 @@ export function registerSpeechRoute(app) {
  * Honors err.status / err.type / err.code when present.
  */
 function sendError(reply, err) {
+  // Every failed request gets a log line — silent 503s are undebuggable.
+  log.error('speech request failed', {
+    message: err.message,
+    status: err.status || 503,
+    type: err.type || 'engine_error',
+    stack: err.stack?.split('\n').slice(0, 4).join(' | '),
+  });
   if (err.toJSON) {
     return reply.code(err.status || 503).send(err.toJSON());
   }

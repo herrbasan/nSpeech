@@ -98,7 +98,8 @@ def create_app(engine_name: str) -> FastAPI:
                     _ = adapter.model
                 info(
                     f"model preloaded: {engine_name}",
-                    extra={"meta": {"engine": engine_name}, "category": "worker"},
+                    meta={"engine": engine_name},
+                    category="worker",
                 )
             await asyncio.to_thread(_preload)
 
