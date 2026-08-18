@@ -98,11 +98,11 @@ function init(element, params, nui) {
             group.appendChild(selWrap);
             speakerVoicesEl.appendChild(group);
 
-            const items = [{ value: '', label: 'Select voice...' }];
-            for (const v of availableVoices) items.push({ value: v, label: v });
-            selWrap.setItems?.(items) || (() => {
-                sel.innerHTML = items.map(i => `<option value="${i.value}">${i.label}</option>`).join('');
-            })();
+            // Component auto-adds its own placeholder option — don't add ours.
+            const items = availableVoices.map(v => ({ value: v, label: v }));
+            // setItems returns undefined — never `setItems?.() || fallback`,
+            // the fallback would clobber the options the component just wired.
+            selWrap.setItems(items);
 
             // Restore previous selection
             if (prev[sid]) {
