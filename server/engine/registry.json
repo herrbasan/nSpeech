@@ -38,6 +38,7 @@
   "vibevoice": {
     "venv_python": "venv/vibevoice/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
-    "gpu": true
+    "gpu": true,
+    "stream_timeout_ms": 600000
   }
 }

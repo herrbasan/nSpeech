@@ -457,7 +457,12 @@ export class WorkerProcess {
     }
 
     this.inFlight++;
-    const streamTimeoutMs = opts.streamTimeoutMs ?? DEFAULT_STREAM_TIMEOUT_MS;
+    // Batch engines (VibeVoice) hold response headers until the full render
+    // is done — the stall timer effectively measures time-to-first-byte for
+    // them. Registry stream_timeout_ms overrides the 30s default per engine.
+    const streamTimeoutMs = opts.streamTimeoutMs
+      ?? this.entry.stream_timeout_ms
+      ?? DEFAULT_STREAM_TIMEOUT_MS;
 
     // Create an abort controller that combines client disconnect + stream stall
     const controller = new AbortController();

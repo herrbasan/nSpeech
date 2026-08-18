@@ -66,7 +66,12 @@ export async function relaySpeech(request, reply, body) {
   // ── Resolve preset (Node-managed voice configuration) ──────────────────
   let voiceName = body.voice ?? 'default';
   let instructions = body.instructions;
-  let speed = body.speed; // undefined = engine default (worker-side per-engine)
+  // Clients sometimes send speed as a string ("1") — coerce; MiniMax batch
+  // rejects float-typed fields sent as strings with a 2013 param error.
+  let speed = body.speed != null ? Number(body.speed) : undefined; // undefined = engine default (worker-side per-engine)
+  if (speed != null && Number.isNaN(speed)) {
+    return sendError(reply, Object.assign(new Error(`invalid speed: ${JSON.stringify(body.speed)}`), { status: 400, type: 'invalid_request' }));
+  }
   const engineName = body.model || manager.currentEngine;
   if (engineName) {
     const resolved = presets.lookup(engineName, voiceName);
@@ -129,11 +134,11 @@ export async function relaySpeech(request, reply, body) {
           onProgress: undefined,
         });
       } else {
-        // NOTE: 'stream' mode previously called chunking.generateChunked,
-        // which never existed (503 'not a function', silent until sendError
-        // learned to log). Map to the stitch pipeline — it is the only
-        // chunked implementation and the quality path.
-        pcmStream = await chunking.generateChunkedBatch({
+        // 'stream' mode: sequential chunks, native engine streaming, PCM
+        // forwarded per chunk (tail fade + silence pad, no overlap/align).
+        // Progressive through the ffmpeg transcode — playback starts after
+        // chunk 1 renders instead of after the full text.
+        pcmStream = await chunking.generateChunkedStream({
           text: inputText,
           engine,
           voiceName,

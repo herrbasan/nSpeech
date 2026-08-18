@@ -590,3 +590,106 @@ export async function generateChunkedBatch({ text, engine, voiceName, speed, ins
   progress('done', totalChunks, { totalPcmBytes: pcmBuffers.reduce((a, b) => a + b.length, 0) });
   return Readable.from([Buffer.concat(pcmBuffers)]);
 }
+
+/**
+ * Stream-mode chunking: sequential chunks, progressive PCM delivery.
+ *
+ * The counterpart to generateChunkedBatch for clients that want playback to
+ * start as soon as possible. Each chunk is generated with the engine's
+ * native streaming (no batch flag, no spoken overlap, no alignment). Chunk
+ * PCM is forwarded as soon as the chunk finishes rendering, with a tail
+ * fade + silence pad between chunks. Joins are audible — that's the
+ * documented trade-off for speed.
+ *
+ * Progressive granularity is per chunk, not per engine packet: the tail
+ * fade needs the chunk's final samples before anything after it can be
+ * emitted, and emitting mid-chunk then fading later would glitch the
+ * waveform. First byte ≈ one chunk's render time (typically 10–30s on
+ * cloud engines) instead of the full text's render time.
+ *
+ * @param {object} opts
+ * @param {string} opts.text — full client text
+ * @param {object} opts.engine — adapter with generatePcmStream + maxChars
+ * @param {string} opts.voiceName
+ * @param {number} [opts.speed]
+ * @param {string} [opts.instructions]
+ * @param {object} [opts.extraBody] — client extra_body (chunk flags added per chunk)
+ * @param {string} [opts.subModel]
+ * @returns {Promise<Readable>} — s16le 24kHz mono PCM, pushed per chunk
+ */
+export async function generateChunkedStream({ text, engine, voiceName, speed, instructions, extraBody, subModel }) {
+  if (!text || typeof text !== 'string') throw new Error('generateChunkedStream: text required');
+  if (!engine || typeof engine.generatePcmStream !== 'function') {
+    throw new Error('generateChunkedStream: engine with generatePcmStream required');
+  }
+
+  const maxChars = typeof engine.getMaxChars === 'function'
+    ? engine.getMaxChars(subModel)
+    : engine.maxChars;
+  const silenceMs = extraBody?.chunk_silence_ms ?? DEFAULT_SILENCE_MS;
+  const tailFadeMs = extraBody?.chunk_tail_fade_ms ?? DEFAULT_TAIL_FADE_MS;
+
+  const requests = buildChunkRequests(text, maxChars, { overlapParagraphs: 0 });
+  const totalChunks = requests.length;
+
+  const silenceBytes = silenceMs > 0
+    ? Buffer.alloc(Math.floor(silenceMs * SAMPLE_RATE / 1000) * BYTES_PER_SAMPLE)
+    : null;
+
+  log.info('auto-chunking stream', {
+    totalChars: text.length,
+    maxChars,
+    chunkCount: totalChunks,
+    chunkSizes: requests.map(r => r.text.length),
+    silenceMs,
+  });
+  emit('tts', `stream plan ${totalChunks} chunks`, { stage: 'plan', chunk: 0, totalChunks, percent: 0 });
+
+  const out = new Readable({ read() {} });
+
+  (async () => {
+    for (let i = 0; i < totalChunks; i++) {
+      const req = requests[i];
+      const t0 = Date.now();
+      // No spoken overlap in stream mode — but previous_text/next_text still
+      // go to adapters that use them for prosody (ElevenLabs). Strip the
+      // batch flag: stream mode wants native engine streaming.
+      const { batch: _drop, ...chunkExtra } = { ...extraBody, ...req.chunkExtra };
+
+      emit('tts', `stream generating ${i + 1}/${totalChunks}`, { stage: 'generating', chunk: i + 1, totalChunks, percent: Math.round((i / totalChunks) * 100) });
+
+      const stream = await engine.generatePcmStream({
+        text: req.text,
+        voice_name: voiceName,
+        speed,
+        instruct_text: instructions,
+        extra_body: chunkExtra,
+        model: subModel,
+      });
+
+      const parts = [];
+      for await (const part of stream) parts.push(part);
+      let pcm = Buffer.concat(parts);
+
+      if (pcm.length === 0) {
+        throw new Error(`Chunk ${i + 1}/${totalChunks} produced empty audio`);
+      }
+
+      pcm = applyFadeOut(pcm, tailFadeMs);
+      out.push(pcm);
+      if (!req.isLast && silenceBytes) out.push(silenceBytes);
+
+      log.info('stream chunk generated', {
+        index: i + 1, total: totalChunks,
+        chars: req.text.length, pcmBytes: pcm.length, ms: Date.now() - t0,
+      });
+    }
+    emit('tts', 'stream done', { stage: 'done', chunk: totalChunks, totalChunks, percent: 100 });
+    out.push(null);
+  })().catch(err => {
+    emit('tts', 'stream failed', { stage: 'failed', error: String(err.message ?? err).slice(0, 200) });
+    out.destroy(err);
+  });
+
+  return out;
+}
