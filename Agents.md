@@ -52,6 +52,32 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-08-17 — Cloud 503s Resolved + Stream Mode Restored
+
+**Focus:** Fix silent 503s on long cloud requests; restore progressive streaming for chunked texts.
+
+**Three fixes (handover: `docs/handover_2026-08-17_cloud-503s.md` — status RESOLVED):**
+
+1. **Dead `generateChunked()` call** (`6fb4304`): `speech.js` stream-mode chunk branch called a function that never existed (renamed during the 2026-08-15 API rename, branch never updated). Trigger: any request > engine.maxChars in default mode. Mapped to `generateChunkedBatch` as interim.
+2. **`sendError` now logs** (`6fb4304`): every failed request logs `{message, status, type, stack}`. The 503s were invisible before this — fail-silent class of bug, cost hours.
+3. **String-typed `speed` rejected by MiniMax**: chat app sends `"speed":"1"` (string); MiniMax strictly validates floats → error 2013 on batch, instant stream close on streaming (the "SSE zero-lines" red herring — parser was fine, probe proved provider healthy). Fixed by coercing `body.speed` to `Number()` at the `speech.js` boundary, 400 on NaN. **This one fix healed both MiniMax paths.**
+
+**Stream mode restored — `chunking.generateChunkedStream()`:**
+- Sequential chunks, native engine streaming per chunk (batch flag stripped), PCM pushed per chunk (75ms tail fade + 1000ms silence pad, no overlap/alignment).
+- Progressive through the ffmpeg transcode pipe — first audio after chunk 1 (~15-30s on cloud) instead of after the full render.
+- `extra_body.mode` now fully real: `'stream'` (default) = fast progressive, audible joins; `'stitch'` = buffered, seamless. Client toggle documented for chat-app integration.
+
+**Verified live:** long German article via MiniMax stitch (2 chunks), short MiniMax via native streaming.
+
+**Incidental fix:** `worker_routes.py` preload hook used `info(msg, extra={...})` — nspeech logger helper takes `meta=`, stdlib `logging.Logger` takes `extra=`. Crash showed as "engine health check timed out".
+
+**Open items:**
+- Text-cleaning toggle on the ~10 other engine dashboard pages (pattern in `web/pages/f5tts/generate.html`)
+- Plural acronym rule (`GPUs` → "G P U s")
+- F5 heading-silence design (adapter-level section splitting) — parked
+- Per-engine stream stall timeout — low priority now
+- UX gap: byte-tick progress events go to SSE bus only, not main-0.log
+
 ### 2026-08-16 — F5-TTS & VibeVoice Engines Shipped + Markdown Cleaner
 
 **Focus:** Finish the experimental engine integrations started 2026-08-13; quality-tune F5-TTS; add markdown→speech preprocessing.
@@ -81,7 +107,7 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 - VibeVoice script format: strictly `Speaker N: text` (numeric), adapter was wrapping with voice name.
 
 **Pending:**
-- Stream stall timeout is 30s fixed — batch engines (VibeVoice, F5-TTS long renders through Node) need per-engine timeout or heartbeat. Currently F5-TTS works through Node only for texts that render in <30s.
+- ~~Stream stall timeout is 30s fixed~~ — downgraded 2026-08-17: F5's own streaming defeats it for F5; cloud providers error rather than stall. Low priority.
 - F5-TTS + stitch pipeline untested (F5 has `maxChars: Infinity` — nSpeech chunking never triggers for it).
 - UX gap: byte-tick progress events go to SSE bus only, not main-0.log.
 - Curator-side gotcha: PowerShell `curl` alias mangles JSON bodies (use `curl.exe` or `--data @file`).

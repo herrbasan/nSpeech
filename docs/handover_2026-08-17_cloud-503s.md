@@ -1,10 +1,10 @@
 # Handover — Cloud Provider 503s (2026-08-17)
 
-**Status: partially fixed. MiniMax still broken (Node-side SSE bug, precisely scoped).**
+**Status: RESOLVED. All four cloud providers fully working in all modes.**
 
 ## TL;DR
 
-Long-text requests to cloud providers died with silent 503s. Root cause #1 (fixed): `speech.js` called `chunking.generateChunked()` — a function that **never existed** — for any request over an engine's `maxChars`. Root cause #2 (open): MiniMax's adapter reads **zero SSE lines** from a stream that the raw API serves fine.
+Long-text requests to cloud providers died with silent 503s. Root cause #1 (fixed): `speech.js` called `chunking.generateChunked()` — a function that **never existed** — for any request over an engine's `maxChars`. Root cause #2 (fixed): MiniMax rejected `"speed":"1"` sent as a **string** (strict float validation, error 2013). What looked like an SSE parser bug ("zero lines") was the same type rejection — the stream closed instantly. Fixed by coercing `body.speed` to Number at the `speech.js` boundary.
 
 ## What failed (the evidence)
 
@@ -50,39 +50,27 @@ if (mode !== 'off' && chunking.shouldChunk(inputText, engine)) {
 
 **Verified after restart:** MiniMax request now reaches `MiniMax generate` and engages the transcode layer. Root cause #1 is closed for all four cloud providers (they share `relaySpeech` → chunking).
 
-## Root cause #2 — MiniMax adapter consumes zero SSE lines (OPEN)
+## Root cause #2 — string-typed `speed` rejected by MiniMax (FIXED)
 
-With the chunking fixed, the 8,657-char cleaned text went **direct** (< maxChars). Now:
+With the chunking fixed, two distinct MiniMax failures remained, same root cause:
 
-```
-05:48:55 MiniMax generate {model:"speech-2.8-turbo", batch:false, textLen:8657}
-05:48:55 transcode spawning ffmpeg
-05:48:55 MiniMax streaming produced zero audio bytes {lines:0, emptyAudioLines:0}
-05:48:55 worker stream error: MiniMax streaming produced no audio
-```
+1. **Batch path:** `invalid params, Mismatch type float64 with value string` — the request body had `"speed":"1"` (string, sent by the chat app client).
+2. **Streaming path:** `MiniMax streaming produced zero audio bytes {lines:0}` in ~0.5s — initially suspected as an SSE parser bug, but the probe (`scripts/probe-minimax-stream.py`, sends `speed: 1.0` float) worked fine with 780 lines. The real cause: same param rejection closing the stream instantly.
 
-~0.5s from generate to zero-lines. **Provider probe** (`scripts/probe-minimax-stream.py`, same text, same voice, direct raw HTTP): **HTTP 200, 780 lines, 390 `data:` audio lines.** MiniMax is healthy; the adapter is broken.
-
-**Scoped suspects** — `server/cloud/minimax.js` streaming branch (~lines 196-260), specifically:
-- `stream_options.exclude_aggregated_audio: true` — short texts (42 chars) streamed fine with this option; maybe the turbo model changes behavior on long texts?
-- The `resp.body` iteration/SSE parsing loop — Node fetch returns a `ReadableStream`; if the adapter consumes it as a Node stream (or vice versa) or splits lines wrong, long chunks could hit a code path that yields nothing
-- SSE line framing (`data:` vs `data: ` — probe showed `data: {…}`)
-
-**Debug plan for next session (zero MiniMax quota needed for the code work):**
-1. Read `minimax.js` streaming branch carefully, compare to the known-good probe's framing (`data: ` prefix, `\n` line endings)
-2. Write an offline test: feed a recorded SSE capture through the adapter's parser (no API calls)
-3. The probe script doubles as the live verification tool — one short request to confirm the fix
-
-**Temporary workaround for the user:** `extra_body.batch: true` on MiniMax requests bypasses the streaming branch entirely (batch path = single aggregated hex blob, different code). Long texts >9,800 get `chunkExtra.batch: true` from the stitch pipeline anyway, so batch mode should work for the exact texts that failed — untested, but worth one try.
+**Fix:** `speech.js` coerces `body.speed` to `Number()` at the boundary, 400 on NaN. Both paths verified live after restart: long German article via stitch (2 chunks), short request via native streaming.
 
 ## All cloud providers — audited 2026-08-17
 
 | Provider | maxChars | Chunking path | Streaming-in-chunk | State |
 |---|---|---|---|---|
 | ElevenLabs | 4,800 | stitch (working, proven) | native SSE | ✅ fully working |
-| MiniMax | 9,800 | stitch (fixed) | SSE hex chunks | ⚠️ broken: zero lines (open) |
-| Gemini | 4,800 | stitch (fixed) | unary response → buffered | ✅ should work (physics: no streaming possible) |
-| xAI | 14,800 | stitch (fixed) | unary full buffer | ✅ should work (no SSE exists) |
+| MiniMax | 9,800 | stitch + stream (both working) | SSE hex chunks | ✅ fully working (speed coercion) |
+| Gemini | 4,800 | stitch + stream | unary response → buffered | ✅ fully working |
+| xAI | 14,800 | stitch + stream | unary full buffer | ✅ fully working |
+
+## Stream mode restored (2026-08-17)
+
+`chunking.generateChunkedStream()` added: sequential chunks, native engine streaming per chunk (batch flag stripped), PCM pushed per chunk (75ms tail fade + 1000ms silence pad, no overlap/alignment). Progressive through the ffmpeg transcode — first audio after chunk 1 (~15-30s) instead of after the full render. `extra_body.mode: 'stream'` (default) now means real progressive delivery; `'stitch'` unchanged (buffered quality).
 
 All four route through `relaySpeech` — the dead-function class of bug existed in exactly one place.
 
@@ -99,7 +87,7 @@ All four route through `relaySpeech` — the dead-function class of bug existed 
 
 ## Open items for next session
 
-1. **MiniMax SSE zero-lines bug** — scoped above, offline testable
+1. ~~MiniMax SSE zero-lines bug~~ — RESOLVED: string-typed `speed`, fixed by boundary coercion
 2. Text-cleaning toggle on the ~10 other engine dashboard pages (pattern in `web/pages/f5tts/generate.html`)
 3. Plural acronym rule (`GPUs` → "G P U s")
 4. `Agents.md` activity-log entry for 2026-08-16/17 (streaming, prosody, acronyms, defaults, preload, cloud fixes)
