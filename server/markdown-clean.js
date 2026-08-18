@@ -38,23 +38,47 @@ export function cleanMarkdown(text) {
   // Bare URLs — drop (reading "aich-tee-tee-pee" is never right)
   t = t.replace(/https?:\/\/\S+/g, '');
 
-  // Bold — strip markers (structural emphasis, not vocal stress)
+  // Strikethrough — drop entirely: struck text is retracted, speaking it is wrong
+  t = t.replace(/\s*~~[\s\S]*?~~\s*/g, ' ');
+
+  // Emphasis (bold + italic) → strip silently. Tested 2026-08-18:
+  // em-dash, quotes, and hyphen all break the flow more than they help;
+  // the engine emphasizes better when left alone.
   t = t.replace(/\*\*(.+?)\*\*/g, '$1');
   t = t.replace(/__(.+?)__/g, '$1');
+  t = t.replace(/\*(.+?)\*/g, '$1');
+  t = t.replace(/(?<!\w)_(.+?)_(?!\w)/g, '$1');
 
-  // Italic — vocal stress. Convert to em-dash prefix for prosodic pause.
-  // "the answer is *you*" → "the answer is — you"
-  t = t.replace(/\*(.+?)\*/g, '— $1');
-  t = t.replace(/(?<!\w)_(.+?)_(?!\w)/g, '— $1');
+  // Colon handling, two branches by left side:
+  //  - Label (line-initial, 1-2 words: "A Rule:", "Third:") → em-dash merge.
+  //    F5 compresses short segments and ignores their terminal punctuation,
+  //    but an em-dash breaks the flow reliably even after short labels.
+  //  - Clause (3+ words: "The answer is simple:") → period + paragraph
+  //    break + capitalize: a real sentence boundary with a full pause.
+  // Only colon+space — times (12:30) have no following space.
+  t = t.replace(/(^|\n)(\S+(?: \S+)?): (\p{L})/gmu, (_m, br, left, ch) => br + left + ' — ' + ch);
+  t = t.replace(/: (\p{L})/gu, (_m, ch) => '.\n\n' + ch.toUpperCase());
 
   // Code blocks (drop — reads poorly as TTS), inline code (keep content)
   t = t.replace(/```[\s\S]*?```/g, '');
   t = t.replace(/`(.+?)`/g, '$1');
 
-  // Headers: strip '#' prefix, add trailing period if missing
-  t = t.replace(/^(#{1,6})\s+(.+)$/gm, (_m, _hashes, title) => {
+  // Headers: strip '#' prefix (with or without following space — "#Title"
+  // is common in pasted content), add trailing period if missing
+  t = t.replace(/^(#{1,6})\s*(.+)$/gm, (_m, _hashes, title) => {
     const trimmed = title.trim();
     return /[.!?…]$/.test(trimmed) ? trimmed + '\n' : trimmed + '.\n';
+  });
+
+  // Standalone lines without terminal punctuation get a period — these are
+  // headings/titles in sources that don't use '#' (plain-text articles,
+  // pasted content). A line counts as standalone when bordered by blank
+  // lines or text boundaries. Length cap: long lines are wrapped prose,
+  // not headings — don't punctuate mid-thought.
+  t = t.replace(/(?:^|\n\n)([^\n]{1,120})(?=\n\n|$)/g, (m, line) => {
+    const trimmed = line.trim();
+    if (!trimmed || /[.!?…:;,—–-]$/.test(trimmed)) return m;
+    return m.slice(0, m.length - line.length) + trimmed + '.';
   });
 
   // Horizontal rules → paragraph break

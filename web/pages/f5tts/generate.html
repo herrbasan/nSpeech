@@ -17,7 +17,24 @@
         <nui-input-group>
             <label for="f5-text">Text</label>
             <nui-textarea auto-resize max-rows="8" min-rows="5">
-                <textarea id="f5-text" placeholder="Text to synthesize...">This is a test of the F5 TTS system. Flow matching produces natural prosody without autoregressive drift.</textarea>
+                <textarea id="f5-text" placeholder="Text to synthesize...">#The Rules We Keep
+
+Writing is thinking: a claim without structure is just noise. The *real* work happens when you delete the parts that only pretend to be clever.
+
+A Short Detour
+
+Honesty requires admitting the birthplace: this system was assembled at the edge of the void. Some call that **courage**. Others call it _foolishness_.
+
+Third: we listen. The verdict was clear. Guilty. On all counts.
+
+A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU, RLHF, and NASA walk into a bar.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="f5-preview">Cleaned preview (editable — what you see is what gets sent)</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="3">
+                <textarea id="f5-preview" placeholder="Enable regex clean to see the cleaned text here..."></textarea>
             </nui-textarea>
         </nui-input-group>
 
@@ -43,17 +60,17 @@
         </nui-input-group>
 
         <nui-input-group>
-            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">1.5</span></label>
+            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">2.5</span></label>
             <nui-input>
-                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="1.5" style="width: 100%">
+                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="2.5" style="width: 100%">
             </nui-input>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Guidance toward the reference voice. Higher = closer timbre match, lower = more variation.</p>
         </nui-input-group>
 
         <nui-input-group>
-            <label for="f5-sway">Sway Sampling: <span id="f5-sway-val">-1.0</span></label>
+            <label for="f5-sway">Sway Sampling: <span id="f5-sway-val">-0.5</span></label>
             <nui-input>
-                <input type="range" id="f5-sway" min="-1.0" max="1.0" step="0.1" value="-1.0" style="width: 100%">
+                <input type="range" id="f5-sway" min="-1.0" max="1.0" step="0.1" value="-0.5" style="width: 100%">
             </nui-input>
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">-1 = off (deterministic sampling). Positive values add prosodic variation.</p>
         </nui-input-group>
@@ -76,12 +93,12 @@
         <nui-input-group>
             <label for="f5-clean">Text cleaning</label>
             <nui-checkbox>
-                <input type="checkbox" id="f5-clean" checked>
-                <span>LLM prosody pass — stress marks &amp; pauses via local gateway (~1.5s/paragraph). Adds latency, best narration.</span>
+                <input type="checkbox" id="f5-regex-clean" checked>
+                <span>Regex clean (in browser) — strip markdown before sending; preview below. Default; best results in tests.</span>
             </nui-checkbox>
             <nui-checkbox>
-                <input type="checkbox" id="f5-regex-clean">
-                <span>Regex clean only — fast strip of markdown, no gateway call.</span>
+                <input type="checkbox" id="f5-clean">
+                <span>LLM prosody pass (server) — stress marks &amp; pauses via local gateway. Experimental: adds odd pauses.</span>
             </nui-checkbox>
         </nui-input-group>
 
@@ -133,11 +150,46 @@ function init(element, params, nui) {
     textArea.addEventListener('input', () => autoResize(textArea));
     autoResize(textArea);
 
+    // ── Cleaned-text preview (testing aid) ──────────────────────────────
+    // Uses the SDK regex cleaner (client-side responsibility) to show
+    // exactly what gets sent when regex clean is enabled.
+    const previewEl = element.querySelector('#f5-preview');
+    let cleanFn = null;
+    import('/lib/nspeech-client/markdown-clean.js').then(m => {
+        cleanFn = m.cleanMarkdown;
+        updatePreview();
+    }).catch(() => { previewEl.placeholder = 'cleaner module failed to load'; });
+
+    function updatePreview() {
+        if (!cleanFn) return;
+        if (!regexCleanEl.checked && !llmCleanEl.checked) {
+            previewEl.value = '';
+            previewEl.placeholder = 'Enable regex clean to see the cleaned text here...';
+            previewDirty = false;
+            autoResize(previewEl);
+            return;
+        }
+        if (previewDirty) return; // keep user's manual edits
+        try {
+            previewEl.value = cleanFn(textArea.value);
+        } catch (e) {
+            previewEl.value = 'cleaner error: ' + e.message;
+        }
+        autoResize(previewEl);
+    }
+    // Manual edits to the preview override the generated text on send.
+    // Any source edit resets back to the auto-cleaned version.
+    let previewDirty = false;
+    previewEl.addEventListener('input', () => { previewDirty = true; });
+    textArea.addEventListener('input', () => { previewDirty = false; updatePreview(); });
+
     llmCleanEl.addEventListener('change', () => {
         if (llmCleanEl.checked) regexCleanEl.checked = false;
+        updatePreview();
     });
     regexCleanEl.addEventListener('change', () => {
         if (regexCleanEl.checked) llmCleanEl.checked = false;
+        updatePreview();
     });
 
     nfeEl.addEventListener('input', () => { nfeVal.textContent = nfeEl.value; });
@@ -218,11 +270,25 @@ function init(element, params, nui) {
             };
             if (batchEl.checked) eb.batch = true;
             if (seedEl.value !== '') eb.seed = parseInt(seedEl.value, 10);
-            if (llmCleanEl.checked) eb.markdown = 'llm';
-            else if (regexCleanEl.checked) eb.markdown = true;
+
+            // Cleaning responsibility:
+            //  - regex: CLIENT-side via SDK — send cleaned text, no markdown flag
+            //  - llm:   SERVER-side (needs gateway) — send raw text + markdown:'llm'
+            let inputText = text;
+            if (llmCleanEl.checked) {
+                eb.markdown = 'llm';
+            } else if (regexCleanEl.checked) {
+                if (!cleanFn) {
+                    statusEl.textContent = 'Cleaner module not loaded yet — try again in a moment.';
+                    return;
+                }
+                // The preview is the source of truth: auto-cleaned, but the
+                // user may have edited it — send exactly what's displayed.
+                inputText = previewEl.value || cleanFn(text);
+            }
 
             const body = {
-                input: text,
+                input: inputText,
                 voice: voice,
                 response_format: 'mp3',
                 extra_body: eb,
