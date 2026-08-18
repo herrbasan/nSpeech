@@ -439,6 +439,7 @@ Clients see a flat list with three categories:
 | Text Processing | `pronunciation` | object | — | `{tone: ["original/replacement"]}` |
 | Text Processing | `ssml` | boolean | — | Interpret `input` as SSML |
 | Text Processing | `language` | string | — | ISO-639-1 hint, `auto` for detection |
+| Text Processing | `markdown` | boolean \| string | — | **Legacy** — server-side markdown cleaning for non-migrated clients. `true`=regex strip, `'llm'`=regex + LLM prosody pass (parked 2026-08-18). Clients should clean client-side via the SDK (`lib/nspeech-client/nspeech-client.js` → `cleanMarkdown`, or `clean:true`) and omit this field. |
 | Audio Output | `sample_rate` | int | 8000..44100 | Output sample rate |
 | Audio Output | `channel` | int | 1, 2 | Mono or stereo |
 | Audio Output | `bitrate` | int | — | Compressed audio bitrate |

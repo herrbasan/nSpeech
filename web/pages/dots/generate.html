@@ -1,4 +1,4 @@
-<div class="page-dots-generate">
+﻿<div class="page-dots-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>dots.tts — Generate</h1>
         <p class="lead">2B fully continuous AR TTS. SOTA voice cloning quality.</p>
@@ -72,25 +72,19 @@
             </nui-input>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
 
-        <audio id="dots-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="dots-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
+const mountGenerate = window.nspeechMountGenerate;
 
+function init(element, params, nui) {
     const voiceSelect = element.querySelector('#voice-select');
     const selectEl = element.querySelector('#dots-voice');
     const textArea = element.querySelector('#dots-text');
@@ -102,10 +96,8 @@ function init(element, params, nui) {
     const guidanceValEl = element.querySelector('#dots-guidance-val');
     const batchEl = element.querySelector('#dots-batch');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
     const arenaBtn = element.querySelector('#btn-arena-sample');
     const arenaInfo = element.querySelector('#dots-arena-info');
-    const audio = element.querySelector('#dots-audio');
 
     // Manual auto-resize fallback — adjust height to fit content
     function autoResize(ta) {
@@ -114,7 +106,6 @@ function init(element, params, nui) {
     }
     textArea.addEventListener('input', () => autoResize(textArea));
     autoResize(textArea);
-    const statusEl = element.querySelector('#dots-status');
 
     // Update slider value displays
     stepsEl.addEventListener('input', () => stepsValEl.textContent = stepsEl.value);
@@ -136,8 +127,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        fetch('/v1/voices?engine=dots')
-            .then(r => r.json())
+        window.nspeech.client.listVoices('dots', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices
@@ -147,106 +137,37 @@ function init(element, params, nui) {
                 if (cloned.length) items.push(...cloned);
                 voiceSelect.setItems(items);
             })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            .catch(() => {});
     }
 
-    function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        audio.pause();
-        // Don't removeAttribute('src') — it fires an async error that corrupts the next playback.
-        if (mediaSource?.readyState === 'open') {
-            try { mediaSource.endOfStream(); } catch (_) {}
-        }
-        mediaSource = null;
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', () => {
-        const text = textArea.value.trim();
-        if (!text) return;
-        stop();
-
-        const voice = selectEl.value || 'default';
-        abortController = new AbortController();
-        const startTime = performance.now();
-
-        audio.style.display = 'block';
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-        const collector = nspeechAudioDownload.createCollector();
-
-        let firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', async () => {
-            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
-
-            const body = {
-                input: text,
-                voice: voice,
-                response_format: 'mp3',
-                extra_body: {
-                    batch: batchEl.checked,
-                    language: languageEl.value || undefined,
-                    seed: seedEl.value ? Number(seedEl.value) : undefined,
-                    inference_steps: stepsEl.value ? Number(stepsEl.value) : undefined,
-                    guidance_scale: guidanceEl.value ? Number(guidanceEl.value) : undefined,
-                },
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'dots-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            const eb = {
+                batch: batchEl.checked,
+                language: languageEl.value || undefined,
+                seed: seedEl.value ? Number(seedEl.value) : undefined,
+                inference_steps: stepsEl.value ? Number(stepsEl.value) : undefined,
+                guidance_scale: guidanceEl.value ? Number(guidanceEl.value) : undefined,
             };
-
-            try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify(body),
-                    signal: abortController.signal,
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const reader = response.body.getReader();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    if (!firstChunk && value?.length) {
-                        firstChunk = true;
-                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
-                    }
-                    await new Promise((res, rej) => {
-                        sourceBuffer.appendBuffer(value);
-                        collector.push(value);
-                        sourceBuffer.onupdateend = res;
-                        sourceBuffer.onerror = rej;
-                    });
-                    if (audio.paused && sourceBuffer.buffered.length > 0) {
-                        audio.play().catch(() => {});
-                    }
-                }
-                if (mediaSource.readyState === 'open') {
-                    mediaSource.endOfStream();
-                }
-                nspeechAudioDownload.attachDownload(audio, collector.buildURL('dots-speech.mp3'), 'dots-speech.mp3');
-                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    statusEl.textContent = 'Stopped.';
-                } else {
-                    statusEl.textContent = `Error: ${err.message}`;
-                }
-            }
-        }, { once: true });
+            return {
+                model: 'dots',
+                input: text,
+                voice: selectEl.value || 'default',
+                extraBody: eb,
+            };
+        },
     });
+
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
 
     element.show = () => {
         selectEl.value = 'default';
         loadVoices();
     };
-    element.hide = () => stop();
+    element.hide = () => widget.stop();
 }
 </script>

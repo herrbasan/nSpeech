@@ -1,4 +1,4 @@
-<div class="page-minimax-generate">
+﻿<div class="page-minimax-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>MiniMax — Generate</h1>
         <p class="lead">Cloud TTS with 332+ voices across 13 languages. <code>speech-2.8-turbo</code> by default.</p>
@@ -53,25 +53,19 @@
             </nui-input>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
 
-        <audio id="mm-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="mm-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
+const mountGenerate = window.nspeechMountGenerate;
 
+function init(element, params, nui) {
     const voiceSelect = element.querySelector('#mm-voice-select');
     const selectEl = element.querySelector('#mm-voice');
     const textArea = element.querySelector('#mm-text');
@@ -80,18 +74,13 @@ function init(element, params, nui) {
     const emotionEl = element.querySelector('#mm-emotion');
     const batchEl = element.querySelector('#mm-batch');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    let audio = element.querySelector('#mm-audio');
-    const statusEl = element.querySelector('#mm-status');
 
     speedEl.addEventListener('input', () => {
         speedValEl.textContent = speedEl.value;
     });
 
     function loadVoices() {
-        statusEl.textContent = 'Loading voices...';
-        fetch('/v1/voices?engine=minimax')
-            .then(r => r.json())
+        window.nspeech.client.listVoices('minimax', null, true)
             .then(d => {
                 const voices = d.voices || [];
                 const cloned = [];
@@ -118,112 +107,32 @@ function init(element, params, nui) {
                     const en = groups.find(g => g.group === 'EN') || groups[0];
                     if (en.options.length > 0) selectEl.value = en.options[0].value;
                 }
-                statusEl.textContent = `${voices.length} voices loaded`;
             })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            .catch(() => {});
     }
 
-    function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        if (audio) {
-            audio.pause();
-            audio.src = '';
-        }
-        if (mediaSource?.readyState === 'open') {
-            try { mediaSource.endOfStream(); } catch (_) {}
-        }
-        mediaSource = null;
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', () => {
-        const text = textArea.value.trim();
-        if (!text) return;
-        stop();
-
-        const voice = selectEl.value;
-        const emotion = emotionEl.value;
-        abortController = new AbortController();
-        const startTime = performance.now();
-
-        const newAudio = document.createElement('audio');
-        newAudio.id = 'mm-audio';
-        newAudio.controls = true;
-        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
-        audio.replaceWith(newAudio);
-        audio = newAudio;
-
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-        const collector = nspeechAudioDownload.createCollector();
-
-        let firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', async () => {
-            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
-
-            const extraBody = { language: 'en' };
-            if (emotion) extraBody.emotion = emotion;
-            if (batchEl.checked) extraBody.batch = true;
-
-            try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                        model: 'minimax',
-                        input: text,
-                        voice: voice,
-                        response_format: 'mp3',
-                        speed: parseFloat(speedEl.value),
-                        extra_body: extraBody,
-                    }),
-                    signal: abortController.signal,
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const reader = response.body.getReader();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    if (!firstChunk && value?.length) {
-                        firstChunk = true;
-                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
-                    }
-                    await new Promise((res, rej) => {
-                        sourceBuffer.appendBuffer(value);
-                        collector.push(value);
-                        sourceBuffer.onupdateend = res;
-                        sourceBuffer.onerror = rej;
-                    });
-                    if (audio.paused && sourceBuffer.buffered.length > 0) {
-                        audio.play().catch(() => {});
-                    }
-                }
-                if (mediaSource.readyState === 'open') {
-                    mediaSource.endOfStream();
-                }
-                nspeechAudioDownload.attachDownload(audio, collector.buildURL('minimax-speech.mp3'), 'minimax-speech.mp3');
-                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    statusEl.textContent = 'Stopped.';
-                } else {
-                    statusEl.textContent = `Error: ${err.message}`;
-                }
-            }
-        }, { once: true });
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'minimax-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            const eb = { language: 'en' };
+            if (emotionEl.value) eb.emotion = emotionEl.value;
+            if (batchEl.checked) eb.batch = true;
+            return {
+                model: 'minimax',
+                input: text,
+                voice: selectEl.value || 'default',
+                speed: parseFloat(speedEl.value),
+                extraBody: eb,
+            };
+        },
     });
 
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+
     element.show = () => loadVoices();
-    element.hide = () => stop();
+    element.hide = () => widget.stop();
 }
 </script>

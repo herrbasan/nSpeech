@@ -168,7 +168,8 @@ export class EngineManager {
         await existing.stop().catch(() => {});
         this.workers.delete(engineName);
       } else {
-        // Still spawning/warming — wait for it
+        // Still spawning/warming — wait for it. `whenReady` rejects if the
+        // spawn dies; on success return the ready worker.
         await existing.whenReady();
         return existing;
       }
@@ -248,7 +249,21 @@ export class EngineManager {
     const oldWorker = this.workers.get(this.currentEngine);
     if (oldWorker) {
       if (onStatus) onStatus('unload_start', this.currentEngine);
-      await oldWorker.stop();
+      if (oldWorker.state === 'ready') {
+        await oldWorker.stop();
+      } else {
+        // Dead / unhealthy / spawning worker: never wait on it — a wedged
+        // respawn would block every subsequent switch. Kill without waiting
+        // for the graceful VRAM-free handshake (there's nothing to free
+        // cleanly anyway) and drop it from the map.
+        log.warn(`dropping non-ready worker on switch: ${this.currentEngine}`, {
+          engine: this.currentEngine, state: oldWorker.state,
+        });
+        emit('engine', `Dropping ${this.currentEngine} worker (state: ${oldWorker.state})`, {
+          engine: this.currentEngine, state: oldWorker.state,
+        });
+        oldWorker.stop().catch(() => {}); // fire-and-forget
+      }
       this.workers.delete(this.currentEngine);
       if (onStatus) onStatus('unload_done', this.currentEngine);
     }
@@ -295,7 +310,7 @@ export class EngineManager {
   async _unloadOtherGpuEngines(keepEngine) {
     const toUnload = [];
     for (const [name, worker] of this.workers) {
-      if (name !== keepEngine && worker.entry.gpu && worker.state === 'ready') {
+      if (name !== keepEngine && worker.entry.gpu && worker.state !== 'stopped') {
         toUnload.push(name);
       }
     }
@@ -304,7 +319,12 @@ export class EngineManager {
       log.info(`unloading GPU engine for exclusion: ${name}`, { engine: name });
       emit('engine', `GPU exclusion: unloading ${name}`, { engine: name });
       const worker = this.workers.get(name);
-      await worker.stop();
+      // 'ready' workers only — a dead/spawning one is dropped, not awaited.
+      if (worker.state === 'ready') {
+        await worker.stop();
+      } else {
+        worker.stop().catch(() => {});
+      }
       this.workers.delete(name);
     }
   }

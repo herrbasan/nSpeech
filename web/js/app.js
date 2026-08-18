@@ -82,10 +82,9 @@ function syncNavActive() {
 }
 
 function initNav() {
-    fetch('/engine')
-        .then(r => r.json())
-        .then(d => {
-            const engine = d.engine || 'kokoro';
+    window.nspeech.client.getEngine()
+        .then(engine => {
+            engine = engine || 'kokoro';
             const nav = buildNavigation(engine);
             renderNav(nav);
             syncEngineSwitcher(engine);
@@ -101,9 +100,7 @@ window.initNav = initNav;
 
 async function loadEngineList() {
     try {
-        const res = await fetch('/v1/admin/engines');
-        if (!res.ok) return [];
-        const data = await res.json();
+        const data = await window.nspeech.client.listEngines();
         return data.engines || [];
     } catch {
         return [];
@@ -152,54 +149,11 @@ async function switchEngine(engineName) {
     setBusy(true);
 
     try {
-        const res = await fetch('/v1/admin/engine', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ engine: engineName }),
-        });
+        const result = await window.nspeech.client.switchEngine(engineName);
 
-        if (!res.ok && res.headers.get('content-type')?.includes('application/json')) {
-            const err = await res.json();
-            throw new Error(err.error?.message || `HTTP ${res.status}`);
-        }
-        if (!res.ok) {
-            throw new Error(`Engine switch failed: HTTP ${res.status}`);
-        }
-
-        // SSE stream
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let done = false;
-        let finalResult = null;
-
-        while (!done) {
-            const { value, done: rd } = await reader.read();
-            done = rd;
-            if (value) buffer += decoder.decode(value, { stream: !done });
-
-            const blocks = buffer.split('\n\n');
-            buffer = blocks.pop() || '';
-
-            for (const block of blocks) {
-                const eventMatch = block.match(/^event:\s*(.+)$/m);
-                const dataMatch = block.match(/^data:\s*(.+)$/m);
-                if (!dataMatch) continue;
-
-                const eventType = eventMatch ? eventMatch[1].trim() : 'message';
-                const data = JSON.parse(dataMatch[1].trim());
-
-                if (eventType === 'result') {
-                    finalResult = data;
-                } else if (eventType === 'error') {
-                    throw new Error(data.error?.message || JSON.stringify(data.error));
-                }
-            }
-        }
-
-        if (finalResult && finalResult.engine) {
+        if (result && result.engine) {
             initNav();
-            syncEngineSwitcher(finalResult.engine);
+            syncEngineSwitcher(result.engine);
             // Always return to home after an engine switch; the previous
             // engine-specific page (e.g. gemini/generate) no longer exists.
             location.hash = '#page=home';

@@ -1,4 +1,4 @@
-<div class="page-xai-generate">
+﻿<div class="page-xai-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>xAI / Grok — Generate</h1>
         <p class="lead">Cloud TTS with 5 expressive voices, speech tags, and 20 languages. Returns full audio (no streaming from HTTP endpoint).</p>
@@ -61,24 +61,19 @@
             </nui-input>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
 
-        <audio id="xai-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="xai-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let abortController = null;
+const mountGenerate = window.nspeechMountGenerate;
 
+function init(element, params, nui) {
     const voiceSelect = element.querySelector('#xai-voice-select');
     const selectEl = element.querySelector('#xai-voice');
     const textArea = element.querySelector('#xai-text');
@@ -87,18 +82,13 @@ function init(element, params, nui) {
     const speedValEl = element.querySelector('#xai-speed-val');
     const normalizeEl = element.querySelector('#xai-normalize');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    const statusEl = element.querySelector('#xai-status');
-    let audio = element.querySelector('#xai-audio');
 
     speedEl.addEventListener('input', () => {
         speedValEl.textContent = speedEl.value;
     });
 
     function loadVoices() {
-        statusEl.textContent = 'Loading voices...';
-        fetch('/v1/voices?engine=xai')
-            .then(r => r.json())
+        window.nspeech.client.listVoices('xai', null, true)
             .then(d => {
                 const voices = d.voices || [];
                 const byType = { presets: [], builtin: [], cloned: [] };
@@ -120,85 +110,31 @@ function init(element, params, nui) {
                     const first = groups[0].options[0];
                     if (first) selectEl.value = first.value;
                 }
-                statusEl.textContent = `${voices.length} voices loaded`;
             })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            .catch(() => {});
     }
 
-    function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        if (audio) {
-            audio.pause();
-            audio.src = '';
-        }
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', () => {
-        const text = textArea.value.trim();
-        if (!text) return;
-        stop();
-
-        const voice = selectEl.value;
-        abortController = new AbortController();
-        const startTime = performance.now();
-
-        const newAudio = document.createElement('audio');
-        newAudio.id = 'xai-audio';
-        newAudio.controls = true;
-        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
-        audio.replaceWith(newAudio);
-        audio = newAudio;
-
-        statusEl.textContent = 'Generating...';
-
-        const extraBody = {};
-        if (normalizeEl.checked) extraBody.text_normalization = true;
-
-        fetch('/v1/audio/speech', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'xai-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            const eb = { language: languageEl.value };
+            if (normalizeEl.checked) eb.text_normalization = true;
+            return {
                 model: 'xai',
                 input: text,
-                voice: voice,
-                response_format: 'mp3',
+                voice: selectEl.value || 'default',
                 speed: parseFloat(speedEl.value),
-                extra_body: {
-                    language: languageEl.value,
-                    ...extraBody,
-                },
-            }),
-            signal: abortController.signal,
-        })
-        .then(async (response) => {
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const blob = await response.blob();
-            const url = URL.createObjectURL(blob);
-            audio.src = url;
-            nspeechAudioDownload.attachBlob(blob, audio, 'xai-speech.mp3');
-            audio.style.display = 'block';
-            audio.addEventListener('ended', () => URL.revokeObjectURL(url));
-            statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms (${(blob.size / 1024).toFixed(1)} KB)`;
-            audio.play().catch(() => {});
-        })
-        .catch((err) => {
-            if (err.name !== 'AbortError') {
-                statusEl.textContent = `Error: ${err.message}`;
-            }
-        });
+                extraBody: eb,
+            };
+        },
     });
 
-    element.show = () => {
-        loadVoices();
-    };
-    element.hide = () => stop();
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+
+    element.show = () => loadVoices();
+    element.hide = () => widget.stop();
 }
 </script>

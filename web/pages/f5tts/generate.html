@@ -1,4 +1,4 @@
-<div class="page-f5tts-generate">
+﻿<div class="page-f5tts-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>F5-TTS — Generate</h1>
         <p class="lead">Flow-matching zero-shot cloning. Internal chunking with cross-fade — pass full text, single render.</p>
@@ -102,25 +102,19 @@ A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU,
             </nui-checkbox>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
-
-        <audio id="f5-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="f5-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
+const mountGenerate = window.nspeechMountGenerate;
+const cleanMarkdown = window.nspeech.cleanMarkdown;
 
+function init(element, params, nui) {
     const voiceSelect = element.querySelector('#voice-select');
     const selectEl = element.querySelector('#f5-voice');
     const textArea = element.querySelector('#f5-text');
@@ -139,9 +133,6 @@ function init(element, params, nui) {
     const llmCleanEl = element.querySelector('#f5-clean');
     const regexCleanEl = element.querySelector('#f5-regex-clean');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    const audio = element.querySelector('#f5-audio');
-    const statusEl = element.querySelector('#f5-status');
 
     function autoResize(ta) {
         ta.style.height = 'auto';
@@ -151,17 +142,16 @@ function init(element, params, nui) {
     autoResize(textArea);
 
     // ── Cleaned-text preview (testing aid) ──────────────────────────────
-    // Uses the SDK regex cleaner (client-side responsibility) to show
+    // SDK regex cleaner (client-side responsibility) — the preview shows
     // exactly what gets sent when regex clean is enabled.
     const previewEl = element.querySelector('#f5-preview');
-    let cleanFn = null;
-    import('/lib/nspeech-client/markdown-clean.js').then(m => {
-        cleanFn = m.cleanMarkdown;
-        updatePreview();
-    }).catch(() => { previewEl.placeholder = 'cleaner module failed to load'; });
+    const cleanFn = cleanMarkdown;
+    // Manual edits to the preview override the generated text on send.
+    // Any source edit resets back to the auto-cleaned version.
+    let previewDirty = false;
+    updatePreview();
 
     function updatePreview() {
-        if (!cleanFn) return;
         if (!regexCleanEl.checked && !llmCleanEl.checked) {
             previewEl.value = '';
             previewEl.placeholder = 'Enable regex clean to see the cleaned text here...';
@@ -177,9 +167,6 @@ function init(element, params, nui) {
         }
         autoResize(previewEl);
     }
-    // Manual edits to the preview override the generated text on send.
-    // Any source edit resets back to the auto-cleaned version.
-    let previewDirty = false;
     previewEl.addEventListener('input', () => { previewDirty = true; });
     textArea.addEventListener('input', () => { previewDirty = false; updatePreview(); });
 
@@ -213,8 +200,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        fetch('/v1/voices?engine=f5tts')
-            .then(r => r.json())
+        window.nspeech.client.listVoices('f5tts', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices
@@ -224,47 +210,18 @@ function init(element, params, nui) {
                 if (cloned.length) items.push(...cloned);
                 voiceSelect.setItems(items);
             })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            .catch(() => {});
     }
 
-    function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        audio.pause();
-        if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch (_) {}
-        mediaSource = null;
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', () => {
-        const text = textArea.value.trim();
-        if (!text) return;
-        stop();
-
-        const voice = selectEl.value || 'default';
-        abortController = new AbortController();
-        const startTime = performance.now();
-
-        audio.style.display = 'block';
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-        const collector = nspeechAudioDownload.createCollector();
-
-        let firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', async () => {
-            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'f5tts-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
 
             const eb = {
                 nfe_step: parseInt(nfeEl.value, 10),
-                speed: parseFloat(speedEl.value),
                 cfg_strength: parseFloat(cfgEl.value),
                 sway_sampling_coef: parseFloat(swayEl.value),
             };
@@ -272,69 +229,30 @@ function init(element, params, nui) {
             if (seedEl.value !== '') eb.seed = parseInt(seedEl.value, 10);
 
             // Cleaning responsibility:
-            //  - regex: CLIENT-side via SDK — send cleaned text, no markdown flag
-            //  - llm:   SERVER-side (needs gateway) — send raw text + markdown:'llm'
+            //  - regex: CLIENT-side — send the preview text verbatim
+            //  - llm:   SERVER-side (needs gateway) — raw text + markdown:'llm'
             let inputText = text;
             if (llmCleanEl.checked) {
                 eb.markdown = 'llm';
             } else if (regexCleanEl.checked) {
-                if (!cleanFn) {
-                    statusEl.textContent = 'Cleaner module not loaded yet — try again in a moment.';
-                    return;
-                }
                 // The preview is the source of truth: auto-cleaned, but the
                 // user may have edited it — send exactly what's displayed.
                 inputText = previewEl.value || cleanFn(text);
             }
 
-            const body = {
+            return {
+                model: 'f5tts',
                 input: inputText,
-                voice: voice,
-                response_format: 'mp3',
-                extra_body: eb,
+                voice: selectEl.value || 'default',
+                speed: parseFloat(speedEl.value),
+                extraBody: eb,
             };
-
-            try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify(body),
-                    signal: abortController.signal,
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const reader = response.body.getReader();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    if (!firstChunk && value?.length) {
-                        firstChunk = true;
-                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
-                    }
-                    await new Promise((res, rej) => {
-                        sourceBuffer.appendBuffer(value);
-                        collector.push(value);
-                        sourceBuffer.onupdateend = res;
-                        sourceBuffer.onerror = rej;
-                    });
-                    if (audio.paused && sourceBuffer.buffered.length > 0) {
-                        audio.play().catch(() => {});
-                    }
-                }
-                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
-                nspeechAudioDownload.attachDownload(audio, collector.buildURL('f5tts-speech.mp3'), 'f5tts-speech.mp3');
-                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    statusEl.textContent = 'Stopped.';
-                } else {
-                    statusEl.textContent = `Error: ${err.message}`;
-                }
-            }
-        }, { once: true });
+        },
     });
 
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+
     element.show = () => loadVoices();
-    element.hide = () => stop();
+    element.hide = () => widget.stop();
 }
 </script>

@@ -1,4 +1,4 @@
-<div class="page-elevenlabs-generate">
+﻿<div class="page-elevenlabs-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>ElevenLabs — Generate</h1>
         <p class="lead">Cloud TTS with 10,000+ voices across 29 languages. <code>eleven_v3</code> by default.</p>
@@ -76,25 +76,19 @@
             </nui-input>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
 
-        <audio id="el-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="el-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
+const mountGenerate = window.nspeechMountGenerate;
 
+function init(element, params, nui) {
     const voiceSelect = element.querySelector('#el-voice-select');
     const selectEl = element.querySelector('#el-voice');
     const modelEl = element.querySelector('#el-model');
@@ -109,9 +103,6 @@ function init(element, params, nui) {
     const speedValEl = element.querySelector('#el-speed-val');
     const batchEl = element.querySelector('#el-batch');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    let audio = element.querySelector('#el-audio');
-    const statusEl = element.querySelector('#el-status');
 
     stabilityEl.addEventListener('input', function() { stabilityValEl.textContent = parseFloat(this.value).toFixed(2); });
     styleEl.addEventListener('input', function() { styleValEl.textContent = parseFloat(this.value).toFixed(2); });
@@ -119,9 +110,7 @@ function init(element, params, nui) {
     speedEl.addEventListener('input', function() { speedValEl.textContent = parseFloat(this.value).toFixed(2); });
 
     function loadVoices() {
-        statusEl.textContent = 'Loading voices...';
-        fetch('/v1/voices?engine=elevenlabs')
-            .then(function(r) { return r.json(); })
+        window.nspeech.client.listVoices('elevenlabs', null, true)
             .then(function(d) {
                 var voices = d.voices || [];
                 var cloned = [], langMap = {};
@@ -147,93 +136,37 @@ function init(element, params, nui) {
                     var en = groups.find(function(g) { return g.group === 'EN'; }) || groups[0];
                     if (en.options.length > 0) selectEl.value = en.options[0].value;
                 }
-                statusEl.textContent = voices.length + ' voices loaded';
             })
-            .catch(function() { statusEl.textContent = 'Failed to load voices'; });
+            .catch(function() {});
     }
 
-    function stop() {
-        if (abortController) { abortController.abort(); abortController = null; }
-        if (audio) { audio.pause(); audio.src = ''; }
-        if (mediaSource && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch(e) {} }
-        mediaSource = null;
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', function() {
-        var text = textArea.value.trim();
-        if (!text) return;
-        stop();
-
-        var voice = selectEl.value;
-        abortController = new AbortController();
-        var startTime = performance.now();
-
-        var newAudio = document.createElement('audio');
-        newAudio.id = 'el-audio';
-        newAudio.controls = true;
-        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
-        audio.replaceWith(newAudio);
-        audio = newAudio;
-
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-        var collector = nspeechAudioDownload.createCollector();
-
-        var firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', function() {
-            var sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
-
-            fetch('/v1/audio/speech', {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({
-                    model: 'elevenlabs',
-                    input: text,
-                    voice: voice,
-                    response_format: 'mp3',
-                    speed: parseFloat(speedEl.value),
-                    extra_body: {
-                        model: modelEl.value,
-                        stability: parseFloat(stabilityEl.value),
-                        expressiveness: parseFloat(styleEl.value),
-                        guidance_scale: parseFloat(similarityEl.value),
-                        language: 'en',
-                        batch: batchEl.checked,
-                    },
-                }),
-                signal: abortController.signal,
-            })
-            .then(async function(response) {
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                var reader = response.body.getReader();
-
-                while (true) {
-                    var r = await reader.read();
-                    if (r.done) break;
-                    if (!firstChunk && r.value && r.value.length) {
-                        firstChunk = true;
-                        statusEl.textContent = 'TTFB: ' + (performance.now() - startTime).toFixed(0) + 'ms';
-                    }
-                    await new Promise(function(res, rej) { sourceBuffer.appendBuffer(r.value); collector.push(r.value); sourceBuffer.onupdateend = res; sourceBuffer.onerror = rej; });
-                    if (audio.paused && sourceBuffer.buffered.length > 0) { audio.play().catch(function() {}); }
-                }
-                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
-                nspeechAudioDownload.attachDownload(audio, collector.buildURL('elevenlabs-speech.mp3'), 'elevenlabs-speech.mp3');
-                statusEl.textContent = 'Done in ' + (performance.now() - startTime).toFixed(0) + 'ms';
-            })
-            .catch(function(err) {
-                if (err.name === 'AbortError') statusEl.textContent = 'Stopped.';
-                else statusEl.textContent = 'Error: ' + err.message;
-            });
-        }, { once: true });
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'elevenlabs-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            const eb = {
+                model: modelEl.value,
+                stability: parseFloat(stabilityEl.value),
+                expressiveness: parseFloat(styleEl.value),
+                guidance_scale: parseFloat(similarityEl.value),
+                language: 'en',
+                batch: batchEl.checked,
+            };
+            return {
+                model: 'elevenlabs',
+                input: text,
+                voice: selectEl.value || 'default',
+                speed: parseFloat(speedEl.value),
+                extraBody: eb,
+            };
+        },
     });
 
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+
     element.show = function() { loadVoices(); };
-    element.hide = function() { stop(); };
+    element.hide = function() { widget.stop(); };
 }
 </script>

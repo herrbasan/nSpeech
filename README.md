@@ -70,43 +70,32 @@ Local CPU (faster-whisper large-v3 int8). First call spawns the STT worker; subs
 
 ### SDK (Recommended)
 
-The nSpeech Client SDK (`lib/nspeech-client/nspeech-client-v2.js`) is a zero-dependency vanilla JS client for browser and Node.js. It wraps the REST API with:
+The nSpeech Client SDK (`lib/nspeech-client/nspeech-client.js`) is a single-file, zero-dependency ESM module for browser and Node.js. Four exports cover the whole surface:
 
-- Event-driven TTS lifecycle (`start`, `ttfb`, `progress`, `complete`, `error`)
-- Retry with exponential backoff for network failures
-- Typed error classes (`VoiceNotFoundError`, `EngineError`, `RateLimitError`)
-- Format-aware audio playback
-- Optional voice cache with TTL
-- Debug logging with request IDs
+- **`NSpeechClient`** — REST API: `speech()` (with `clean:true` for client-side markdown cleaning), `speechStream()` (event-driven lifecycle: `start`, `ttfb`, `progress`, `complete`, `error`), voices, cloning, presets, engine admin. Retry with exponential backoff, typed errors (`VoiceNotFoundError`, `EngineError`, `RateLimitError`), voice cache with TTL.
+- **`SpeechPlayer`** — streaming playback (browser): decoupled download/playback (pause never aborts the stream), MSE with blob fallback, seek/pause/resume, `state`/`time`/`download-progress` events.
+- **`EventStream`** — `/v1/admin/events` SSE feed with auto-reconnect; `progress` events carry chunking `stage`/`percent`.
+- **`cleanMarkdown`** / **`expandAcronyms`** — the canonical markdown→speech cleaner (same code the server uses).
 
 ```javascript
-import { NSpeechClient } from './lib/nspeech-client/nspeech-client-v2.js';
+import { NSpeechClient, SpeechPlayer, EventStream } from './lib/nspeech-client/nspeech-client.js';
 
-const nspeech = new NSpeechClient({
-  baseUrl: 'http://127.0.0.1:2233',
-  debug: true
-});
+const nspeech = new NSpeechClient({ baseUrl: 'http://127.0.0.1:2233', debug: true });
 
-// Streaming TTS with events
-const stream = nspeech.speechStream({
-  model: 'kokoro',
-  input: 'Hello world.',
-  voice: 'af_heart'
-});
-
+// Streaming TTS with events + client-side markdown cleaning
+const stream = nspeech.speechStream({ model: 'nspeech', input: markdown, voice: 'af_heart', clean: true });
 stream.on('ttfb', ({ timeMs }) => console.log(`First audio: ${timeMs}ms`));
-stream.on('complete', ({ audioUrl, durationMs }) => {
-  console.log(`Done in ${durationMs}ms`);
-  audio.src = audioUrl;  // play it
-});
-stream.on('error', (err) => console.error(err.name, err.message));
+stream.on('complete', ({ audioUrl }) => { audio.src = audioUrl; });
 
-// Convenience: fetch an audio blob and play
-const blob = await nspeech.speak({
-  model: 'kokoro',
-  input: 'Quick one-shot.',
-  voice: 'af_heart'
-});
+// Or: full playback control (pause/seek, progressive buffering)
+const player = new SpeechPlayer({ client: nspeech });
+player.on('state', ({ state }) => console.log(state));
+player.speak({ model: 'nspeech', input: markdown, voice: 'af_heart', clean: true });
+
+// Server-side job progress (chunking stage + percent)
+const events = new EventStream({ baseUrl: 'http://127.0.0.1:2233', types: ['tts'] });
+events.on('progress', ({ percent, stage }) => console.log(stage, percent));
+events.connect();
 ```
 
 ### Basic TTS (raw API)
@@ -161,6 +150,18 @@ Pass `extra_body` for engine-specific options. Unsupported fields are silently i
 ```
 
 See [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) for the full `extra_body` field support matrix.
+
+### Markdown Input
+
+Clean markdown to speech-ready text **client-side** before sending — the canonical cleaner ships in the SDK (`lib/nspeech-client/nspeech-client.js`):
+
+```javascript
+import { cleanMarkdown } from './lib/nspeech-client/nspeech-client.js';
+
+const body = { model: 'nspeech', input: cleanMarkdown(articleMarkdown), voice: 'af_heart' };
+// Or simply: nspeech.speech({ model: 'nspeech', input: articleMarkdown, voice: 'af_heart', clean: true })
+```
+Rules settled by ear tests on F5-TTS: emphasis strips silently (engines emphasize better unmarked), label colons merge with em-dash, clause colons split into full sentence breaks, headers get terminal periods, strikethrough drops, acronyms spell out. A server-side fallback (`extra_body.markdown: true`) exists for non-migrated clients; the LLM prosody variant (`'llm'`) is parked.
 
 ### Long Texts (Seamless Stitching)
 

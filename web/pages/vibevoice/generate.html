@@ -1,4 +1,4 @@
-<div class="page-vibevoice-generate">
+﻿<div class="page-vibevoice-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>VibeVoice — Generate</h1>
         <p class="lead">Long-form multi-speaker dialogue (1.5B LLM + diffusion head). Batch-only, no streaming.</p>
@@ -30,24 +30,19 @@
             <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Classifier-free guidance. Higher = closer to reference voice, lower = more expressive.</p>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
 
-        <audio id="vv-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="vv-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
+const mountGenerate = window.nspeechMountGenerate;
+
 function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
     let availableVoices = [];
 
     const speakerVoicesEl = element.querySelector('#vv-speaker-voices');
@@ -57,9 +52,6 @@ function init(element, params, nui) {
     const cfgEl = element.querySelector('#vv-cfg');
     const cfgVal = element.querySelector('#vv-cfg-val');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    const audio = element.querySelector('#vv-audio');
-    const statusEl = element.querySelector('#vv-status');
 
     function autoResize(ta) {
         ta.style.height = 'auto';
@@ -127,8 +119,8 @@ function init(element, params, nui) {
         if (speakers.length === 0) speakers.push(1);
         const map = getSpeakerVoiceMap();
         const missing = speakers.filter(sid => !map[sid]);
-        if (missing.length > 0) {
-            statusEl.textContent = `Select a voice for: ${missing.map(s => 'Speaker ' + s).join(', ')}`;
+        if (missing.length) {
+            widget.setStatus(`Select a voice for: ${missing.map(s => `Speaker ${s}`).join(', ')}`);
             return false;
         }
         return true;
@@ -156,111 +148,43 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        fetch('/v1/voices?engine=vibevoice')
-            .then(r => r.json())
+        window.nspeech.client.listVoices('vibevoice', null, true)
             .then(d => {
                 availableVoices = (d.voices || [])
                     .filter(v => v.voice_type === 'cloned')
                     .map(v => v.name);
                 buildSpeakerSelectors();
             })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            .catch(() => {});
     }
 
-    function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        audio.pause();
-        if (mediaSource?.readyState === 'open') try { mediaSource.endOfStream(); } catch (_) {}
-        mediaSource = null;
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', () => {
-        const text = textArea.value.trim();
-        if (!text) return;
-        if (!validateSpeakers()) return;
-        stop();
-
-        const voices = getSpeakerVoiceMap();
-        const voiceValues = Object.values(voices);
-        if (voiceValues.length === 0) {
-            statusEl.textContent = 'Select at least one voice.';
-            return;
-        }
-
-        abortController = new AbortController();
-        const startTime = performance.now();
-
-        audio.style.display = 'block';
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-        const collector = nspeechAudioDownload.createCollector();
-
-        let firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', async () => {
-            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
-
-            const body = {
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'vibevoice-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            if (!validateSpeakers()) return null;
+            const voices = getSpeakerVoiceMap();
+            const voiceValues = Object.values(voices);
+            if (voiceValues.length === 0) return null;
+            const eb = {
+                batch: true,
+                cfg_scale: parseFloat(cfgEl.value),
+                voices: voices,
+            };
+            return {
+                model: 'vibevoice',
                 input: text,
                 voice: voiceValues[0],
-                response_format: 'mp3',
-                extra_body: {
-                    batch: true,
-                    cfg_scale: parseFloat(cfgEl.value),
-                    voices: voices,
-                },
+                extraBody: eb,
             };
-
-            try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify(body),
-                    signal: abortController.signal,
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const reader = response.body.getReader();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    if (!firstChunk && value?.length) {
-                        firstChunk = true;
-                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
-                    }
-                    await new Promise((res, rej) => {
-                        sourceBuffer.appendBuffer(value);
-                        collector.push(value);
-                        sourceBuffer.onupdateend = res;
-                        sourceBuffer.onerror = rej;
-                    });
-                    if (audio.paused && sourceBuffer.buffered.length > 0) {
-                        audio.play().catch(() => {});
-                    }
-                }
-                if (mediaSource.readyState === 'open') mediaSource.endOfStream();
-                nspeechAudioDownload.attachDownload(audio, collector.buildURL('vibevoice-speech.mp3'), 'vibevoice-speech.mp3');
-                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    statusEl.textContent = 'Stopped.';
-                } else {
-                    statusEl.textContent = `Error: ${err.message}`;
-                }
-            }
-        }, { once: true });
+        },
     });
 
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+
     element.show = () => loadVoices();
-    element.hide = () => stop();
+    element.hide = () => widget.stop();
 }
 </script>

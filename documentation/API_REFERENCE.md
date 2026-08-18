@@ -50,7 +50,6 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
   "speed": 1.0,
   "instructions": "Speak warmly.",
   "extra_body": {
-    "batch": false,
     "pitch": 0,
     "emotion": "calm",
     "expressiveness": 0.5,
@@ -125,6 +124,14 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 | `pronunciation` | object | `{tone: ["original/replacement"]}`. IPA, pinyin, jyutping, kana. |
 | `ssml` | boolean | Interpret input as SSML. |
 | `language` | string | ISO-639-1 hint or `auto`. |
+
+#### Markdown Cleaning (legacy)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `markdown` | boolean \| string | **Legacy — kept for non-migrated clients.** `true` = server-side regex strip (fast, deterministic). `'llm'` = regex + LLM prosody pass via local gateway — **parked** (2026-08-18: consistently worse than regex in ear tests). |
+
+**Architecture (2026-08-18):** markdown regex cleaning is a **client responsibility**. Clients should clean text before sending — the canonical implementation ships in the SDK ([lib/nspeech-client/nspeech-client.js](../lib/nspeech-client/nspeech-client.js): `cleanMarkdown`, or `clean:true` on `speech()`/`speak()`; same code the server uses) — and omit `extra_body.markdown` entirely. The server path exists only for clients that haven't migrated. Rules: emphasis strips silently, label colons (1–2 words, line-initial) merge with em-dash, clause colons split into sentence + paragraph break, headers get terminal periods, strikethrough drops, acronyms spell out (`GLM5` → "G L M five"), file extensions speak ("notes.md" → "notes dot m d").
 
 #### Long-Form / Auto-Chunking
 

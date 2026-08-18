@@ -1,4 +1,4 @@
-<div class="page-kokoro-generate">
+﻿<div class="page-kokoro-generate">
     <header style="margin-bottom: var(--nui-space-double)">
         <h1>Kokoro — Generate</h1>
         <p class="lead">Fast English TTS with 54 built-in voices.</p>
@@ -21,36 +21,26 @@
             </nui-textarea>
         </nui-input-group>
 
-        <nui-button-container gap="medium">
+        <nui-button-container gap="medium" data-generate-anchor>
             <nui-button variant="primary" id="btn-generate">
                 <button type="button">Generate</button>
             </nui-button>
-            <nui-button id="btn-stop">
-                <button type="button">Stop</button>
-            </nui-button>
         </nui-button-container>
 
-        <audio id="kok-audio" controls style="width: 100%; margin-top: var(--nui-space-double); display: none;"></audio>
-        <p id="kok-status" style="margin-top: var(--nui-space); color: var(--color-shade6);"></p>
     </nui-card>
 </div>
 
 <script type="nui/page">
-function init(element, params, nui) {
-    let mediaSource = null;
-    let abortController = null;
+const mountGenerate = window.nspeechMountGenerate;
 
+function init(element, params, nui) {
     const voiceSelect = element.querySelector('#voice-select');
     const selectEl = element.querySelector('#kok-voice');
     const textArea = element.querySelector('#kok-text');
     const generateBtn = element.querySelector('#btn-generate');
-    const stopBtn = element.querySelector('#btn-stop');
-    let audio = element.querySelector('#kok-audio');
-    const statusEl = element.querySelector('#kok-status');
 
     function loadVoices() {
-        fetch('/v1/voices?engine=kokoro')
-            .then(r => r.json())
+        window.nspeech.client.listVoices('kokoro', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
                 const builtins = allVoices.filter(v => v.voice_type === 'builtin').map(v => ({ value: v.name, label: v.name }));
@@ -60,108 +50,26 @@ function init(element, params, nui) {
                 groups.push({ group: 'Built-in', options: builtins });
                 voiceSelect.setItems(groups);
             })
-            .catch(() => {
-                statusEl.textContent = 'Failed to load voices';
-            });
+            .catch(() => {});
     }
 
-    function stop() {
-        if (abortController) {
-            abortController.abort();
-            abortController = null;
-        }
-        if (audio) {
-            audio.pause();
-            audio.src = '';
-        }
-        if (mediaSource?.readyState === 'open') {
-            try { mediaSource.endOfStream(); } catch (_) {}
-        }
-        mediaSource = null;
-        statusEl.textContent = '';
-    }
-
-    stopBtn.addEventListener('click', stop);
-
-    generateBtn.querySelector('button').addEventListener('click', () => {
-        const text = textArea.value.trim();
-        if (!text) return;
-        stop();
-
-        const voice = selectEl.value;
-        abortController = new AbortController();
-        const startTime = performance.now();
-
-        // Create a fresh <audio> element. Reusing a DOM <audio> that previously
-        // errored (even via cloneNode) keeps the error state stuck internally.
-        // A createElement audio starts with a clean slate.
-        const newAudio = document.createElement('audio');
-        newAudio.id = 'kok-audio';
-        newAudio.controls = true;
-        newAudio.style.cssText = 'width: 100%; margin-top: var(--nui-space-double); display: block;';
-        audio.replaceWith(newAudio);
-        audio = newAudio;
-
-        mediaSource = new MediaSource();
-        audio.src = URL.createObjectURL(mediaSource);
-        const collector = nspeechAudioDownload.createCollector();
-
-        let firstChunk = false;
-
-        mediaSource.addEventListener('sourceopen', async () => {
-            const sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
-            statusEl.textContent = 'Buffering...';
-
-            try {
-                const response = await fetch('/v1/audio/speech', {
-                    method: 'POST',
-                    headers: { 'content-type': 'application/json' },
-                    body: JSON.stringify({
-                        input: text,
-                        voice: voice,
-                        response_format: 'mp3',
-                    }),
-                    signal: abortController.signal,
-                });
-                if (!response.ok) throw new Error(`HTTP ${response.status}`);
-                const reader = response.body.getReader();
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    if (!firstChunk && value?.length) {
-                        firstChunk = true;
-                        statusEl.textContent = `TTFB: ${(performance.now() - startTime).toFixed(0)}ms`;
-                    }
-                    await new Promise((res, rej) => {
-                        sourceBuffer.appendBuffer(value);
-                        collector.push(value);
-                        sourceBuffer.onupdateend = res;
-                        sourceBuffer.onerror = rej;
-                    });
-                    // Start playback only after the first chunk is buffered.
-                    // Calling play() before any data exists causes a decode
-                    // error (code 4) on some browsers.
-                    if (audio.paused && sourceBuffer.buffered.length > 0) {
-                        audio.play().catch(() => {});
-                    }
-                }
-                if (mediaSource.readyState === 'open') {
-                    mediaSource.endOfStream();
-                }
-                nspeechAudioDownload.attachDownload(audio, collector.buildURL('kokoro-speech.mp3'), 'kokoro-speech.mp3');
-                statusEl.textContent = `Done in ${(performance.now() - startTime).toFixed(0)}ms`;
-            } catch (err) {
-                if (err.name === 'AbortError') {
-                    statusEl.textContent = 'Stopped.';
-                } else {
-                    statusEl.textContent = `Error: ${err.message}`;
-                }
-            }
-        }, { once: true });
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'kokoro-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            return {
+                model: 'kokoro',
+                input: text,
+                voice: selectEl.value || 'default',
+            };
+        },
     });
 
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+
     element.show = () => loadVoices();
-    element.hide = () => stop();
+    element.hide = () => widget.stop();
 }
 </script>
