@@ -151,17 +151,22 @@ Pass `extra_body` for engine-specific options. Unsupported fields are silently i
 
 See [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) for the full `extra_body` field support matrix.
 
-### Markdown Input
+### Text Cleaning (Markdown Input)
 
-Clean markdown to speech-ready text **client-side** before sending — the canonical cleaner ships in the SDK (`lib/nspeech-client/nspeech-client.js`):
+Text cleaning is **server-side**: pass `clean: true` on the SDK call (sends `extra_body.clean: true`) and nSpeech cleans before speaking. Useful for markdown and for plain text with acronyms/formatting artifacts.
 
 ```javascript
-import { cleanMarkdown } from './lib/nspeech-client/nspeech-client.js';
-
-const body = { model: 'nspeech', input: cleanMarkdown(articleMarkdown), voice: 'af_heart' };
-// Or simply: nspeech.speech({ model: 'nspeech', input: articleMarkdown, voice: 'af_heart', clean: true })
+nspeech.speech({ model: 'nspeech', input: articleMarkdown, voice: 'af_heart', clean: true })
 ```
-Rules settled by ear tests on F5-TTS: emphasis strips silently (engines emphasize better unmarked), label colons merge with em-dash, clause colons split into full sentence breaks, headers get terminal periods, strikethrough drops, acronyms spell out. A server-side fallback (`extra_body.markdown: true`) exists for non-migrated clients; the LLM prosody variant (`'llm'`) is parked.
+
+If you need the exact cleaned text back (e.g. for text/audio alignment), call the cleaning endpoint first, then send its output with `clean` unset:
+
+```javascript
+const { text } = await nspeech.cleanText(articleMarkdown);
+nspeech.speech({ model: 'nspeech', input: text, voice: 'af_heart' });
+```
+
+The regex cleaner is also exported for offline/preview use (`import { cleanMarkdown } from ...`). Rules settled by ear tests on F5-TTS: emphasis strips silently (engines emphasize better unmarked), label colons merge with em-dash, clause colons split into full sentence breaks, headers get terminal periods, strikethrough drops, acronyms spell out. The LLM prosody variant (`extra_body.clean: 'llm'` or `cleanText(text, 'llm')`) is parked.
 
 ### Long Texts (Seamless Stitching)
 

@@ -1,13 +1,14 @@
 ﻿/**
- * Markdown → speech-ready plain text — SERVER side (legacy path).
+ * Speech-ready text cleaning — SERVER side (canonical path).
  *
  * The canonical regex cleaner lives in the SDK (lib/nspeech-client/nspeech-client.js)
- * and is re-exported here. Clients should clean before sending; this module backs
- * the legacy extra_body.markdown request field for non-migrated clients:
- *   extra_body.markdown: true   — regex-based, fast, deterministic
- *   extra_body.markdown: 'llm'  — regex clean, then LLM prosody pass via local
- *                                 gateway. PARKED 2026-08-18 (consistently worse
- *                                 than regex in ear tests). Kept, fails loud.
+ * and is re-exported here. Server-side cleaning runs when the request passes
+ * extra_body.clean (legacy alias: extra_body.markdown):
+ *   extra_body.clean: true   — regex-based, fast, deterministic
+ *   extra_body.clean: 'llm'  — regex clean, then LLM prosody pass via local
+ *                              gateway. PARKED 2026-08-18 (consistently worse
+ *                              than regex in ear tests). Kept, fails loud.
+ * The standalone service endpoint lives in api/text.js (POST /v1/text/clean).
  */
 
 import { config } from './config.js';

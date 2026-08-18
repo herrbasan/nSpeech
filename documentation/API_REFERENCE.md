@@ -30,6 +30,7 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
 | POST | `/v1/audio/transcriptions` | Speech-to-text (local faster-whisper, CPU) |
 | POST | `/v1/audio/align` | Forced alignment, text-constrained (local MMS CTC, CPU) |
+| POST | `/v1/text/clean` | Speech-ready text cleaning (regex / LLM) |
 | GET | `/health` | `{"status":"ok","version":"3.0.0","engine":"<active>"}` |
 | GET | `/engine` | `{"engine":"<active>"}` |
 
@@ -125,13 +126,13 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 | `ssml` | boolean | Interpret input as SSML. |
 | `language` | string | ISO-639-1 hint or `auto`. |
 
-#### Markdown Cleaning (legacy)
+#### Text Cleaning
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `markdown` | boolean \| string | **Legacy — kept for non-migrated clients.** `true` = server-side regex strip (fast, deterministic). `'llm'` = regex + LLM prosody pass via local gateway — **parked** (2026-08-18: consistently worse than regex in ear tests). |
+| `clean` | boolean \| string | `true` = server-side regex clean (fast, deterministic). `'llm'` = regex + LLM prosody pass via local gateway — **parked** (2026-08-18: consistently worse than regex in ear tests). Legacy alias: `markdown` (same values). |
 
-**Architecture (2026-08-18):** markdown regex cleaning is a **client responsibility**. Clients should clean text before sending — the canonical implementation ships in the SDK ([lib/nspeech-client/nspeech-client.js](../lib/nspeech-client/nspeech-client.js): `cleanMarkdown`, or `clean:true` on `speech()`/`speak()`; same code the server uses) — and omit `extra_body.markdown` entirely. The server path exists only for clients that haven't migrated. Rules: emphasis strips silently, label colons (1–2 words, line-initial) merge with em-dash, clause colons split into sentence + paragraph break, headers get terminal periods, strikethrough drops, acronyms spell out (`GLM5` → "G L M five"), file extensions speak ("notes.md" → "notes dot m d").
+**Architecture (2026-08-18):** cleaning is **server-authoritative**. Clients that don't need the cleaned text pass `extra_body.clean: true` (SDK: `clean:true` on `speech()`/`speak()`). Clients that need the exact spoken text (e.g. text/audio alignment) call [`POST /v1/text/clean`](#post-v1textclean) first, then send the returned text with `clean` unset. The regex cleaner is also exported by the SDK (`cleanMarkdown`) for offline/preview use — same code the server runs. Rules: emphasis strips silently, label colons (1–2 words, line-initial) merge with em-dash, clause colons split into sentence + paragraph break, headers get terminal periods, strikethrough drops, acronyms spell out (`GLM5` → "G L M five"), file extensions speak ("notes.md" → "notes dot m d").
 
 #### Long-Form / Auto-Chunking
 
@@ -358,7 +359,32 @@ Timestamps resolve to 20ms frames (MMS emission stride). Text is uroman-romanize
 
 ---
 
-## 6. Errors
+## 6. Text Cleaning — `POST /v1/text/clean`
+
+Speech-ready text cleaning as a standalone service. Use this when you need the exact text that will be spoken — e.g. to align against the rendered audio — then send the returned text to `/v1/audio/speech` with `extra_body.clean` unset.
+
+### Request (JSON)
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `text` | string | yes | Raw text/markdown to clean. |
+| `mode` | string | no | `'regex'` (default, fast/deterministic) or `'llm'` (regex + LLM prosody pass — **parked**, see Text Cleaning under `extra_body`). |
+
+### Response
+
+```json
+{
+  "text": "The optimizer didn't fail. It succeeded at the wrong goal.",
+  "chars_before": 1234,
+  "chars_after": 1100
+}
+```
+
+Fails loud: 400 on missing `text` or invalid `mode`; 5xx if the LLM gateway is unreachable or the prosody pass refuses (coverage/compliance checks).
+
+---
+
+## 7. Errors
 
 OpenAI-compatible shape:
 
@@ -377,7 +403,7 @@ OpenAI-compatible shape:
 
 ---
 
-## 7. Examples
+## 8. Examples
 
 ```bash
 # Local engine (whatever dashboard selected) — generate MP3

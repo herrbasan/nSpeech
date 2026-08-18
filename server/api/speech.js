@@ -99,18 +99,21 @@ export async function relaySpeech(request, reply, body) {
   //
   // Deprecated aliases: batch=true → 'stitch', auto_chunk=false → 'off'.
   //
-  // Markdown cleaning: extra_body.markdown
+  // Text cleaning: extra_body.clean (was extra_body.markdown, kept as alias)
   //   true  — regex strip (fast, deterministic)
   //   'llm' — LLM rewrite via local gateway (better emphasis/metadata handling)
+  // Clients that need the cleaned text back (alignment) call /v1/text/clean
+  // first and send the result with clean unset.
+  const cleanFlag = extraBody.clean ?? extraBody.markdown;
   let inputText = body.input;
-  if (extraBody.markdown === 'llm') {
+  if (cleanFlag === 'llm') {
     const before = inputText.length;
     inputText = await cleanMarkdownLLM(inputText);
-    log.info('markdown cleaned (llm)', { before, after: inputText.length });
-  } else if (extraBody.markdown === true) {
+    log.info('text cleaned (llm)', { before, after: inputText.length });
+  } else if (cleanFlag === true) {
     const before = inputText.length;
     inputText = cleanMarkdown(inputText);
-    log.info('markdown cleaned', { before, after: inputText.length });
+    log.info('text cleaned', { before, after: inputText.length });
   }
 
   let pcmStream;
