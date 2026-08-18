@@ -92,8 +92,10 @@ class F5TtsAdapter:
         Engine-specific kwargs:
             nfe_step: ODE steps (default 32). 16=faster, 64=audiobook quality.
             speed: duration divisor (default 1.0). 0.8 = 25% longer/slower.
-            cfg_strength: guidance strength (default 2.0).
-            sway_sampling_coef: variation sampling, -1=off (default -1).
+            cfg_strength: guidance strength (default 2.5; user-tuned 2026-08-18 —
+                2.5 tightens the 'scattered' timbre vs 1.5).
+            sway_sampling_coef: variation sampling (default -0.5; user-tuned
+                2026-08-18 — audibly smoother than -1).
             cross_fade_duration: chunk cross-fade seconds (default 0.15).
             target_rms: loudness normalization target (default 0.1).
             seed: deterministic generation (default None = random).
@@ -107,8 +109,8 @@ class F5TtsAdapter:
         nfe_step = kwargs.get("nfe_step", kwargs.get("inference_steps", 64))
         speed = kwargs.get("speed", 0.9)
         seed = kwargs.get("seed")
-        cfg_strength = kwargs.get("cfg_strength", 1.5)
-        sway_sampling_coef = kwargs.get("sway_sampling_coef", -1)
+        cfg_strength = kwargs.get("cfg_strength", 2.5)
+        sway_sampling_coef = kwargs.get("sway_sampling_coef", -0.5)
         cross_fade_duration = kwargs.get("cross_fade_duration", 0.15)
         target_rms = kwargs.get("target_rms", 0.1)
 
