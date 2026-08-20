@@ -299,7 +299,7 @@ Transcribe an audio file with faster-whisper large-v3 (int8, CPU). First request
 
 | Part | Type | Required | Description |
 |------|------|----------|-------------|
-| `file` | file | **yes** | Audio bytes. WAV/FLAC (soundfile-readable containers). Raw PCM works if wrapped — the OpenAI SDK convention of `audio.wav` naming is expected. |
+| `file` | file | **yes** | Audio bytes. WAV/FLAC/MP3/Ogg or raw PCM — compressed containers are ffmpeg-decoded server-side. |
 | `language` | field | no | ISO-639-1 code. Omit for auto-detect. |
 | `word_timestamps` | field | no | `"true"` to include per-word timestamps. |
 
@@ -333,7 +333,7 @@ Align **known text** to audio with torchaudio MMS_FA — wav2vec2 CTC forced ali
 
 | Part | Type | Required | Description |
 |------|------|----------|-------------|
-| `file` | file | **yes** | WAV audio bytes. |
+| `file` | file | **yes** | Audio bytes. WAV/FLAC/MP3/Ogg or raw PCM — compressed containers are ffmpeg-decoded server-side. |
 | `text` | field | **yes** | The exact text spoken in the audio. |
 
 ```bash

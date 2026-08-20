@@ -78,6 +78,31 @@
 </div>
 
 <script type="nui/page">
+// Kokoro voice quality tiers (from hexgrad voice metadata, exposed by the
+// worker as `tier` A/B/C/D + `grade`). Grouping makes the tiers actionable
+// in the mix selectors.
+const TIER_LABELS = { A: 'Premium', B: 'Standard', C: 'Basic', D: 'Low' };
+const TIER_ORDER = ['A', 'B', 'C', 'D'];
+const GRADE_RANK = { 'A': 0, 'A-': 1, 'B+': 2, 'B': 3, 'B-': 4, 'C+': 5, 'C': 6, 'C-': 7, 'D+': 8, 'D': 9, 'D-': 10, 'F+': 11 };
+
+function groupByTier(voices) {
+    const groups = [];
+    for (const tier of TIER_ORDER) {
+        const inTier = voices
+            .filter(v => v.tier === tier)
+            .sort((a, b) => (GRADE_RANK[a.grade] ?? 99) - (GRADE_RANK[b.grade] ?? 99));
+        if (inTier.length) {
+            groups.push({
+                group: TIER_LABELS[tier] + ' (' + tier + ')',
+                options: inTier.map(v => ({ value: v.name, label: v.name + ' · ' + (v.grade || '?') }))
+            });
+        }
+    }
+    const ungraded = voices.filter(v => !TIER_ORDER.includes(v.tier));
+    if (ungraded.length) groups.push({ group: 'Ungraded', options: ungraded.map(v => ({ value: v.name, label: v.name })) });
+    return groups;
+}
+
 function init(element, params, nui) {
     let allVoices = [];
     let previewMediaSource = null;
@@ -114,7 +139,7 @@ function init(element, params, nui) {
         const kokoroVoices = allVoices.filter(v =>
             v.voice_type === 'builtin'
         );
-        const items = kokoroVoices.map(v => ({ value: v.name, label: v.name }));
+        const items = groupByTier(kokoroVoices);
         selectA.setItems(items);
         selectB.setItems(items);
     }

@@ -17,6 +17,51 @@ import numpy as np
 from nspeech import config
 from nspeech.logger import get as get_logger, error as log_error
 
+# Kokoro voice quality tiers, from hexgrad's own voice metadata
+# (kokoro.js/src/voices.js). `targetQuality` is the tier the voice was aimed
+# at (A/B/C/D); `overallGrade` is the grade it actually achieved (A+…F+).
+# English voices carry full grading; non-English voices are graded too but
+# cluster lower (B–D). Only af_heart and af_bella reach A-tier.
+VOICE_TIERS = {
+    # en-us female
+    "af_heart":   ("A", "A"),  "af_bella":   ("A", "A-"),
+    "af_nicole":  ("B", "B-"), "af_aoede":   ("B", "C+"),
+    "af_kore":    ("B", "C+"), "af_sarah":   ("B", "C+"),
+    "af_alloy":   ("B", "C"),  "af_nova":    ("B", "C"),
+    "af_sky":     ("B", "C-"), "af_jessica": ("C", "D"),
+    "af_river":   ("C", "D"),
+    # en-us male
+    "am_fenrir":  ("B", "C+"), "am_michael": ("B", "C+"),
+    "am_puck":    ("B", "C+"), "am_echo":    ("C", "D"),
+    "am_eric":    ("C", "D"),  "am_liam":    ("C", "D"),
+    "am_onyx":    ("C", "D"),  "am_santa":   ("C", "D-"),
+    "am_adam":    ("D", "F+"),
+    # en-gb
+    "bf_emma":    ("B", "B-"), "bf_isabella": ("B", "C"),
+    "bm_george":  ("B", "C"),  "bm_fable":    ("B", "C"),
+    "bm_lewis":   ("C", "D+"), "bf_alice":    ("C", "D"),
+    "bf_lily":    ("C", "D"),  "bm_daniel":   ("C", "D"),
+    # ja
+    "jf_alpha":      ("B", "C+"), "jf_gongitsune": ("B", "C"),
+    "jf_nezumi":     ("B", "C-"), "jf_tebukuro":   ("B", "C"),
+    "jm_kumo":       ("B", "C-"),
+    # zh
+    "zf_xiaobei":  ("C", "D"), "zf_xiaoni":   ("C", "D"),
+    "zf_xiaoxiao": ("C", "D"), "zf_xiaoyi":   ("C", "D"),
+    "zm_yunjian":  ("C", "D"), "zm_yunxi":    ("C", "D"),
+    "zm_yunxia":   ("C", "D"), "zm_yunyang":  ("C", "D"),
+    # es
+    "ff_siwis": ("B", "B-"), "ef_dora":  ("C", "D"),
+    "em_alex":  ("C", "D"),  "em_santa": ("C", "D"),
+    # hi
+    "hf_alpha": ("B", "C"), "hf_beta": ("B", "C"),
+    "hm_omega": ("B", "C"), "hm_psi":  ("B", "C"),
+    # it
+    "if_sara":   ("B", "C"), "im_nicola": ("B", "C"),
+    # pt-br
+    "pf_dora":  ("C", "D"), "pm_alex":  ("C", "D"), "pm_santa": ("C", "D"),
+}
+
 class KokoroAdapter:
     """TTS engine adapter for Kokoro."""
 
@@ -163,16 +208,23 @@ class KokoroAdapter:
     def list_voices(self) -> list:
         """
         Return the engine's native voice catalog (Kokoro's 54 built-in voices).
-        Cloned/blended voices are merged in by the worker after this returns.
+        Each voice carries `tier` (target quality A/B/C/D) and `grade`
+        (achieved grade) from hexgrad's voice metadata. Cloned/blended voices
+        are merged in by the worker after this returns.
         """
         try:
             names = self.pipeline.get_voices()
         except Exception:
             return []
-        return [
-            {"voice_id": n, "name": n, "category": "builtin", "voice_type": "builtin"}
-            for n in names
-        ]
+        voices = []
+        for n in names:
+            tier, grade = VOICE_TIERS.get(n, (None, None))
+            v = {"voice_id": n, "name": n, "category": "builtin", "voice_type": "builtin"}
+            if tier is not None:
+                v["tier"] = tier
+                v["grade"] = grade
+            voices.append(v)
+        return voices
 
     def clone(self, audio_path: str, voice_name: str, **kwargs) -> Dict[str, Any]:
         """

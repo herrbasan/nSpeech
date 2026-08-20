@@ -37,6 +37,11 @@ const ENGINES = {
     gemini: { label: 'Gemini', icon: 'cloud' },
 };
 
+// Guard flag: true while syncEngineSwitcher() is programmatically setting
+// the selection. The nui-change handler checks this to avoid treating a
+// sync as a user-initiated engine switch.
+let syncingEngineSwitcher = false;
+
 function buildNavigation(engine) {
     const nav = [
         { label: 'Home', href: '#page=home', icon: 'home' },
@@ -131,7 +136,14 @@ function syncEngineSwitcher(activeEngine) {
     // Avoid loops when the change came from the switcher itself.
     if (typeof switcher.getValue === 'function' && switcher.getValue() === activeEngine) return;
     if (typeof switcher.setValue === 'function') {
+        // setValue() dispatches a 'nui-change' event (via syncState), which
+        // the handler below treats as a user switch. Suppress that during
+        // programmatic sync — otherwise every page load re-triggers a switch
+        // to the already-current engine, cold-starting it and firing a
+        // spurious "engine switch failed" on slow loads.
+        syncingEngineSwitcher = true;
         switcher.setValue(activeEngine);
+        syncingEngineSwitcher = false;
     }
 }
 
@@ -175,6 +187,7 @@ function initEngineSwitcher() {
     if (!switcher) return;
 
     switcher.addEventListener('nui-change', (e) => {
+        if (syncingEngineSwitcher) return;
         const detail = e.detail || {};
         const values = detail.values || [];
         const engineName = values[0];

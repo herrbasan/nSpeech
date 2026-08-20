@@ -242,13 +242,16 @@ export class EngineManager {
 
     const entry = getEntry(engineName);
 
-    // ── Unload the current engine (always) ─────────────────────────────
-    // Always stop the old engine on switch — even if switching to the same
-    // engine name (the old worker may be in a bad state after a stream stall).
-    // This is the only way to guarantee VRAM is freed before loading the new model.
-    const oldWorker = this.workers.get(this.currentEngine);
-    if (oldWorker) {
-      if (onStatus) onStatus('unload_start', this.currentEngine);
+    // ── Unload the current engine (GPU only) ─────────────────────────────
+    // Resident (non-GPU) engines like Kokoro hold no VRAM and stay loaded
+    // across switches — they remain callable like a cloud provider. Only
+    // GPU engines are unloaded here to free VRAM before loading the new
+    // model. (Cloud providers never appear in this.workers at all.)
+    const oldEngineName = this.currentEngine;
+    const oldWorker = this.workers.get(oldEngineName);
+    const oldEntry = getEntry(oldEngineName);
+    if (oldWorker && oldEntry && oldEntry.gpu) {
+      if (onStatus) onStatus('unload_start', oldEngineName);
       if (oldWorker.state === 'ready') {
         await oldWorker.stop();
       } else {
@@ -256,16 +259,16 @@ export class EngineManager {
         // respawn would block every subsequent switch. Kill without waiting
         // for the graceful VRAM-free handshake (there's nothing to free
         // cleanly anyway) and drop it from the map.
-        log.warn(`dropping non-ready worker on switch: ${this.currentEngine}`, {
-          engine: this.currentEngine, state: oldWorker.state,
+        log.warn(`dropping non-ready worker on switch: ${oldEngineName}`, {
+          engine: oldEngineName, state: oldWorker.state,
         });
-        emit('engine', `Dropping ${this.currentEngine} worker (state: ${oldWorker.state})`, {
-          engine: this.currentEngine, state: oldWorker.state,
+        emit('engine', `Dropping ${oldEngineName} worker (state: ${oldWorker.state})`, {
+          engine: oldEngineName, state: oldWorker.state,
         });
         oldWorker.stop().catch(() => {}); // fire-and-forget
       }
-      this.workers.delete(this.currentEngine);
-      if (onStatus) onStatus('unload_done', this.currentEngine);
+      this.workers.delete(oldEngineName);
+      if (onStatus) onStatus('unload_done', oldEngineName);
     }
 
     // Also unload any other GPU engines that might be loaded.

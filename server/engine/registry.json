@@ -2,7 +2,7 @@
   "kokoro": {
     "venv_python": "venv/kokoro/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
-    "gpu": true
+    "gpu": false
   },
   "stt": {
     "venv_python": "venv/stt/env/Scripts/python.exe",

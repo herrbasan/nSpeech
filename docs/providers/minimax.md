@@ -329,6 +329,16 @@ Instant voice cloning. Clone + preview audio in one call. Cloned voice usable im
 - `clone_prompt.prompt_text`: optional, describes the voice characteristics.
 - `text`: preview text synthesized immediately. Response includes the preview audio.
 
+### voice_id rules (official, enforced client-side in `server/cloud/minimax.js`)
+
+- Length **[8, 256]** characters — shorter/longer returns error `2013: invalid params, voice_id length`.
+- Must start with an English letter.
+- Allowed chars: letters, digits, `-`, `_`.
+- Cannot end with `-` or `_`.
+- Must not duplicate an existing voice_id (duplicate → `2039`).
+
+nSpeech sanitizes user-entered names before sending (normalizes to `[a-zA-Z0-9_]`, strips leading digits/separators, strips trailing separators, pads to ≥8, caps at 256).
+
 ### Voice lifecycle
 
 - Cloned voices auto-delete after **7 days of inactivity**.

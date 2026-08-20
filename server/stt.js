@@ -17,6 +17,9 @@
 import { manager } from './engine/manager.js';
 import { WorkerError } from './engine/worker.js';
 import { logger } from './logger.js';
+import { config } from './config.js';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 
 const log = logger.child('stt');
 
@@ -63,7 +66,8 @@ function buildMultipart(fields) {
  * Word count in `words` is guaranteed to equal text.split().length; the
  * stitching trim relies on this to index the first post-overlap word.
  *
- * @param {Buffer} pcm — s16le 24kHz mono PCM
+ * @param {Buffer} pcm — audio bytes: WAV, raw s16le 24kHz mono PCM, or a
+ *   compressed container (MP3/FLAC/Ogg) decoded via ffmpeg
  * @param {string} text — the exact text spoken in the audio
  * @returns {Promise<{text: string, duration: number, words: Array<{word: string, start: number, end: number, probability: number}>}>}
  */
@@ -77,11 +81,11 @@ export async function alignPcm(pcm, text) {
 
   const worker = await getSttWorker();
 
-  // Input contract: WAV container bytes (from the routes) OR raw s16le
-  // 24kHz mono PCM (from chunking.js). Only the latter needs a header —
-  // the worker decodes via soundfile, which requires a container. RIFF
-  // magic detects an existing WAV.
-  const wav = (pcm.length > 12 && pcm.readUInt32BE(0) === 0x52494646) ? pcm : pcmToWav(pcm);
+  // Input contract (detected by magic bytes — see normalizeToWav):
+  //   WAV container       → pass through (soundfile reads it)
+  //   raw s16le 24kHz PCM → wrap in a WAV header (from chunking.js)
+  //   compressed (MP3/…)  → ffmpeg-decode to 24kHz mono s16le WAV
+  const wav = await normalizeToWav(pcm);
   const { body, contentType } = buildMultipart([
     { name: 'file', value: wav, filename: 'audio.wav', contentType: 'audio/wav' },
     { name: 'text', value: text },
@@ -105,8 +109,8 @@ export async function alignPcm(pcm, text) {
  * Transcribe audio (faster-whisper large-v3 int8 CPU).
  *
  * @param {object} opts
- * @param {Buffer} opts.audio — audio bytes (WAV; any container ffmpeg-free
- *   decoders handle — soundfile reads WAV/flac/ogg)
+ * @param {Buffer} opts.audio — audio bytes (WAV, raw PCM, or compressed
+ *   MP3/FLAC/Ogg — decoded via ffmpeg server-side)
  * @param {string} [opts.language] — ISO code; omit for auto-detect
  * @param {boolean} [opts.wordTimestamps] — include word-level timestamps
  * @param {boolean} [opts.segmentTimestamps] — include segment breaks
@@ -119,8 +123,9 @@ export async function transcribe({ audio, language, wordTimestamps, segmentTimes
 
   const worker = await getSttWorker();
 
+  const wav = await normalizeToWav(audio);
   const fields = [
-    { name: 'file', value: audio, filename: 'audio.wav', contentType: 'audio/wav' },
+    { name: 'file', value: wav, filename: 'audio.wav', contentType: 'audio/wav' },
   ];
   if (language) fields.push({ name: 'language', value: language });
   if (wordTimestamps) fields.push({ name: 'word_timestamps', value: 'true' });
@@ -167,6 +172,80 @@ function pcmToWav(pcm) {
   header.write('data', 36);
   header.writeUInt32LE(pcm.length, 40);
   return Buffer.concat([header, pcm]);
+}
+
+/**
+ * Classify an audio buffer by magic bytes so we know how to prepare it for
+ * the worker (which reads via soundfile → WAV/FLAC/Ogg but NOT MP3).
+ * @param {Buffer} buf
+ * @returns {'wav'|'compressed'|'pcm'}
+ */
+function detectAudioContainer(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 4) return 'pcm';
+  const b = buf;
+  if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46) return 'wav';   // "RIFF"
+  if (b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return 'compressed';              // "ID3" (MP3)
+  if (b[0] === 0xFF && (b[1] & 0xE0) === 0xE0) return 'compressed';                       // MP3 frame sync
+  if (b[0] === 0x66 && b[1] === 0x4C && b[2] === 0x61 && b[3] === 0x43) return 'compressed'; // "fLaC"
+  if (b[0] === 0x4F && b[1] === 0x67 && b[2] === 0x67 && b[3] === 0x53) return 'compressed'; // "OggS"
+  return 'pcm';
+}
+
+/**
+ * Decode any compressed container (MP3/FLAC/Ogg/…) to raw s16le 24kHz mono
+ * PCM via ffmpeg, then wrap in a WAV header. The decode direction is the
+ * inverse of transcode.js (which is PCM → compressed).
+ * @param {Buffer} input
+ * @returns {Promise<Buffer>} WAV bytes
+ */
+function decodeToWav(input) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(config.ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-f', 's16le', '-acodec', 'pcm_s16le',
+      '-ar', '24000', '-ac', '1',
+      'pipe:1',
+    ], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+
+    const chunks = [];
+    let stderr = '';
+    proc.stdout.on('data', (c) => chunks.push(c));
+    proc.stderr.on('data', (c) => { stderr += c.toString(); if (stderr.length > 4000) stderr = stderr.slice(-4000); });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffmpeg decode failed (exit ${code}): ${stderr.trim() || 'unknown error'}`));
+        return;
+      }
+      const pcm = Buffer.concat(chunks);
+      if (pcm.length === 0) {
+        reject(new Error('ffmpeg decode produced no audio'));
+        return;
+      }
+      resolve(pcmToWav(pcm));
+    });
+    proc.stdin.on('error', () => {});
+    proc.stdin.write(input);
+    proc.stdin.end();
+  });
+}
+
+/**
+ * Normalize an audio buffer to the worker's input contract (WAV).
+ * WAV passes through; raw PCM is header-wrapped; compressed containers are
+ * ffmpeg-decoded. Fails loudly if ffmpeg is missing and it's actually needed.
+ * @param {Buffer} buf
+ * @returns {Promise<Buffer>} WAV bytes
+ */
+async function normalizeToWav(buf) {
+  const kind = detectAudioContainer(buf);
+  if (kind === 'wav') return buf;
+  if (kind === 'pcm') return pcmToWav(buf);
+  if (!existsSync(config.ffmpegPath)) {
+    throw new Error(`ffmpeg not found at ${config.ffmpegPath}. Run nVideo setup (lib/nvideo/scripts/download-ffmpeg.js).`);
+  }
+  return decodeToWav(buf);
 }
 
 /** Health probe for the STT worker (does not spawn it). */

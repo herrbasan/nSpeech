@@ -354,22 +354,25 @@ export class MiniMaxAdapter {
   async cloneVoice({ audio, voice_name, prompt_text }) {
     const apiKey = this._getApiKey();
 
-    // MiniMax voice_id rules: alphanumeric + underscore, no leading underscore
-    // or digit, no double underscores. Sanitize before sending.
-    let cleanName = (voice_name || 'voice').replace(/[^a-zA-Z0-9_]/g, '_');
-    // Collapse consecutive underscores
+    // MiniMax voice_id rules (official OpenAPI spec):
+    //   length [8, 256] · must start with a letter · [A-Za-z0-9_-] · no
+    //   trailing '-' or '_' · must not duplicate an existing voice_id.
+    let cleanName = (voice_name || 'voice').replace(/[^a-zA-Z0-9]/g, '_');
+    // Collapse consecutive separators
     cleanName = cleanName.replace(/_+/g, '_');
-    // Remove leading underscore or digit
+    // Remove leading underscores/digits (must start with a letter)
     cleanName = cleanName.replace(/^[_0-9]+/, '');
-    // Ensure minimum length (MiniMax requires 6+ chars)
-    if (cleanName.length < 6) cleanName = cleanName + '_voice';
-    // Ensure starts with a letter
-    if (!/^[a-zA-Z]/.test(cleanName)) cleanName = 'v_' + cleanName;
-    // Re-collapse after prefix/suffix fixes — appending '_voice' or 'v_'
-    // can create double underscores (e.g. "" → "_voice" → "v__voice").
-    cleanName = cleanName.replace(/_+/g, '_');
-    // Trim to MiniMax max length (32 chars for voice_id)
-    if (cleanName.length > 32) cleanName = cleanName.slice(0, 32);
+    // Remove trailing separators (must not end with '-' or '_')
+    cleanName = cleanName.replace(/_+$/, '');
+    // Empty after stripping (all-digits/punctuation name) → safe default
+    if (!cleanName) cleanName = 'voice';
+    // Enforce minimum length 8 by padding with letters
+    while (cleanName.length < 8) cleanName += 'v';
+    // Enforce maximum length 256
+    if (cleanName.length > 256) cleanName = cleanName.slice(0, 256);
+    // Final guard: padding must not have left a trailing separator
+    cleanName = cleanName.replace(/_+$/, '');
+    while (cleanName.length < 8) cleanName += 'v';
 
     // Step 1: Upload source audio
     const uploadForm = new FormData();
@@ -474,14 +477,11 @@ export class MiniMaxAdapter {
 
     await this.cloneVoice({ audio, voice_name: newId, prompt_text });
 
-    // Now safe to delete the previous preview (async on MiniMax's side,
-    // but we don't need to wait for it).
-    if (this._lastPreviewId && this._lastPreviewId !== newId) {
-      this.deleteVoice(this._lastPreviewId).catch(err =>
-        log.warn('preview cleanup failed', { voice: this._lastPreviewId, error: err.message })
-      );
-    }
-    this._lastPreviewId = newId;
+    // Sweep stale previews (fire-and-forget). This replaces the old
+    // in-memory _lastPreviewId bookkeeping, which leaked preview voices on
+    // server restart — every orphaned pv_ voice cost a clone (~$1.50) and
+    // counted against MiniMax's voice store until its 7-day TTL.
+    this._sweepPreviews(newId);
     this._voicesCache = null;
 
     // Generate preview audio
@@ -495,6 +495,44 @@ export class MiniMaxAdapter {
       pcmStream,
       extraHeaders: {},
     };
+  }
+
+  /**
+   * Delete every transient preview voice (pv_ prefix) except the one to
+   * keep. Previews are never listed to users (listVoices filters pv_), but
+   * they still cost a clone each and occupy the voice store — so they must
+   * be swept, not just hidden. Replaces the old in-memory _lastPreviewId
+   * cleanup, which silently leaked previews across restarts.
+   */
+  async _sweepPreviews(keepId) {
+    const apiKey = this._getApiKey();
+    let previews;
+    try {
+      const resp = await fetch(`${BASE_URL}/v1/get_voice`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ voice_type: 'all' }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      previews = (data.voice_cloning || [])
+        .map(v => v.voice_id)
+        .filter(id => id && id.startsWith('pv_') && id !== keepId);
+    } catch (err) {
+      log.warn('preview sweep list failed', { error: err.message });
+      return;
+    }
+
+    if (!previews.length) return;
+    for (const id of previews) {
+      this.deleteVoice(id).catch(err =>
+        log.warn('preview sweep delete failed', { voice: id, error: err.message })
+      );
+    }
+    log.info('preview sweep deleted stale previews', { count: previews.length });
   }
 
   /**

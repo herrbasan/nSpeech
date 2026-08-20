@@ -33,6 +33,31 @@
 <script type="nui/page">
 const mountGenerate = window.nspeechMountGenerate;
 
+// Kokoro voice quality tiers (from hexgrad voice metadata, exposed by the
+// worker as `tier` A/B/C/D + `grade`). Grouping makes the tiers actionable:
+// Premium voices surface first, low-quality ones sink.
+const TIER_LABELS = { A: 'Premium', B: 'Standard', C: 'Basic', D: 'Low' };
+const TIER_ORDER = ['A', 'B', 'C', 'D'];
+const GRADE_RANK = { 'A': 0, 'A-': 1, 'B+': 2, 'B': 3, 'B-': 4, 'C+': 5, 'C': 6, 'C-': 7, 'D+': 8, 'D': 9, 'D-': 10, 'F+': 11 };
+
+function groupByTier(voices) {
+    const groups = [];
+    for (const tier of TIER_ORDER) {
+        const inTier = voices
+            .filter(v => v.tier === tier)
+            .sort((a, b) => (GRADE_RANK[a.grade] ?? 99) - (GRADE_RANK[b.grade] ?? 99));
+        if (inTier.length) {
+            groups.push({
+                group: TIER_LABELS[tier] + ' (' + tier + ')',
+                options: inTier.map(v => ({ value: v.name, label: v.name + ' · ' + (v.grade || '?') }))
+            });
+        }
+    }
+    const ungraded = voices.filter(v => !TIER_ORDER.includes(v.tier));
+    if (ungraded.length) groups.push({ group: 'Ungraded', options: ungraded.map(v => ({ value: v.name, label: v.name })) });
+    return groups;
+}
+
 function init(element, params, nui) {
     const voiceSelect = element.querySelector('#voice-select');
     const selectEl = element.querySelector('#kok-voice');
@@ -43,11 +68,11 @@ function init(element, params, nui) {
         window.nspeech.client.listVoices('kokoro', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
-                const builtins = allVoices.filter(v => v.voice_type === 'builtin').map(v => ({ value: v.name, label: v.name }));
+                const builtins = allVoices.filter(v => v.voice_type === 'builtin');
                 const blended = allVoices.filter(v => v.voice_type === 'blended').map(v => ({ value: v.name, label: v.name }));
                 const groups = [];
                 if (blended.length) groups.push({ group: 'Blended', options: blended });
-                groups.push({ group: 'Built-in', options: builtins });
+                groups.push(...groupByTier(builtins));
                 voiceSelect.setItems(groups);
             })
             .catch(() => {});
