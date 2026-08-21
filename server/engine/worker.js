@@ -415,8 +415,14 @@ export class WorkerProcess {
    */
   async _waitForHealth() {
     const startTime = Date.now();
+    // Slow-loading engines (f5tts, vibevoice) need more than the default
+    // 30s to cold-start: their preload (model + vocoder load into VRAM)
+    // blocks the /health endpoint until it finishes, so the health check
+    // is really measuring model-load time. Per-engine override mirrors
+    // stream_timeout_ms.
+    const timeoutMs = this.entry.health_check_timeout_ms ?? HEALTH_CHECK_TIMEOUT_MS;
 
-    while (Date.now() - startTime < HEALTH_CHECK_TIMEOUT_MS) {
+    while (Date.now() - startTime < timeoutMs) {
       if (this.state === 'dead') {
         throw new Error('worker died during health check');
       }

@@ -33,12 +33,14 @@
   "f5tts": {
     "venv_python": "venv/f5tts/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
-    "gpu": true
+    "gpu": true,
+    "health_check_timeout_ms": 180000
   },
   "vibevoice": {
     "venv_python": "venv/vibevoice/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
     "gpu": true,
-    "stream_timeout_ms": 600000
+    "stream_timeout_ms": 600000,
+    "health_check_timeout_ms": 300000
   }
 }
