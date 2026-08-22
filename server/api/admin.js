@@ -216,6 +216,59 @@ export function registerAdminRoutes(app) {
     reply.raw.end();
   });
 
+  // ── GET /v1/models — OpenAI-style list of usable models ──────────────────
+  //
+  // Everything the client can pass as `model` right now WITHOUT switching
+  // engines:
+  //   - "nspeech" → the current local engine
+  //   - every resident local engine (gpu:false — loaded or lazy-loadable
+  //     alongside any GPU engine, callable like a cloud provider)
+  //   - every cloud provider model slug
+  //
+  // GPU engines other than the current one are excluded: using them
+  // requires a switch (VRAM exclusion).
+
+  app.get('/v1/models', async () => {
+    const { listEngines, getEntry, venvExists } = await import('../engine/registry.js');
+    const { listCloudEngines } = await import('../cloud/registry.js');
+
+    const data = [];
+
+    data.push({
+      id: 'nspeech',
+      object: 'model',
+      owned_by: 'nspeech',
+      description: `Current local engine (${manager.currentEngine})`,
+    });
+
+    for (const name of listEngines()) {
+      const entry = getEntry(name);
+      // Skip: internal workers, GPU engines (not the current one), missing venvs
+      if (entry.stt) continue;
+      if (entry.gpu && name !== manager.currentEngine) continue;
+      if (!venvExists(name)) continue;
+      data.push({
+        id: name,
+        object: 'model',
+        owned_by: 'nspeech',
+        description: entry.gpu ? 'Local GPU engine (current)' : 'Local engine (always available)',
+      });
+    }
+
+    for (const c of listCloudEngines()) {
+      for (const m of c.models) {
+        data.push({
+          id: m,
+          object: 'model',
+          owned_by: c.name,
+          description: `Cloud provider (${c.name})`,
+        });
+      }
+    }
+
+    return { object: 'list', data };
+  });
+
   // ── GET /v1/admin/engines — list available engines ───────────────────────
 
   app.get('/v1/admin/engines', async () => {

@@ -277,6 +277,27 @@ event: result   data: {"engine":"dots","status":"switched"}
 
 Cloud engines (MiniMax, ElevenLabs) emit a single `switch_done` status event since they have no worker lifecycle.
 
+### `GET /v1/models`
+
+OpenAI-style model list. Everything usable **without switching engines**:
+
+- `nspeech` — current local engine
+- Resident local engines (`gpu:false`, e.g. `kokoro`) — always available
+- All cloud provider model slugs
+
+GPU engines other than the current one are excluded (they require a switch).
+
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "nspeech", "object": "model", "owned_by": "nspeech" },
+    { "id": "kokoro", "object": "model", "owned_by": "nspeech" },
+    { "id": "minimax_speech_2_8_hd", "object": "model", "owned_by": "minimax" }
+  ]
+}
+```
+
 ### `GET /v1/admin/engines`
 
 ```json
