@@ -89,8 +89,10 @@ nSpeech is a multi-engine Text-to-Speech service with a unified OpenAI-compatibl
 
 | Engine | Type | VRAM | Role | Status |
 |--------|------|------|------|--------|
-| **Kokoro** | Local (ONNX CUDA) | ~500MB | Always-available workhorse | Primary CPU/slim GPU option |
-| **Chatterbox Turbo** | Local (PyTorch) | ~2GB | Primary GPU quality engine | Candidate for permanent GPU residency |
+| **Kokoro** | Local (ONNX, CPU — `gpu:false`) | ~500MB | Always-resident workhorse; survives engine switches | Active |
+| **F5-TTS** | Local (PyTorch) | ~1-2GB | Primary GPU quality engine | Active |
+| **Chatterbox Turbo** | Local (PyTorch) | ~2GB | GPU alternative (paralinguistic tags) | Active |
+| **VibeVoice** | Local (PyTorch) | ~4-6GB | Multi-speaker dialogue | Parked (flat delivery) |
 | **MiniMax** | Cloud | — | High-quality cloud option | Active |
 | **ElevenLabs** | Cloud | — | Premium cloud option | Active |
 | **Gemini** | Cloud | — | Instruction-driven style | Active |
@@ -819,7 +821,7 @@ npm start
 ### Adding a New Engine
 
 1. Create `src/nspeech/engines/<name>.py` implementing `TTSAdapterProtocol`
-2. Add entry to `server/engine/registry.json` with venv path, GPU flag
+2. Add entry to `server/engine/registry.json` with venv path, GPU flag, and (for slow-loading GPU engines) `health_check_timeout_ms` (default 30000; F5-TTS uses 180000, VibeVoice 300000 — the FastAPI startup preload blocks `/health`, so the health check really measures model load time). Per-engine `stream_timeout_ms` may also be set here.
 3. Add to `src/nspeech/tts.py` factory if special resolution needed
 4. Create `requirements/<name>.txt`
 5. Add install logic to `install.py`

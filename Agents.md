@@ -52,6 +52,23 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-08-18 → 2026-08-22 — Unified SDK, Server-Authoritative Cleaning, Kokoro Resident
+
+**Focus:** Single-file SDK + dashboard migration; text cleaning moves server-side; Kokoro becomes resident; `/v1/models`.
+
+- **Unified SDK** (`2d48f1b`, handover: `docs/handover_2026-08-18_unified-sdk.md`): single `lib/nspeech-client/nspeech-client.js` exporting `NSpeechClient`, `cleanMarkdown`/`expandAcronyms`, `SpeechPlayer`, `EventStream`. Full dashboard migration. `server/markdown-clean.js` re-exports the SDK regex layer. Engine-switch race fixed.
+- **Server-authoritative text cleaning** (`ec8ac0b`): `POST /v1/text/clean` endpoint; `extra_body.markdown` renamed to `extra_body.clean` (markdown kept as legacy alias). LLM prosody pass parked — consistently worse than regex in ear tests.
+- **Kokoro resident + voice tiers + fixes** (`458ca81`): Kokoro `gpu:false` → survives engine switches like a cloud provider. Voice quality tiers (hexgrad `targetQuality`/`overallGrade`) exposed via list_voices. STT routes accept MP3/FLAC/Ogg/PCM (ffmpeg decode server-side). MiniMax voice_id sanitization per official [8,256] rules (fixes error 2013). SDK `baseUrl: ''` honored via `??`.
+- **Per-engine health-check timeout** (`2372507`): registry field `health_check_timeout_ms` (f5tts=180000, vibevoice=300000). F5 cold-start (~28s) raced the default 30s timeout — the health check really measures model load time since FastAPI startup blocks `/health`.
+- **`GET /v1/models`** (`6e488ab`): OpenAI-style model listing usable without engine switch.
+
+**Open items (carried):**
+- Chat-app migration to unified SDK
+- Text-cleaning toggle on the ~10 other engine dashboard pages
+- ~~Plural acronym rule (`GPUs` → "G P U s")~~ — **DONE 2026-08-23**: plural acronyms spell + apostrophe-s (`GPUs` → `G P U's`). Chosen over bare "G P U s" because ElevenLabs/MiniMax (the published-works engines) speak apostrophe-s as the natural plural syllable; engines that ignore the apostrophe still get spelled letters. Single source in `lib/nspeech-client/nspeech-client.js` — server re-exports it.
+- F5 short-chunk compression, IndexTTS2 retest, VibeVoice ddpm_steps, F5-German model
+- Byte-tick progress events → main-0.log (UX gap)
+
 ### 2026-08-17 — Cloud 503s Resolved + Stream Mode Restored
 
 **Focus:** Fix silent 503s on long cloud requests; restore progressive streaming for chunked texts.
@@ -241,4 +258,4 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ---
 
-*Last updated: 2026-08-14*
+*Last updated: 2026-08-23*

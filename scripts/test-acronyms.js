@@ -16,6 +16,9 @@ const cases = [
   ['see religion.md for the docs', 'see religion dot m d for the docs'],
   ['config.json and main.ts', 'config dot j s o n and main dot t s'],
   ['render-f5tts.py output.wav', 'render-f5tts dot p y output dot w a v'],
+  ['two GPUs and three APIs', "two G P U's and three A P I's"],   // plural: apostrophe-s
+  ['the GLMs were trained', "the G L M's were trained"],
+  ["the GPU's cooling fan", "the G P U's cooling fan"],   // pre-existing possessive untouched
 ];
 
 let pass = 0;

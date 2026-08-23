@@ -219,7 +219,7 @@ Voice IDs are engine-scoped. Endpoints act on the engine specified by `?engine=`
 }
 ```
 
-Cloud adapters include `language`, `description`, `preview_url`, and `labels` where available. All engines include Node-managed voice presets as `voice_type: "preset"`.
+Cloud adapters include `language`, `description`, `preview_url`, and `labels` where available. Kokoro voices include hexgrad quality-tier metadata (`targetQuality`, `overallGrade`) used by the dashboard to group/sort voices. All engines include Node-managed voice presets as `voice_type: "preset"`.
 
 ### `POST /v1/voices/preset`
 
