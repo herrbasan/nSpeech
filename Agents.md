@@ -15,7 +15,7 @@ A reliable, consistent TTS **and STT** service with a simple, powerful API that 
 | Engine | Role | VRAM | Status |
 |--------|------|------|--------|
 | **Kokoro** | Always-available workhorse | ~500MB | Primary CPU/slim GPU option |
-| **F5-TTS** | Primary GPU quality engine | ~1-2GB | **User verdict: "fast and better than Chatterbox"** (2026-08-16) |
+| **F5-TTS** | Primary GPU quality engine — bilingual EN/DE | ~1-2GB (EN) + 1.35GB (DE) | **User verdict: "fast and better than Chatterbox"** (2026-08-16); German "quite good" at cfg 1.5 (2026-08-29) |
 | **Chatterbox Turbo** | GPU alternative | ~2GB | Paralinguistic tags, exaggeration param |
 | **VibeVoice** | Multi-speaker dialogue | ~4-6GB | Parked — works but flat delivery. Unique value: multi-speaker |
 | **MiniMax** | High-quality cloud | — | Active |
@@ -27,7 +27,7 @@ A reliable, consistent TTS **and STT** service with a simple, powerful API that 
 
 **VibeVoice notes:** batch-only, no streaming. Script format strictly `Speaker N: text` (numeric IDs). Multi-speaker voice mapping via `extra_body.voices: {1: "Alice", 2: "Bob"}`. flash-attn has no Windows wheel → sdpa default; opt-in via `NSPEECH_VIBEVOICE_ATTN=flash_attention_2`. Model at `venv/vibevoice/models/VibeVoice` (5GB). VRAM exceeds TTS budget if another GPU engine resident.
 
-**Hardware constraint:** BADKID server, RTX 4090 (24GB VRAM). 12GB reserved for Gemma 4 LLM, 4-6GB for STT service. **TTS budget: 4GB VRAM.** F5-TTS + Kokoro fit within budget simultaneously.
+**Hardware constraint:** BADKID server, RTX 4090 (24GB VRAM). 12GB reserved for Gemma 4 27B LLM, ~1GB for STT service. **TTS budget: 4-6GB VRAM.** F5 (EN+DE bilingual, both checkpoints resident ~3-4GB) + Kokoro fit within budget simultaneously.
 
 **Switching policy (target):** Kokoro always resident. F5-TTS preferred GPU engine. Cloud providers stateless.
 
@@ -52,6 +52,52 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-08-29 — Engine cleanup: dots, Audio8, IndexTTS2, Chatterbox eng/mtl retired
+
+**Focus:** Shed engines made redundant by F5. Findings preserved in **[docs/ENGINE_TRIALS.md](docs/ENGINE_TRIALS.md)** — verdicts, root causes, and the cross-cutting trial-decision patterns (prosody-source test, ≥5× RT bar, cfg-before-vocoder).
+
+- **Removed:** `dots` (VRAM + variable quality, abandoned since 07-15), `audio8`/`audio8-hd` (1.6-1.9× RT, kernel-launch-bound dual-AR — kept for Linux mamba retest in theory, archived), `chatterbox-eng`/`chatterbox-mtl` (didn't deliver vs turbo), IndexTTS2 smoke script (never integrated).
+- **Kept:** `chatterbox-turbo` (stable EN alternative to F5), kokoro, f5tts (bilingual), f5tts-german, vibevoice, all cloud.
+- Files: adapters → `_Archive/`, dashboard pages → `_Archive/pages_retired/`, registry/tts.py/app.js/.env cleaned. **Bug found & fixed during cleanup:** `f5tts-german` was missing from the worker's transcript-sidecar map (would list bare wavs as voices).
+- Venvs deleted same day (~19GB reclaimed): `venv/dots` (10.1GB), `venv/audio8` (8.7GB). `venv/chatterbox` kept — turbo uses it. Reinstall via `install.py` if ever needed.
+
+### 2026-08-29 — F5-TTS bilingual: German fine-tune integrated, auto language routing
+
+**Focus:** Local German quality. Base F5 on German = "sudo German" (English pronunciation forced, gibberish-adjacent) — abandoned for DE. Fish S2 German solid but monotone (cloud fallback only).
+
+- **Checkpoint**: `aihpi/F5-TTS-German` (HPI, CC-BY-NC-4.0) `model_420000.safetensors` at `venv/f5tts/models/F5-TTS-German/`. User verdict with German ref voice (Melon_DE): "quite good" — prime local German engine. Metallic sheen = **cfg over-guidance, not the vocoder** — cfg 1.5 (vs EN's 2.5) eliminates it; adapter defaults cfg per language. bigvgan detour unnecessary (machinery kept, registry on vocos).
+- **Bilingual `f5tts` engine**: two lazy-loaded resident checkpoints — EN `F5TTS_v1_Base`, DE German-420k. Per-request routing: `extra_body.language: 'de'|'en'` explicit, else zero-dep heuristic (`detect_language`: umlauts/ß near-decisive, unambiguous function words break ties, EN wins ties). Both resident ~1.4GB allocated — well within the 4-6GB budget.
+- **Mechanism**: registry `env` overrides (new in worker.js — spreads `entry.env` into worker env, resolves `*_CKPT/*_FILE/*_PATH` against project root). `NSPEECH_F5_CKPT_DE` on `f5tts`; explicit `f5tts-german` engine pins the German checkpoint only.
+- Voices shared across both (sidecar suffix fixed `.f5tts.txt`). Dashboard pages `web/pages/f5tts-german/` (manual override engine).
+- Smoke: DE 6.7s/6.8s + EN 5.9s/3.7s in one process, both models resident (`scripts/smoke-f5-bilingual.py`).
+- **Metallic sheen SOLVED: cfg over-guidance, not the vocoder.** cfg 1.5 (vs EN's 2.5) eliminates it — adapter now defaults cfg per language (DE 1.5, EN 2.5; explicit extra_body.cfg_strength still wins). bigvgan detour was unnecessary (machinery kept: `NSPEECH_F5_MODEL_DE`, `_ensure_bigvgan_config`, `third_party/BigVGAN` clone — rerun `scripts/patch-bigvgan.py` after venv reinstall; registry reverted to vocos 420k). Peak-limiter (>0.95) kept in adapter — bigvgan runs hotter and hard-clipped without it.
+- **Bilingual preload:** `F5TtsAdapter.preload()` warms en+de at worker start (~9s, both resident) — language-switch penalty gone. `worker_routes.py` prefers `adapter.preload()` over the `.model` touch.
+- **Server-side generation defaults** (2026-08-29): `PUT/GET/DELETE /v1/defaults/:engine` → `defaults.json` (voice/speed/extra_body per engine). Relay merges into `/v1/audio/speech` (fill-only-unset, explicit wins, before preset resolution). Dashboard **Save as Default** persists localStorage AND server (widget `nspeech-save-defaults` event → buildParams → PUT; needs text in the box); **Reset** clears both.
+- Dashboard: cleaned-preview testing aid removed from f5tts/f5tts-german/audio8/audio8-hd pages; per-engine settings persistence on ALL generate pages (16 engines).
+- E2E verified live: DE+EN through f5tts (auto-routing), Fish cloud 200. GOTCHA: Fish voice `'default'` must NOT be sent as reference_id (400 "Reference not found") — omit the field.
+- Open: long-form German article E2E via server; older bigvgan ckpts (430k/550k) if vocos cfg 1.5 ever disappoints; `logs/german-melon-de-bigvgan-libinfer.wav` discrimates checkpoint-vs-pipeline if metallic returns.
+
+### 2026-08-28 — Fish Audio S2 cloud engine integrated
+
+**Focus:** Evaluate Fish Audio S2 as F5-TTS rival. Cloud API first (`FISH_AUDIO_API_KEY` in .env, free tier `s2.1-pro-free`).
+
+- Adapter `server/cloud/fish.js` — JSON to `POST /v1/tts` (no msgpack needed with `reference_id`), model via header, `format: pcm, sample_rate: 24000` = s16le 24kHz mono (exact PCM contract match). Streaming pipes the chunked response.
+- Registry: `fish`, `fish_s2_1_pro_free` (default), `fish_s2_1_pro`, `fish_s2_pro`, `fish_s1`. Dashboard pages `web/pages/fish/`. Voice clone via `POST /model` multipart (train_mode=fast, `texts` transcript sharpens pronunciation); preview clones throwaway + deletes.
+- Live smoke: **2.5–2.8× real-time, TTFB ~750-850ms** on free tier (render, not playback rate — cloud latency fine for chunked narration).
+- **Quality verdict (2026-08-29): PARKED as evaluation, kept as cloud fallback.** With a cloned reference voice: lower error rate than F5 but noticeably monotone — delivery not drawn from the reference register (same class as Audio8/VibeVoice). Untested: `[bracket]` style tags in German, temperature >0.7 (impractical for long-form: per-chunk tagging). F5 stays primary GPU engine.
+- Local S2 research option noted: open weights `fishaudio/s2-pro` (Fish Research License, non-commercial), s2.cpp GGUF q6_k/q8_0 fit BADKID's ~11GB free VRAM. Speed on 4090 unprobed. Parked pending quality verdict.
+- Open: F5 vs Fish A/B by ear; long-form German test; cloning trial.
+
+### 2026-08-23 — Audio8 TTS trial: integrated, benchmarked, PARKED
+
+**Focus:** Evaluate Audio8-TTS-Preview (0.1B + 0.6B) as Chatterbox Turbo replacement. Full integration: adapter (`src/nspeech/engines/audio8.py`), two registry engines (`audio8`, `audio8-hd` — shared venv + shared voice dir via registry `voice_dir`/`model_dir` overrides, new in `worker.js`), dashboard pages, install.py support. Clone model = F5-style (ref wav + `.audio8.txt` transcript sidecar, auto-transcribed via faster-whisper — must be in requirements; preview 500'd until pinned).
+
+**Verdict: not usable.** User: "anything below 0.2 real-time I wouldn't use" — meaning ≥5× real-time required.
+- **Speed: 1.6–1.9× real-time** (warm, both variants) — far too slow. Structural: Python-loop dual-AR (~230 model steps/s of audio: 1 slow Falcon-H1 step + 10 sequential fast-AR codebook steps), kernel-launch-bound (GPU+CPU both idle). Naive Mamba fallback on Windows (no mamba-ssm/causal-conv1d wheels for py3.13/torch 2.11; community wheels cp311-only). `torch.compile(reduce-overhead)` no help — no Triton on this stack. Audio8's own CLI uses the same HF remote-code path — no faster engine exists upstream.
+- **Quality: stable, good voice replication, monotone.** Expressive only at temperature ≥1.5 (sliders extended to 2.5; adapter default 1.4); even at 2.5 "just passable". Prosody comes only from sampling entropy — timbre clones, delivery doesn't.
+
+**Kept in codebase** (registered, working, documented) for a Linux retest — mamba-ssm installs cleanly there and addresses the slow-branch half of the cost. `probe-audio8-compile.py` and `smoke-audio8.py` in scripts/.
+
 ### 2026-08-18 → 2026-08-22 — Unified SDK, Server-Authoritative Cleaning, Kokoro Resident
 
 **Focus:** Single-file SDK + dashboard migration; text cleaning moves server-side; Kokoro becomes resident; `/v1/models`.
@@ -66,7 +112,7 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 - Chat-app migration to unified SDK
 - Text-cleaning toggle on the ~10 other engine dashboard pages
 - ~~Plural acronym rule (`GPUs` → "G P U s")~~ — **DONE 2026-08-23**: plural acronyms spell + apostrophe-s (`GPUs` → `G P U's`). Chosen over bare "G P U s" because ElevenLabs/MiniMax (the published-works engines) speak apostrophe-s as the natural plural syllable; engines that ignore the apostrophe still get spelled letters. Single source in `lib/nspeech-client/nspeech-client.js` — server re-exports it.
-- F5 short-chunk compression, IndexTTS2 retest, VibeVoice ddpm_steps, F5-German model
+- F5 short-chunk compression, VibeVoice ddpm_steps, F5-German model
 - Byte-tick progress events → main-0.log (UX gap)
 
 ### 2026-08-17 — Cloud 503s Resolved + Stream Mode Restored
@@ -258,4 +304,4 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ---
 
-*Last updated: 2026-08-23*
+*Last updated: 2026-08-29*

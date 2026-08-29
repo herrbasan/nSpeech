@@ -38,7 +38,7 @@ VENV_BASE = PROJECT_ROOT / "venv"
 # Installable engines. 'chatterbox' creates a shared venv for all three
 # model variants (chatterbox-turbo, chatterbox-eng, chatterbox-mtl).
 # At runtime, each variant is a separate engine entry in registry.json.
-ENGINES = ["kokoro", "chatterbox", "dots", "f5tts", "vibevoice", "all"]
+ENGINES = ["kokoro", "chatterbox", "dots", "f5tts", "vibevoice", "audio8", "all"]
 
 # Chatterbox variants — all share venv/chatterbox/env/ but have separate
 # voice directories. Created during chatterbox install.
@@ -57,6 +57,7 @@ ENGINE_PATCHES = {
     "dots": [],
     "f5tts": [],
     "vibevoice": [],
+    "audio8": [],
 }
 
 
@@ -241,6 +242,12 @@ def install_engine_deps(python, engine):
 
     elif engine == "vibevoice":
         # VibeVoice needs torch with CUDA + flash-attn for best quality.
+        run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
+        run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
+             "--index-url", "https://download.pytorch.org/whl/cu128"])
+
+    elif engine == "audio8":
+        # Audio8 needs torch>=2.5 with CUDA.
         run([str(python), "-m", "pip", "uninstall", "-y", "torch", "torchaudio"])
         run([str(python), "-m", "pip", "install", "--no-cache-dir", "torch", "torchaudio",
              "--index-url", "https://download.pytorch.org/whl/cu128"])
@@ -529,6 +536,18 @@ def download_models(python, engine):
             f"F5TTS(device='cpu')"
         ], cwd=str(PROJECT_ROOT))
 
+    elif engine == "audio8":
+        # Audio8 auto-downloads from HuggingFace on first use (trust_remote_code).
+        # Pre-trigger the download so first request doesn't stall.
+        print(f"    [*] Pre-downloading Audio8 model from HuggingFace ...")
+        run([
+            str(python), "-c",
+            f"import sys; sys.path.insert(0, 'src'); "
+            f"from transformers import AutoModel, AutoProcessor; "
+            f"AutoProcessor.from_pretrained('Audio8/Audio8-TTS-Preview-0.1b', trust_remote_code=True); "
+            f"AutoModel.from_pretrained('Audio8/Audio8-TTS-Preview-0.1b', trust_remote_code=True, dtype=__import__('torch').bfloat16)"
+        ], cwd=str(PROJECT_ROOT))
+
     elif engine == "vibevoice":
         # VibeVoice model is cloned from HuggingFace into the model directory.
         vv_dir = model_dir / "VibeVoice"
@@ -576,6 +595,10 @@ def verify_engine(python, engine):
         else:
             print(f"    [-] VibeVoice model NOT found at {vv_dir}")
             all_ok = False
+
+    elif engine == "audio8":
+        checks.append(("PyTorch", "import torch; print(f'PyTorch {torch.__version__}')"))
+        checks.append(("Transformers", "import transformers; print(f'transformers {transformers.__version__}')"))
 
     checks.append(("soundfile", "import soundfile; print('soundfile OK')"))
 

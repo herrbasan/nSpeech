@@ -243,8 +243,10 @@ export function registerAdminRoutes(app) {
 
     for (const name of listEngines()) {
       const entry = getEntry(name);
-      // Skip: internal workers, GPU engines (not the current one), missing venvs
+      // Skip: internal workers, GPU engines (not the current one), missing venvs,
+      // dashboard-only engines (api_hidden — switchable via dashboard, not a model)
       if (entry.stt) continue;
+      if (entry.api_hidden) continue;
       if (entry.gpu && name !== manager.currentEngine) continue;
       if (!venvExists(name)) continue;
       data.push({

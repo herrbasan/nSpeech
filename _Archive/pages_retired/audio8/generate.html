@@ -1,0 +1,167 @@
+<div class="page-audio8-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1 id="a8-title">Audio8 — Generate</h1>
+        <p class="lead">Dual-AR zero-shot cloning. Batch render per request; long texts auto-chunk at 1500 chars. Voice "default" speaks without a reference.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="a8-voice">Voice</label>
+            <nui-select id="voice-select">
+                <select id="a8-voice">
+                    <option value="default" selected>default (no reference)</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="a8-text">Text</label>
+            <nui-textarea auto-resize grow-on-load min-rows="5">
+                <textarea id="a8-text" placeholder="Text to synthesize...">#The Rules We Keep
+
+Writing is thinking: a claim without structure is just noise. The *real* work happens when you delete the parts that only pretend to be clever.
+
+A Short Detour
+
+Honesty requires admitting the birthplace: this system was assembled at the edge of the void. Some call that **courage**. Others call it _foolishness_.
+
+Third: we listen. The verdict was clear. Guilty. On all counts.
+
+A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU, RLHF, and NASA walk into a bar.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="a8-temp">Temperature: <span id="a8-temp-val">1.4</span></label>
+            <nui-input>
+                <input type="range" id="a8-temp" min="0.1" max="2.5" step="0.05" value="1.4" style="width: 100%">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Sampling randomness. This model runs monotone below ~1.0; expressive results live at 1.3–2.0. Too high degrades intelligibility.</p>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="a8-topp">Top-P: <span id="a8-topp-val">0.9</span></label>
+            <nui-input>
+                <input type="range" id="a8-topp" min="0.5" max="1.0" step="0.01" value="0.9" style="width: 100%">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="a8-topk">Top-K: <span id="a8-topk-val">50</span></label>
+            <nui-input>
+                <input type="range" id="a8-topk" min="10" max="200" step="10" value="50" style="width: 100%">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="a8-seed">Seed (empty = random)</label>
+            <nui-input>
+                <input type="number" id="a8-seed" placeholder="random" style="width: 12rem">
+            </nui-input>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Set a seed for reproducible output.</p>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="a8-clean">Text cleaning</label>
+            <nui-checkbox>
+                <input type="checkbox" id="a8-regex-clean" checked>
+                <span>Regex clean (in browser) — strip markdown before sending; preview below.</span>
+            </nui-checkbox>
+        </nui-input-group>
+
+        <nui-button-container gap="medium" data-generate-anchor>
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+        </nui-button-container>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+const mountGenerate = window.nspeechMountGenerate;
+const cleanMarkdown = window.nspeech.cleanMarkdown;
+
+function init(element, params, nui) {
+    // Variant derives from the route: #page=audio8-hd/... → 0.6B engine.
+    const ENGINE = location.hash.includes('audio8-hd') ? 'audio8-hd' : 'audio8';
+    element.querySelector('#a8-title').textContent =
+        (ENGINE === 'audio8-hd' ? 'Audio8 0.6B — Generate' : 'Audio8 0.1B — Generate');
+
+    const voiceSelect = element.querySelector('#voice-select');
+    const selectEl = element.querySelector('#a8-voice');
+    const textArea = element.querySelector('#a8-text');
+    const tempEl = element.querySelector('#a8-temp');
+    const tempVal = element.querySelector('#a8-temp-val');
+    const toppEl = element.querySelector('#a8-topp');
+    const toppVal = element.querySelector('#a8-topp-val');
+    const topkEl = element.querySelector('#a8-topk');
+    const topkVal = element.querySelector('#a8-topk-val');
+    const seedEl = element.querySelector('#a8-seed');
+    const regexCleanEl = element.querySelector('#a8-regex-clean');
+    const generateBtn = element.querySelector('#btn-generate');
+
+    function autoResize(ta) {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+    }
+    textArea.addEventListener('input', () => autoResize(textArea));
+    autoResize(textArea);
+
+    // ── Text cleaning (client-side regex, from the SDK) ──────────────────
+    const cleanFn = cleanMarkdown;
+
+    tempEl.addEventListener('input', () => { tempVal.textContent = tempEl.value; });
+    toppEl.addEventListener('input', () => { toppVal.textContent = toppEl.value; });
+    topkEl.addEventListener('input', () => { topkVal.textContent = topkEl.value; });
+
+    function loadVoices() {
+        // Voice dir is shared between 0.1b and 0.6b — always list from 'audio8'.
+        window.nspeech.client.listVoices('audio8', null, true)
+            .then(d => {
+                const allVoices = d.voices || [];
+                const cloned = allVoices
+                    .filter(v => v.voice_type === 'cloned')
+                    .map(v => ({ value: v.name, label: v.name }));
+                const items = [{ value: 'default', label: 'default (no reference)' }];
+                if (cloned.length) items.push(...cloned);
+                voiceSelect.setItems(items);
+            })
+            .catch(() => {});
+    }
+
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: `${ENGINE}-speech.mp3`,
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+
+            const eb = {
+                temperature: parseFloat(tempEl.value),
+                top_p: parseFloat(toppEl.value),
+                top_k: parseInt(topkEl.value, 10),
+            };
+            if (seedEl.value !== '') eb.seed = parseInt(seedEl.value, 10);
+
+            // Regex clean is CLIENT-side — send the cleaned text directly.
+            let inputText = text;
+            if (regexCleanEl.checked) {
+                inputText = cleanFn(text);
+            }
+
+            return {
+                model: ENGINE,
+                input: inputText,
+                voice: selectEl.value || 'default',
+                extraBody: eb,
+            };
+        },
+    });
+
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+    window.nspeechSettings.init(element, ENGINE);
+
+    element.show = () => loadVoices();
+    element.hide = () => widget.stop();
+}
+</script>

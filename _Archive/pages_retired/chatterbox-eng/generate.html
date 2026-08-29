@@ -1,7 +1,7 @@
-﻿<div class="page-chatterbox-generate">
+﻿<div class="page-chatterbox-eng-generate">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>Chatterbox — Generate</h1>
-        <p class="lead">Zero-shot voice cloning TTS with per-sentence streaming.</p>
+        <h1>Chatterbox English — Generate</h1>
+        <p class="lead">500M model. English with exaggeration tuning for expressive delivery.</p>
     </header>
 
     <nui-card>
@@ -15,44 +15,9 @@
         </nui-input-group>
 
         <nui-input-group>
-            <label for="cb-model">Model</label>
-            <nui-select>
-                <select id="cb-model">
-                    <option value="turbo" selected>Turbo (350M, paralinguistic)</option>
-                    <option value="eng">English (500M, exaggeration)</option>
-                    <option value="mtl">Multilingual (500M, 23 languages)</option>
-                </select>
-            </nui-select>
-        </nui-input-group>
-
-        <nui-input-group>
-            <label for="cb-language">Language</label>
-            <nui-select>
-                <select id="cb-language">
-                    <option value="en" selected>English</option>
-                    <option value="de">German</option>
-                    <option value="fr">French</option>
-                    <option value="es">Spanish</option>
-                    <option value="it">Italian</option>
-                    <option value="ja">Japanese</option>
-                    <option value="ko">Korean</option>
-                    <option value="zh">Chinese</option>
-                    <option value="ru">Russian</option>
-                    <option value="ar">Arabic</option>
-                    <option value="nl">Dutch</option>
-                    <option value="pl">Polish</option>
-                    <option value="pt">Portuguese</option>
-                    <option value="sv">Swedish</option>
-                    <option value="tr">Turkish</option>
-                    <option value="hi">Hindi</option>
-                </select>
-            </nui-select>
-        </nui-input-group>
-
-        <nui-input-group>
             <label for="cb-text">Text</label>
             <nui-textarea auto-resize max-rows="8" min-rows="5">
-                <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox streaming system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
+                <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox English system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
             </nui-textarea>
         </nui-input-group>
 
@@ -92,15 +57,12 @@ function init(element, params, nui) {
     const selectEl = element.querySelector('#cb-voice');
     const textArea = element.querySelector('#cb-text');
     const exaggerationEl = element.querySelector('#cb-exaggeration');
-    const languageEl = element.querySelector('#cb-language');
-    const modelEl = element.querySelector('#cb-model');
     const exagValEl = element.querySelector('#cb-exag-val');
     const arenaBtn = element.querySelector('#btn-arena-sample');
     const arenaInfo = element.querySelector('#cb-arena-info');
     const batchEl = element.querySelector('#cb-batch');
     const generateBtn = element.querySelector('#btn-generate');
 
-    // Manual auto-resize fallback
     function autoResize(ta) {
         ta.style.height = 'auto';
         ta.style.height = ta.scrollHeight + 'px';
@@ -124,7 +86,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('chatterbox', null, true)
+        window.nspeech.client.listVoices('chatterbox-eng', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices
@@ -139,18 +101,16 @@ function init(element, params, nui) {
 
     // ── Generate via the shared widget (player + progress) ─────────────
     const widget = mountGenerate(element, {
-        filename: 'chatterbox-speech.mp3',
+        filename: 'chatterbox-eng-speech.mp3',
         buildParams: () => {
             const text = textArea.value.trim();
             if (!text) return null;
             const eb = {
                 expressiveness: parseFloat(exaggerationEl.value),
-                language: languageEl.value || undefined,
-                model: modelEl.value || undefined,
                 batch: batchEl.checked,
             };
             return {
-                model: 'chatterbox',
+                model: 'chatterbox-eng',
                 input: text,
                 voice: selectEl.value || 'default',
                 extraBody: eb,
@@ -163,6 +123,7 @@ function init(element, params, nui) {
     exaggerationEl.addEventListener('input', () => {
         exagValEl.textContent = exaggerationEl.value;
     });
+    window.nspeechSettings.init(element, "chatterbox-eng");
 
     element.show = () => loadVoices();
     element.hide = () => widget.stop();

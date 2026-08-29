@@ -1,0 +1,120 @@
+<div class="page-fish-generate">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Fish S2 — Generate</h1>
+        <p class="lead">Cloud TTS by Fish Audio. S2 family models with natural-language expression tags like [whispers] or [excited] inline in the text. Default model: s2.1-pro-free.</p>
+    </header>
+
+    <nui-card>
+        <nui-input-group>
+            <label for="fish-model">Model</label>
+            <nui-select id="fish-model-select">
+                <select id="fish-model">
+                    <option value="fish" selected>s2.1-pro-free (free tier)</option>
+                    <option value="fish_s2_1_pro">s2.1-pro (paid)</option>
+                    <option value="fish_s2_pro">s2-pro (paid, prev. gen)</option>
+                    <option value="fish_s1">s1 (prev. gen, (emotion) tags)</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="fish-voice">Voice</label>
+            <nui-select id="fish-voice-select">
+                <select id="fish-voice">
+                    <option value="" selected>Default voice</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="fish-text">Text</label>
+            <nui-textarea auto-resize max-rows="8" min-rows="5">
+                <textarea id="fish-text" placeholder="Text to synthesize...">This is a test of Fish Audio S2 speech synthesis through nSpeech. You can steer the delivery with inline tags — [whispers] like this — or [excited] like this! The S2 family speaks more than eighty languages.</textarea>
+            </nui-textarea>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="fish-speed">Speed: <span id="fish-speed-val">1.0</span></label>
+            <nui-input>
+                <input type="range" id="fish-speed" min="0.5" max="2" step="0.1" value="1.0">
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="fish-latency">Latency mode</label>
+            <nui-select id="fish-latency-select">
+                <select id="fish-latency">
+                    <option value="normal" selected>normal (best quality)</option>
+                    <option value="balanced">balanced (lower TTFA)</option>
+                    <option value="low">low (lowest latency)</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-button-container gap="medium" data-generate-anchor>
+            <nui-button variant="primary" id="btn-generate">
+                <button type="button">Generate</button>
+            </nui-button>
+        </nui-button-container>
+
+    </nui-card>
+</div>
+
+<script type="nui/page">
+const mountGenerate = window.nspeechMountGenerate;
+
+function init(element, params, nui) {
+    const modelEl = element.querySelector('#fish-model');
+    const voiceSelect = element.querySelector('#fish-voice-select');
+    const selectEl = element.querySelector('#fish-voice');
+    const textArea = element.querySelector('#fish-text');
+    const speedEl = element.querySelector('#fish-speed');
+    const speedValEl = element.querySelector('#fish-speed-val');
+    const latencyEl = element.querySelector('#fish-latency');
+    const generateBtn = element.querySelector('#btn-generate');
+
+    speedEl.addEventListener('input', () => {
+        speedValEl.textContent = speedEl.value;
+    });
+
+    function loadVoices() {
+        window.nspeech.client.listVoices('fish', null, true)
+            .then(d => {
+                const voices = (d.voices || []).filter(v => v.category === 'cloned');
+                if (!voices.length) {
+                    voiceSelect.setItems([{ value: '', label: 'Default voice' }]);
+                    selectEl.value = '';
+                    return;
+                }
+                voiceSelect.setItems([
+                    { value: '', label: 'Default voice' },
+                    { group: 'My Voices', options: voices.map(v => ({ value: v.voice_id, label: v.name })) },
+                ]);
+                selectEl.value = '';
+            })
+            .catch(() => {});
+    }
+
+    // ── Generate via the shared widget (player + progress) ─────────────
+    const widget = mountGenerate(element, {
+        filename: 'fish-speech.mp3',
+        buildParams: () => {
+            const text = textArea.value.trim();
+            if (!text) return null;
+            return {
+                model: modelEl.value,
+                input: text,
+                voice: selectEl.value || 'default',
+                speed: parseFloat(speedEl.value),
+                extraBody: { latency: latencyEl.value },
+            };
+        },
+    });
+
+    generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+    window.nspeechSettings.init(element, "fish");
+
+    element.show = () => loadVoices();
+    element.hide = () => widget.stop();
+}
+</script>

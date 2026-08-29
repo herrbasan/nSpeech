@@ -30,10 +30,16 @@ export function registerVoiceRoutes(app) {
 
     let engine;
     try {
+      // Voice listing may target dashboard-only (api_hidden) engines — the
+      // dashboard's per-engine voices pages need their engine's list even
+      // when it's not current. Generation stays guarded (speech relay).
+      manager._allowHiddenLookup = true;
       const resolved = await manager.getEngine(model);
       engine = resolved.engine;
     } catch (err) {
       return sendError(reply, err);
+    } finally {
+      manager._allowHiddenLookup = false;
     }
 
     try {

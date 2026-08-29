@@ -26,15 +26,14 @@ document.addEventListener('click', (e) => {
 const ENGINES = {
     kokoro: { label: 'Kokoro', icon: 'headphones' },
     'chatterbox-turbo': { label: 'CB Turbo', icon: 'headphones' },
-    'chatterbox-eng': { label: 'CB English', icon: 'headphones' },
-    'chatterbox-mtl': { label: 'CB Multilingual', icon: 'headphones' },
-    dots: { label: 'dots.tts', icon: 'headphones' },
     f5tts: { label: 'F5-TTS', icon: 'headphones' },
+    'f5tts-german': { label: 'F5-TTS German', icon: 'headphones' },
     vibevoice: { label: 'VibeVoice', icon: 'headphones' },
     minimax: { label: 'MiniMax', icon: 'cloud' },
     elevenlabs: { label: 'ElevenLabs', icon: 'cloud' },
     xai: { label: 'xAI / Grok', icon: 'cloud' },
     gemini: { label: 'Gemini', icon: 'cloud' },
+    fish: { label: 'Fish S2', icon: 'cloud' },
 };
 
 // Guard flag: true while syncEngineSwitcher() is programmatically setting

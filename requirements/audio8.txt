@@ -1,0 +1,12 @@
+# TTS Engine: Audio8 TTS Preview 0.1B (Audio8)
+# Dual-AR (slow semantic / fast codec) zero-shot cloning TTS, ~0.3B total.
+# NOTE: Audio8 Community License v1.0 — non-commercial free; commercial free
+#       under US$2M annual revenue, written license above that.
+torch>=2.5.0
+torchaudio>=2.5.0
+transformers>=4.57.0,<5
+soundfile>=0.12
+safetensors>=0.4
+# Clone auto-transcription (nspeech.transcribe prefers faster-whisper;
+# without it the fallback openai-whisper import crashes the clone).
+faster-whisper>=1.0

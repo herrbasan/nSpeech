@@ -1,0 +1,215 @@
+<div class="page-fish-voices">
+    <header style="margin-bottom: var(--nui-space-double)">
+        <h1>Fish S2 — Voices</h1>
+        <p class="lead">Clone a voice from reference audio (10–30s clean, single-speaker works best). Provide the transcript for sharper pronunciation. Clones live in your Fish Audio account.</p>
+    </header>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Preview Voice</h3>
+        <nui-input-group>
+            <label for="fi-clone-file">Reference Audio (.wav, .mp3, .m4a, .opus — 10s or longer)</label>
+            <nui-input>
+                <input type="file" id="fi-clone-file" accept=".wav,.mp3,.m4a,.opus">
+            </nui-input>
+        </nui-input-group>
+        <nui-input-group>
+            <label for="fi-clone-transcript">Reference Transcript (what the clip says — improves quality)</label>
+            <nui-textarea max-rows="4" min-rows="2">
+                <textarea id="fi-clone-transcript" placeholder="Exact words spoken in the reference clip"></textarea>
+            </nui-textarea>
+        </nui-input-group>
+        <nui-input-group>
+            <label for="fi-test-phrase">Test Phrase</label>
+            <nui-textarea max-rows="4" min-rows="2">
+                <textarea id="fi-test-phrase">This is a preview of the cloned voice. How does it sound?</textarea>
+            </nui-textarea>
+        </nui-input-group>
+        <nui-button-container gap="medium">
+            <nui-button variant="primary" id="btn-preview">
+                <button type="button">Preview</button>
+            </nui-button>
+            <nui-button id="btn-preview-stop">
+                <button type="button">Stop</button>
+            </nui-button>
+        </nui-button-container>
+        <audio id="fi-preview-audio" controls style="width: 100%; margin-top: var(--nui-space); display: none;"></audio>
+        <div id="fi-preview-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Save Voice</h3>
+        <nui-input-group>
+            <label for="fi-clone-name">Voice Name</label>
+            <nui-input>
+                <input type="text" id="fi-clone-name" placeholder="my_voice">
+            </nui-input>
+        </nui-input-group>
+        <nui-button id="btn-save" disabled>
+            <button type="button">Save Voice</button>
+        </nui-button>
+        <div id="fi-save-status" style="margin-top: var(--nui-space);"></div>
+    </nui-card>
+
+    <nui-card>
+        <h3 style="margin-top: 0">Cloned Voices</h3>
+        <div id="fi-cloned-list"><p style="color: var(--color-shade6)">Loading...</p></div>
+    </nui-card>
+</div>
+
+<script type="nui/page">
+function init(element, params, nui) {
+    var ENGINE = 'fish';
+
+    customElements.whenDefined('nui-button').then(function() { _bindAll(); });
+
+    var fileInput, transcriptEl, nameInput, testPhraseEl, btnPreview, btnPreviewStop, btnSave;
+    var previewStatusEl, saveStatusEl, clonedListEl, previewAudio;
+    var abortController = null, mediaSource = null;
+
+    function _bindAll() {
+        fileInput = element.querySelector('#fi-clone-file');
+        transcriptEl = element.querySelector('#fi-clone-transcript');
+        nameInput = element.querySelector('#fi-clone-name');
+        testPhraseEl = element.querySelector('#fi-test-phrase');
+        btnPreview = element.querySelector('#btn-preview');
+        btnPreviewStop = element.querySelector('#btn-preview-stop');
+        btnSave = element.querySelector('#btn-save');
+        previewStatusEl = element.querySelector('#fi-preview-status');
+        saveStatusEl = element.querySelector('#fi-save-status');
+        clonedListEl = element.querySelector('#fi-cloned-list');
+        previewAudio = element.querySelector('#fi-preview-audio');
+
+        btnPreviewStop.addEventListener('click', stop);
+        btnPreview.querySelector('button').addEventListener('click', doPreview);
+        btnSave.querySelector('button').addEventListener('click', doSave);
+
+        element.addEventListener('nui-action', onAction);
+
+        loadClonedVoices();
+    }
+
+    function stop() {
+        if (abortController) { abortController.abort(); abortController = null; }
+        if (previewAudio) { previewAudio.pause(); previewAudio.src = ''; }
+        if (mediaSource && mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch (_) {} }
+        mediaSource = null;
+    }
+
+    function loadClonedVoices() {
+        fetch('/v1/voices?engine=' + ENGINE).then(function(r) { return r.json(); }).then(function(d) {
+            var voices = (d.voices || []).filter(function(v) { return v.category === 'cloned'; });
+            if (!voices.length) {
+                clonedListEl.innerHTML = '<p style="color: var(--color-shade6)">No cloned voices yet.</p>';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < voices.length; i++) {
+                var v = voices[i];
+                html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:var(--nui-space-half) 0;border-bottom:1px solid var(--border-shade1-4);">' +
+                    '<span><strong>' + v.name + '</strong> <span style="color:var(--color-shade6);font-size:0.85em;">' + v.voice_id + '</span></span>' +
+                    '<nui-button variant="danger"><button type="button" data-action="delete-voice:' + v.voice_id + '">Delete</button></nui-button></div>';
+            }
+            clonedListEl.innerHTML = html;
+        }).catch(function(err) { clonedListEl.innerHTML = '<p style="color:var(--color-danger)">Failed: ' + err.message + '</p>'; });
+    }
+
+    function onAction(e) {
+        if (e.detail.name !== 'delete-voice') return;
+        e.stopPropagation();
+        var voiceId = e.detail.param;
+        var nuiBtn = e.detail.target.closest('nui-button');
+
+        nuiBtn.setLoading(true);
+        fetch('/v1/voices/' + encodeURIComponent(voiceId) + '?engine=' + ENGINE, { method: 'DELETE' })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, success: d.success }; }).catch(function() { return { ok: r.ok }; }); })
+            .then(function(d) {
+                if (d.ok || d.success) { loadClonedVoices(); }
+                else { saveStatusEl.textContent = 'Delete failed'; nuiBtn.setLoading(false); }
+            })
+            .catch(function(err) { saveStatusEl.textContent = 'Error: ' + err.message; nuiBtn.setLoading(false); });
+    }
+
+    function doPreview() {
+        var file = fileInput.files[0];
+        if (!file) { previewStatusEl.textContent = 'Select an audio file first.'; return; }
+        stop();
+
+        var startTime = performance.now();
+        var fd = new FormData();
+        fd.append('audio', file);
+        fd.append('preview_text', testPhraseEl.value.trim());
+        var transcript = transcriptEl.value.trim();
+        if (transcript) fd.append('prompt_text', transcript);
+        abortController = new AbortController();
+        previewStatusEl.textContent = 'Cloning + generating preview...';
+        btnPreview.setLoading(true);
+
+        fetch('/v1/voices/preview?engine=' + ENGINE, { method: 'POST', body: fd, signal: abortController.signal })
+        .then(async function(response) {
+            if (!response.ok) {
+                btnPreview.setLoading(false);
+                var ed = await response.json().catch(function() { return {}; });
+                throw new Error((ed.error && ed.error.message) || 'HTTP ' + response.status);
+            }
+            btnPreview.setLoading(false);
+            var newAudio = document.createElement('audio');
+            newAudio.controls = true;
+            newAudio.style.cssText = 'width:100%;margin-top:var(--nui-space);display:block;';
+            previewAudio.replaceWith(newAudio);
+            mediaSource = new MediaSource();
+            newAudio.src = URL.createObjectURL(mediaSource);
+
+            mediaSource.addEventListener('sourceopen', async function() {
+                var sb = mediaSource.addSourceBuffer('audio/mpeg');
+                var reader = response.body.getReader();
+                var first = true;
+                try {
+                    while (true) {
+                        var r = await reader.read();
+                        if (r.done) break;
+                        if (first && r.value && r.value.length) {
+                            first = false;
+                            previewStatusEl.textContent = 'TTFB: ' + (performance.now() - startTime).toFixed(0) + 'ms';
+                        }
+                        await new Promise(function(res, rej) { sb.appendBuffer(r.value); sb.onupdateend = res; sb.onerror = rej; });
+                        if (newAudio.paused && sb.buffered.length > 0) { newAudio.play().catch(function() {}); }
+                    }
+                    if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                    previewStatusEl.textContent = 'Preview ready (' + (performance.now() - startTime).toFixed(0) + 'ms)';
+                    btnSave.removeAttribute('disabled');
+                } catch (err) { if (err.name !== 'AbortError') throw err; }
+            }, { once: true });
+        })
+        .catch(function(err) {
+            btnPreview.setLoading(false);
+            if (err.name === 'AbortError') previewStatusEl.textContent = 'Stopped.';
+            else previewStatusEl.textContent = 'Error: ' + err.message;
+        });
+    }
+
+    function doSave() {
+        var file = fileInput.files[0];
+        var name = nameInput.value.trim();
+        if (!file) { saveStatusEl.textContent = 'Select an audio file first.'; return; }
+        if (!name) { saveStatusEl.textContent = 'Enter a voice name.'; return; }
+        var fd = new FormData();
+        fd.append('audio', file);
+        fd.append('name', name);
+        fd.append('voice_name', name);
+        var transcript = transcriptEl.value.trim();
+        if (transcript) fd.append('prompt_text', transcript);
+        saveStatusEl.textContent = 'Saving...';
+        btnSave.setLoading(true);
+        fetch('/v1/voices/clone?engine=' + ENGINE, { method: 'POST', body: fd })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, voice_id: d.voice_id, error: d.error }; }).catch(function() { return { ok: r.ok }; }); })
+            .then(function(d) {
+                if (d.ok || d.voice_id) { saveStatusEl.textContent = 'Saved "' + name + '"'; loadClonedVoices(); btnSave.setLoading(false); btnSave.setAttribute('disabled', 'true'); }
+                else { saveStatusEl.textContent = 'Save failed: ' + ((d.error && d.error.message) || 'unknown'); btnSave.setLoading(false); }
+            })
+            .catch(function(err) { saveStatusEl.textContent = 'Error: ' + err.message; btnSave.setLoading(false); });
+    }
+
+    element.show = function() { loadClonedVoices(); previewStatusEl.textContent = ''; saveStatusEl.textContent = ''; btnSave.setAttribute('disabled', 'true'); };
+    element.hide = function() { stop(); };
+}
+</script>

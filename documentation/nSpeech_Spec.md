@@ -90,13 +90,14 @@ nSpeech is a multi-engine Text-to-Speech service with a unified OpenAI-compatibl
 | Engine | Type | VRAM | Role | Status |
 |--------|------|------|------|--------|
 | **Kokoro** | Local (ONNX, CPU — `gpu:false`) | ~500MB | Always-resident workhorse; survives engine switches | Active |
-| **F5-TTS** | Local (PyTorch) | ~1-2GB | Primary GPU quality engine | Active |
+| **F5-TTS** | Local (PyTorch) | ~1-2GB EN + 1.35GB DE | Primary GPU quality engine — bilingual EN/DE (auto language routing) | Active |
 | **Chatterbox Turbo** | Local (PyTorch) | ~2GB | GPU alternative (paralinguistic tags) | Active |
 | **VibeVoice** | Local (PyTorch) | ~4-6GB | Multi-speaker dialogue | Parked (flat delivery) |
 | **MiniMax** | Cloud | — | High-quality cloud option | Active |
 | **ElevenLabs** | Cloud | — | Premium cloud option | Active |
 | **Gemini** | Cloud | — | Instruction-driven style | Active |
 | **xAI** | Cloud | — | Alternative cloud option | Active |
+| **Fish S2** | Cloud | — | Evaluation parked (solid, monotone); cloud fallback. Free tier `s2.1-pro-free` | Fallback |
 
 ### 3.2 Deprecated / Abandoned Engines
 

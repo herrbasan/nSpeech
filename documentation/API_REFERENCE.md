@@ -31,8 +31,32 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | POST | `/v1/audio/transcriptions` | Speech-to-text (local faster-whisper, CPU) |
 | POST | `/v1/audio/align` | Forced alignment, text-constrained (local MMS CTC, CPU) |
 | POST | `/v1/text/clean` | Speech-ready text cleaning (regex / LLM) |
+| GET | `/v1/defaults` | All saved per-engine generation defaults |
+| GET | `/v1/defaults/:engine` | One engine's defaults (404 if none) |
+| PUT | `/v1/defaults/:engine` | Save `{voice?, speed?, extra_body?}` as engine defaults |
+| DELETE | `/v1/defaults/:engine` | Clear engine defaults |
 | GET | `/health` | `{"status":"ok","version":"3.0.0","engine":"<active>"}` |
 | GET | `/engine` | `{"engine":"<active>"}` |
+
+### Server-side defaults
+
+`PUT /v1/defaults/:engine` persists a dial-in (`{voice, speed, extra_body}`) saved from the dashboard's **Save as Default** button. The speech relay merges saved defaults into any request: fields the request leaves unset are filled from the store — explicit request values always win. Defaults apply before preset resolution. `DELETE` (or the dashboard **Reset** button) clears them.
+
+```bash
+curl -X PUT http://127.0.0.1:2233/v1/defaults/f5tts \
+  -H "Content-Type: application/json" \
+  -d '{"voice":"Melon_DE","speed":1.0,"extra_body":{"cfg_strength":1.5,"nfe_step":32}}'
+```
+
+### Bilingual F5-TTS (`model: "f5tts"`)
+
+The `f5tts` engine routes per request between two resident checkpoints: English → `F5TTS_v1_Base` (base), German → `F5-TTS-German` fine-tune (vocos 420k). Routing: `extra_body.language: "de"|"en"` forces it; otherwise a zero-dependency heuristic detects from the text (umlauts/ß decisive, function words break ties, EN wins ties). `cfg_strength` defaults per language: DE 1.5 (2.5 sounds metallic — over-guidance), EN 2.5. Voices (wav + `.f5tts.txt` sidecar) are shared across both.
+
+Note: `f5tts-german` (explicit German pin) is **dashboard-only** (`api_hidden`) — it does not appear in `/v1/models` and is rejected as an API `model` value unless it is the currently-switched engine. API callers use `f5tts` for both languages.
+
+### Fish Audio (models: `fish`, `fish_s2_1_pro_free`, `fish_s2_1_pro`, `fish_s2_pro`, `fish_s1`)
+
+Cloud TTS via `api.fish.audio`. Default model `s2.1-pro-free`. Voice = Fish voice model id (`reference_id`); omit `voice` for Fish's built-in default (do NOT send `"default"` — the API rejects unknown reference ids). `extra_body`: `temperature` (0-1), `top_p`, `repetition_penalty`, `latency` (`normal|balanced|low`), `chunk_length` (100-300), `normalize`, `volume` (dB). Inline `[bracket]` style tags are interpreted by the S2 family.
 
 ---
 

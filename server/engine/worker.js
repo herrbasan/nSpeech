@@ -14,7 +14,7 @@ import { spawn } from 'node:child_process';
 import * as readline from 'node:readline/promises';
 import { Readable } from 'node:stream';
 import { readFileSync, unlinkSync, existsSync, readdirSync, statSync } from 'node:fs';
-import { resolve, join, delimiter } from 'node:path';
+import { resolve, join, delimiter, isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { logger } from '../logger.js';
@@ -90,13 +90,15 @@ export class WorkerProcess {
     // would launch the new engine with the old engine's NSPEECH_MODEL_DIR,
     // causing the Python config to look in the wrong venv and 503 on first
     // request. See src/nspeech/config.py for the required env vars.
+    // Registry entry may override the defaults (audio8-hd shares venv/audio8's
+    // voice/model dirs with audio8 — same venv, shared clones).
     const engineVoiceDir = resolve(
       this.projectRoot,
-      `venv/${this.engineName}/voices`
+      this.entry.voice_dir || `venv/${this.engineName}/voices`
     );
     const engineModelDir = resolve(
       this.projectRoot,
-      `venv/${this.engineName}/models`
+      this.entry.model_dir || `venv/${this.engineName}/models`
     );
 
     const env = {
@@ -104,6 +106,13 @@ export class WorkerProcess {
       NSPEECH_ENGINE: this.engineName,
       NSPEECH_VOICE_DIR: engineVoiceDir,
       NSPEECH_MODEL_DIR: engineModelDir,
+      // Engine-specific adapter overrides (e.g. f5tts-german sets
+      // NSPEECH_F5_MODEL/NSPEECH_F5_CKPT to load the German fine-tune).
+      // *_CKPT/*_FILE-style values are resolved against the project root so
+      // registry entries stay machine-independent.
+      ...Object.fromEntries(Object.entries(this.entry.env || {}).map(([k, v]) =>
+        [k, /_(CKPT|FILE|PATH)$/.test(k) && !isAbsolute(v) ? resolve(this.projectRoot, v) : v]
+      )),
       // Parent liveness anchor: workers exit themselves if this pid dies
       // (prevents orphaned CPU burners when the spawner crashes or exits
       // without cleanup — 2026-08-12 incident class).
@@ -546,8 +555,13 @@ export class WorkerProcess {
   //  Same surface as cloud adapters; handlers don't know the difference.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  /** Local engines have no per-request char limit — chunking never triggers. */
-  get maxChars() { return Infinity; }
+  /**
+   * Local engines have no per-request char limit — chunking never triggers.
+   * Exception: registry entry may set maxChars for context-limited models
+   * (audio8: 2048 packed text/audio positions) so Node-side auto-chunking
+   * splits long-form text before the worker ever sees it.
+   */
+  get maxChars() { return this.entry.maxChars ?? Infinity; }
 
   health() {
     return { status: this.state, engine: this.engineName };

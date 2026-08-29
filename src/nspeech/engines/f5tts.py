@@ -20,6 +20,7 @@ back tail of the previous batch. First audio after ~1 batch (~1-2s) instead
 of after the full render.
 """
 import gc
+import os
 import time
 from pathlib import Path
 from typing import Tuple, Generator, Dict, Any
@@ -30,32 +31,128 @@ import numpy as np
 from nspeech import config
 from f5_tts.model.utils import seed_everything
 
+# German markers for zero-dep language detection: umlauts/ß are near-decisive;
+# common function words break ties on short/umlaut-free texts.
+_DE_WORDS = frozenset(
+    "der die das und nicht ist ein eine einer eines den dem des mit für auf aus "
+    "bei nach über unter vor durch gegen um am im an sich auch noch nur schon "
+    "wie was wer wann wo von zu da aber oder wenn dann dass hat kann muss will".split()
+    # NOTE: several of these collide with English ("as", "in", "an", "at",
+    # "no", "so", "it", "hat", "can", "will") — only the unambiguous ones score.
+)
+_DE_ONLY = frozenset(
+    "der die das und nicht ist ein eine einer eines den dem des für über unter "
+    "durch gegen sich auch noch schon dass kann muss".split()
+)
+_EN_WORDS = frozenset(
+    "the and of to in is was are were be been has have had that this these those "
+    "with for on at as but not you they there where when what which".split()
+)
+
+
+def detect_language(text: str) -> str:
+    """Detect 'de' vs 'en' for narration text. Umlauts/ß are near-decisive;
+    otherwise score unambiguous function words. English wins ties (base model)."""
+    low = text.lower()
+    if "ä" in low or "ö" in low or "ü" in low or "ß" in low:
+        return "de"
+    words = low.replace(",", " ").replace(".", " ").replace("!", " ").replace("?", " ").split()
+    de = sum(1 for w in words if w in _DE_ONLY)
+    en = sum(1 for w in words if w in _EN_WORDS)
+    return "de" if de > en else "en"
+
+
+
+def _ensure_bigvgan_config(model_name: str) -> None:
+    """Create configs/<model>.yaml for bigvgan variants when the installed
+    f5_tts version doesn't ship it (identical to F5TTS_Base.yaml with
+    mel_spec_type: bigvgan). Self-heals after a venv reinstall."""
+    import f5_tts.api
+    cfg_path = Path(f5_tts.api.__file__).parent / "configs" / f"{model_name}.yaml"
+    if cfg_path.exists():
+        return
+    base = cfg_path.parent / "F5TTS_Base.yaml"
+    text = base.read_text(encoding="utf-8")
+    patched = text.replace("mel_spec_type: vocos", "mel_spec_type: bigvgan")
+    if patched == text:
+        raise RuntimeError(f"F5TTS_Base.yaml does not contain 'mel_spec_type: vocos' — cannot derive {model_name}.yaml")
+    cfg_path.write_text(patched, encoding="utf-8")
+    print(f"Synthesized {cfg_path.name} (bigvgan variant of F5TTS_Base.yaml)")
+
 
 class F5TtsAdapter:
     """TTS engine adapter for F5-TTS (flow-matching, non-autoregressive)."""
 
     def __init__(self):
-        self.engine_name = "f5tts"
+        self.engine_name = os.environ.get("NSPEECH_ENGINE", "f5tts")
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._model = None
+        # Bilingual: one checkpoint per language, lazy-loaded, both resident.
+        # 'en' → base F5TTS_v1_Base; 'de' → German fine-tune (NSPEECH_F5_CKPT_DE).
+        # The explicit f5tts-german registry engine pins NSPEECH_F5_MODEL/CKPT
+        # and uses only that checkpoint.
+        self._models = {}
         self.cache_dir = Path(config.NSPEECH_VOICE_DIR)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
     @property
     def model(self):
-        """Lazy-load F5-TTS on first request."""
-        if self._model is None:
-            from f5_tts.api import F5TTS
-            print(f"Loading F5-TTS model on {self.device} ...")
-            self._model = F5TTS(device=self.device)
-            print("F5-TTS loaded.")
-        return self._model
+        """Default model (back-compat: single-model engines / explicit override)."""
+        return self._get_model("en")
+
+    def _get_model(self, lang: str):
+        """Lazy-load the checkpoint for a language. Both stay resident
+        (~1.35GB each) — no reload penalty when language switches per request.
+
+        Env overrides (set per-engine in registry.json):
+          NSPEECH_F5_MODEL    — explicit engine: model config name (pins single model)
+          NSPEECH_F5_CKPT     — explicit engine: local checkpoint path
+          NSPEECH_F5_MODEL_DE — bilingual engine: German model config
+                                 (F5TTS_Base = vocos, F5TTS_Base_bigvgan = bigvgan)
+          NSPEECH_F5_CKPT_DE  — bilingual engine: German checkpoint path
+        """
+        if lang in self._models:
+            return self._models[lang]
+        from f5_tts.api import F5TTS
+        kwargs = {"device": self.device}
+        if os.environ.get("NSPEECH_F5_MODEL"):
+            # Explicit engine (f5tts-german): pinned single checkpoint.
+            if os.environ.get("NSPEECH_F5_CKPT"):
+                kwargs["ckpt_file"] = os.environ["NSPEECH_F5_CKPT"]
+            kwargs["model"] = os.environ["NSPEECH_F5_MODEL"]
+            label = kwargs["model"]
+        elif lang == "de" and os.environ.get("NSPEECH_F5_CKPT_DE"):
+            kwargs["model"] = os.environ.get("NSPEECH_F5_MODEL_DE", "F5TTS_Base")
+            kwargs["ckpt_file"] = os.environ["NSPEECH_F5_CKPT_DE"]
+            label = f"{kwargs['model']} + German ckpt"
+        else:
+            label = "F5TTS_v1_Base"  # base HF download
+        if str(kwargs.get("model", "")).endswith("_bigvgan"):
+            _ensure_bigvgan_config(kwargs["model"])
+        print(f"Loading F5-TTS [{lang}] on {self.device} ({label}) ...")
+        m = F5TTS(**kwargs)
+        print(f"F5-TTS [{lang}] loaded.")
+        self._models[lang] = m
+        return m
+
+    def preload(self):
+        """Warm all checkpoints this engine will use (NSPEECH_PRELOAD_MODEL
+        startup path). Bilingual f5tts loads BOTH en+de so the first request in
+        either language doesn't pay the ~10-30s model load. Explicit single-
+        checkpoint engines (f5tts-german) load their pinned model only."""
+        if os.environ.get("NSPEECH_F5_CKPT_DE") and not os.environ.get("NSPEECH_F5_MODEL"):
+            self._get_model("en")
+            self._get_model("de")
+        else:
+            # Pinned engine (NSPEECH_F5_MODEL set) or no German ckpt: one model.
+            self._get_model("en")
 
     def _voice_wav_path(self, voice_name: str) -> Path:
         return self.cache_dir / f"{voice_name}.wav"
 
     def _voice_text_path(self, voice_name: str) -> Path:
-        return self.cache_dir / f"{voice_name}.{self.engine_name}.txt"
+        # Fixed family suffix so voices (wav + transcript sidecar) are shared
+        # across f5tts and f5tts-german — same voice dir, same sidecar names.
+        return self.cache_dir / f"{voice_name}.f5tts.txt"
 
     def load_voice(self, voice_name: str, **kwargs) -> None:
         """Validate that reference audio + transcript exist for this voice."""
@@ -109,12 +206,19 @@ class F5TtsAdapter:
         nfe_step = kwargs.get("nfe_step", kwargs.get("inference_steps", 64))
         speed = kwargs.get("speed", 0.9)
         seed = kwargs.get("seed")
-        cfg_strength = kwargs.get("cfg_strength", 2.5)
         sway_sampling_coef = kwargs.get("sway_sampling_coef", -0.5)
         cross_fade_duration = kwargs.get("cross_fade_duration", 0.15)
         target_rms = kwargs.get("target_rms", 0.1)
 
         wav_path, ref_text = str(self._voice_wav_path(voice_name)), self._read_ref_text(voice_name)
+        # Language routing: explicit extra_body.language wins; else detect.
+        lang = (kwargs.get("extra_body") or {}).get("language") or detect_language(text)
+        # cfg defaults differ per model family (user-tuned by ear):
+        #  - EN v1 base: 2.5 (tightens 'scattered' timbre vs 1.5, 2026-08-18)
+        #  - DE fine-tune (older F5TTS_Base arch): 1.5 — 2.5 over-guides and
+        #    sounds metallic (user verdict 2026-08-29)
+        cfg_strength = kwargs.get("cfg_strength", 1.5 if lang == "de" else 2.5)
+        m = self._get_model(lang)
         if seed is not None:
             seed_everything(seed)
         else:
@@ -141,7 +245,6 @@ class F5TtsAdapter:
         max_chars = int(len(ref_text.encode("utf-8")) / audio_dur * (22 - audio_dur) * speed)
         batches = f5_chunk_text(text, max_chars=max_chars)
 
-        m = self.model  # loads F5TTS
         from f5_tts.model.utils import convert_char_to_pinyin
 
         hop = 256
@@ -166,10 +269,17 @@ class F5TtsAdapter:
                 )
                 generated = generated.to(torch.float32)  # fp16 mel → fp32 for vocoder
                 mel = generated[:, ref_len_frames:, :].permute(0, 2, 1)
-                wave = m.vocoder.decode(mel)
+                # vocos exposes .decode(mel); bigvgan is a forward call
+                wave = m.vocoder.decode(mel) if m.mel_spec_type == "vocos" else m.vocoder(mel)
                 if rms < target_rms:
                     wave = wave * rms / target_rms
-                return wave.squeeze().cpu().numpy()
+                arr = wave.squeeze().cpu().numpy()
+                # BigVGAN runs hotter than vocos — peak-limit to avoid
+                # hard clipping distortion downstream (s16 conversion).
+                peak = np.abs(arr).max()
+                if peak > 0.95:
+                    arr = arr * 0.95 / peak
+                return arr
 
         # SEQUENTIAL batch loop. A naive "submit all upfront" pipeline does
         # NOT lower TTFB: all batches share one CUDA context, the GPU
@@ -271,11 +381,11 @@ class F5TtsAdapter:
         }
 
     def is_loaded(self) -> bool:
-        return self._model is not None
+        return len(self._models) > 0
 
     def unload(self) -> None:
-        """Release F5-TTS model and free VRAM."""
-        self._model = None
+        """Release F5-TTS models and free VRAM."""
+        self._models = {}
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

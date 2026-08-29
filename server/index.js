@@ -17,6 +17,7 @@ import { registerSpeechCloneRoute } from './api/speech-clone.js';
 import { registerVoiceRoutes } from './api/voices.js';
 import { registerSttRoutes } from './api/transcriptions.js';
 import { registerTextRoutes } from './api/text.js';
+import { registerDefaultsRoutes } from './api/defaults.js';
 import { registerAdminRoutes } from './api/admin.js';
 
 // ── Initialize logger ───────────────────────────────────────────────────────
@@ -195,6 +196,7 @@ registerSpeechCloneRoute(app);
 registerVoiceRoutes(app);
 registerSttRoutes(app);
 registerTextRoutes(app);
+registerDefaultsRoutes(app);
 registerAdminRoutes(app);
 
 // ── Graceful shutdown ───────────────────────────────────────────────────────

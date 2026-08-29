@@ -16,6 +16,7 @@ import { pipePcmToClient } from '../transcode.js';
 import { cleanMarkdown, cleanMarkdownLLM } from '../markdown-clean.js';
 import * as presets from '../presets.js';
 import * as chunking from '../chunking.js';
+import * as defaults from '../defaults.js';
 
 const log = logger.child('speech');
 
@@ -61,6 +62,23 @@ export async function relaySpeech(request, reply, body) {
     subModel = extraBody.model ?? resolved.model;
   } catch (err) {
     return sendError(reply, err);
+  }
+
+  // ── Server-side defaults (dashboard dial-ins) ────────────────────────
+  // Fill ONLY fields the request left unset — explicit values always win.
+  // Applied before preset resolution: a preset voice request keeps its own
+  // identity; defaults still fill unset extra_body/speed for it.
+  const defKey = body.model || manager.currentEngine;
+  const def = defaults.get(defKey);
+  if (def) {
+    if (body.voice == null && def.voice != null && def.voice !== 'default') body.voice = def.voice;
+    if (body.speed == null && def.speed != null) body.speed = def.speed;
+    if (def.extra_body) {
+      for (const [k, v] of Object.entries(def.extra_body)) {
+        if (!(k in extraBody)) extraBody[k] = v;
+      }
+      log.info('defaults applied', { engine: defKey, keys: Object.keys(def.extra_body) });
+    }
   }
 
   // ── Resolve preset (Node-managed voice configuration) ──────────────────

@@ -18,6 +18,7 @@ import { MiniMaxAdapter } from './minimax.js';
 import { ElevenLabsAdapter } from './elevenlabs.js';
 import { XaiAdapter } from './xai.js';
 import { GeminiAdapter } from './gemini.js';
+import { FishAdapter } from './fish.js';
 import { logger } from '../logger.js';
 
 const log = logger.child('cloud');
@@ -60,6 +61,13 @@ _register('gemini', GeminiAdapter, [
   'gemini-3.1-flash-tts-preview',
   'gemini_3_1_flash_tts_preview',
   'gemini_3_1_flash_tts',
+]);
+
+_register('fish', FishAdapter, [
+  'fish_s2_1_pro_free',
+  'fish_s2_1_pro',
+  'fish_s2_pro',
+  'fish_s1',
 ]);
 
 /**

@@ -15,26 +15,27 @@
     "worker_module": "nspeech.worker_server",
     "gpu": true
   },
-  "chatterbox-eng": {
-    "venv_python": "venv/chatterbox/env/Scripts/python.exe",
-    "worker_module": "nspeech.worker_server",
-    "gpu": true
-  },
-  "chatterbox-mtl": {
-    "venv_python": "venv/chatterbox/env/Scripts/python.exe",
-    "worker_module": "nspeech.worker_server",
-    "gpu": true
-  },
-  "dots": {
-    "venv_python": "venv/dots/env/Scripts/python.exe",
-    "worker_module": "nspeech.worker_server",
-    "gpu": true
-  },
   "f5tts": {
     "venv_python": "venv/f5tts/env/Scripts/python.exe",
     "worker_module": "nspeech.worker_server",
     "gpu": true,
-    "health_check_timeout_ms": 180000
+    "health_check_timeout_ms": 180000,
+    "env": {
+      "NSPEECH_F5_CKPT_DE": "venv/f5tts/models/F5-TTS-German/model_420000.safetensors"
+    }
+  },
+  "f5tts-german": {
+    "venv_python": "venv/f5tts/env/Scripts/python.exe",
+    "worker_module": "nspeech.worker_server",
+    "gpu": true,
+    "health_check_timeout_ms": 180000,
+    "voice_dir": "venv/f5tts/voices",
+    "model_dir": "venv/f5tts/models",
+    "api_hidden": true,
+    "env": {
+      "NSPEECH_F5_MODEL": "F5TTS_Base",
+      "NSPEECH_F5_CKPT": "venv/f5tts/models/F5-TTS-German/model_420000.safetensors"
+    }
   },
   "vibevoice": {
     "venv_python": "venv/vibevoice/env/Scripts/python.exe",

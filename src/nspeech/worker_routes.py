@@ -92,9 +92,12 @@ def create_app(engine_name: str) -> FastAPI:
         async def preload_model():
             def _preload():
                 adapter = get_engine(engine_name)
-                # Touch the heavy attribute — adapters load models lazily
-                # behind a property (e.g. F5TtsAdapter.model).
-                if hasattr(adapter, "model"):
+                # Adapters with a preload() warm everything they need
+                # (e.g. F5TtsAdapter.preload loads BOTH bilingual checkpoints).
+                # Others load lazily behind a property — touch it.
+                if hasattr(adapter, "preload"):
+                    adapter.preload()
+                elif hasattr(adapter, "model"):
                     _ = adapter.model
                 info(
                     f"model preloaded: {engine_name}",
@@ -211,7 +214,10 @@ def create_app(engine_name: str) -> FastAPI:
         # usable voice until the adapter extracts conditionals into a .pt file.
         # Only list .wav files that have a corresponding .pt cache.
         is_chatterbox = engine_name.startswith("chatterbox")
-        is_f5tts = engine_name == "f5tts"
+        # Engines that require a transcript sidecar next to the ref wav —
+        # a bare .wav is unusable for them.
+        transcript_sidecars = {"f5tts": ".f5tts.txt", "f5tts-german": ".f5tts.txt"}
+        sidecar_ext = transcript_sidecars.get(engine_name)
         for wav_path in voice_dir.glob("*.wav"):
             base = wav_path.stem
             if base.startswith("__preview__"):
@@ -222,10 +228,9 @@ def create_app(engine_name: str) -> FastAPI:
                 pt_check = wav_path.with_suffix(".pt")
                 if not pt_check.exists():
                     continue
-            if is_f5tts:
-                # F5-TTS needs the transcript sidecar — a bare .wav is unusable.
-                txt_check = voice_dir / f"{base}.f5tts.txt"
-                if not txt_check.exists():
+            if sidecar_ext:
+                # Transcript sidecar required — a bare .wav is unusable.
+                if not (voice_dir / f"{base}{sidecar_ext}").exists():
                     continue
             voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
             existing.add(base)
@@ -251,14 +256,7 @@ def create_app(engine_name: str) -> FastAPI:
                 voices.append({"voice_id": base, "name": base, "category": "blended", "voice_type": "blended"})
             existing.add(base)
 
-        # dots.tts sidecars
-        for json_path in voice_dir.glob("*.dots.json"):
-            base = json_path.name[:-len(".dots.json")]
-            if base not in existing:
-                voices.append({"voice_id": base, "name": base, "category": "cloned", "voice_type": "cloned"})
-                existing.add(base)
-
-        # F5-TTS sidecars (.f5tts.txt transcript files)
+        # Transcript sidecars (.f5tts.txt files)
         for txt_path in voice_dir.glob("*.f5tts.txt"):
             base = txt_path.name[:-len(".f5tts.txt")]
             if base not in existing:
@@ -643,7 +641,7 @@ def create_app(engine_name: str) -> FastAPI:
         voice_dir = _voice_dir()
         deleted = []
         for dir_path in (voice_dir, voice_dir / "previews"):
-            for ext in (".wav", ".pt", ".dots.json"):
+            for ext in (".wav", ".pt", ".f5tts.txt"):
                 p = dir_path / f"{voice_id}{ext}"
                 if p.exists():
                     p.unlink()

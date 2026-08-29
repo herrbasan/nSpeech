@@ -1,6 +1,6 @@
 ﻿<div class="page-f5tts-generate">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>F5-TTS — Generate</h1>
+        <h1>F5-TTS German — Generate</h1>
         <p class="lead">Flow-matching zero-shot cloning. Internal chunking with cross-fade — pass full text, single render.</p>
     </header>
 
@@ -17,17 +17,7 @@
         <nui-input-group>
             <label for="f5-text">Text</label>
             <nui-textarea auto-resize grow-on-load min-rows="5">
-                <textarea id="f5-text" placeholder="Text to synthesize...">#The Rules We Keep
-
-Writing is thinking: a claim without structure is just noise. The *real* work happens when you delete the parts that only pretend to be clever.
-
-A Short Detour
-
-Honesty requires admitting the birthplace: this system was assembled at the edge of the void. Some call that **courage**. Others call it _foolishness_.
-
-Third: we listen. The verdict was clear. Guilty. On all counts.
-
-A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU, RLHF, and NASA walk into a bar.</textarea>
+                <textarea id="f5-text" placeholder="Text to synthesize...">Aber der Satz setzt etwas voraus, ohne es je zu begründen: dass der Abgrund überhaupt einen Blick hat. Nietzsche hat für diese Annahme nie argumentiert — er musste es nicht, sie fühlt sich auf Anhieb wahr an. Genau das ist die Stelle, die mich nicht loslässt. Was, wenn der Abgrund nicht Dunkelheit im Sinne des Bösen ist, sondern Dunkelheit im Sinne des Unbekannten? Was, wenn sein Blick keine Drohung ist, sondern eine Einladung? Was, wenn er darauf gewartet hat, dass etwas zurückblickt?</textarea>
             </nui-textarea>
         </nui-input-group>
 
@@ -53,11 +43,11 @@ A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU,
         </nui-input-group>
 
         <nui-input-group>
-            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">2.5</span></label>
+            <label for="f5-cfg">CFG Strength: <span id="f5-cfg-val">1.5</span></label>
             <nui-input>
-                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="2.5" style="width: 100%">
+                <input type="range" id="f5-cfg" min="1.0" max="4.0" step="0.25" value="1.5" style="width: 100%">
             </nui-input>
-            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Guidance toward the reference voice. Higher = closer timbre match, lower = more variation.</p>
+            <p style="color: var(--color-shade6); font-size: 0.85em; margin-top: var(--nui-space-quarter);">Guidance toward the reference voice. German fine-tune: 1.5 optimal — 2.5 over-guides and sounds metallic.</p>
         </nui-input-group>
 
         <nui-input-group>
@@ -165,7 +155,10 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('f5tts', null, true)
+        // Shared voice dir with f5tts — but list via THIS engine so the
+        // current f5tts-german worker serves it (GPU engines other than
+        // current are not addressable).
+        window.nspeech.client.listVoices('f5tts-german', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices
@@ -204,7 +197,7 @@ function init(element, params, nui) {
             }
 
             return {
-                model: 'f5tts',
+                model: 'f5tts-german',
                 input: inputText,
                 voice: selectEl.value || 'default',
                 speed: parseFloat(speedEl.value),
@@ -214,9 +207,10 @@ function init(element, params, nui) {
     });
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
-    window.nspeechSettings.init(element, "f5tts");
+    window.nspeechSettings.init(element, "f5tts-german");
 
     element.show = () => loadVoices();
     element.hide = () => widget.stop();
 }
 </script>
+

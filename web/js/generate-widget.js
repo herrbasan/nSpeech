@@ -52,6 +52,32 @@ export function mountGenerate(element, { filename = 'speech.mp3', buildParams })
     if (typeof buildParams !== 'function') throw new Error('mountGenerate: buildParams required');
     injectStyles();
 
+    // ── Server-defaults save hook (from nspeechSettings' Save button) ────
+    // Derives the current dial-in from buildParams (minus the text content)
+    // and PUTs it to /v1/defaults/<engine>. The relay applies saved defaults
+    // to API calls that omit the field.
+    element.addEventListener('nspeech-save-defaults', (e) => {
+        let params = null;
+        try { params = buildParams(); } catch { params = null; }
+        if (!params || !params.model) {
+            if (e.detail?.button) {
+                const b = e.detail.button.querySelector('button');
+                b.textContent = 'Enter text first';
+                setTimeout(() => { b.textContent = 'Save as Default'; }, 2000);
+            }
+            return;
+        }
+        const payload = {};
+        if (params.voice && params.voice !== 'default') payload.voice = params.voice;
+        if (params.speed != null) payload.speed = params.speed;
+        if (params.extraBody && Object.keys(params.extraBody).length) payload.extra_body = params.extraBody;
+        fetch('/v1/defaults/' + encodeURIComponent(params.model), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        }).catch((err) => console.warn('server defaults save failed:', err.message));
+    });
+
     // ── DOM ─────────────────────────────────────────────────────────────
     // The media player wraps a persistent <audio>; SpeechPlayer plays through
     // it (external audio mode) so the component's own listeners stay attached.

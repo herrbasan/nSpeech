@@ -83,17 +83,19 @@ def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
         _engine_last_used[engine_name] = time.time()
         return _engine_cache[engine_name]
 
-    # Chatterbox model variants share one adapter module but load different
-    # model classes. Map chatterbox-turbo/eng/mtl → chatterbox adapter with
-    # a model_type argument. Each variant has its own voice directory.
+    # Chatterbox: only turbo remains; it shares the chatterbox adapter module
+    # with a model_type argument.
     CHATTERBOX_MODELS = {
         "chatterbox-turbo": "turbo",
-        "chatterbox-eng": "eng",
-        "chatterbox-mtl": "mtl",
     }
+    # F5 family — f5tts-german shares the f5tts adapter module; the German
+    # checkpoint is selected via NSPEECH_F5_MODEL/NSPEECH_F5_CKPT env (set
+    # per-engine in registry.json).
+    F5_MODULE_ALIAS = {"f5tts-german": "f5tts"}
     # Explicit adapter class names for engines whose .title() doesn't match.
     ADAPTER_CLASSES = {
         "f5tts": "F5TtsAdapter",
+        "f5tts-german": "F5TtsAdapter",
         "vibevoice": "VibevoiceAdapter",
     }
     if engine_name in CHATTERBOX_MODELS:
@@ -102,11 +104,13 @@ def get_engine(engine_name: str = None) -> TTSAdapterProtocol:
         print(f"Loading engine {engine_name} into memory (model={CHATTERBOX_MODELS[engine_name]})...")
         adapter_instance = adapter_class(model_type=CHATTERBOX_MODELS[engine_name])
     else:
-        # Lazy dynamic import from src/nspeech/engines/
+        # Lazy dynamic import from src/nspeech/engines/ (family aliases resolve
+        # to the shared module, e.g. f5tts-german → nspeech.engines.f5tts)
+        module_name = F5_MODULE_ALIAS.get(engine_name, engine_name)
         try:
-            module = importlib.import_module(f"nspeech.engines.{engine_name}")
+            module = importlib.import_module(f"nspeech.engines.{module_name}")
         except ModuleNotFoundError as e:
-            raise ValueError(f"TTS Engine '{engine_name}' not found. Make sure src/nspeech/engines/{engine_name}.py exists.") from e
+            raise ValueError(f"TTS Engine '{engine_name}' not found. Make sure src/nspeech/engines/{module_name}.py exists.") from e
 
         if engine_name in ADAPTER_CLASSES:
             class_name = ADAPTER_CLASSES[engine_name]

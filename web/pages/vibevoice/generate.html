@@ -183,6 +183,7 @@ function init(element, params, nui) {
     });
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+    window.nspeechSettings.init(element, "vibevoice");
 
     element.show = () => loadVoices();
     element.hide = () => widget.stop();

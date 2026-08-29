@@ -1,7 +1,7 @@
-﻿<div class="page-chatterbox-mtl-generate">
+﻿<div class="page-chatterbox-generate">
     <header style="margin-bottom: var(--nui-space-double)">
-        <h1>Chatterbox Multilingual — Generate</h1>
-        <p class="lead">500M model. 23 languages with auto-detect. Exaggeration tuning supported.</p>
+        <h1>Chatterbox — Generate</h1>
+        <p class="lead">Zero-shot voice cloning TTS with per-sentence streaming.</p>
     </header>
 
     <nui-card>
@@ -10,6 +10,17 @@
             <nui-select id="voice-select">
                 <select id="cb-voice">
                     <option value="default" selected>Select a cloned voice...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="cb-model">Model</label>
+            <nui-select>
+                <select id="cb-model">
+                    <option value="turbo" selected>Turbo (350M, paralinguistic)</option>
+                    <option value="eng">English (500M, exaggeration)</option>
+                    <option value="mtl">Multilingual (500M, 23 languages)</option>
                 </select>
             </nui-select>
         </nui-input-group>
@@ -41,7 +52,7 @@
         <nui-input-group>
             <label for="cb-text">Text</label>
             <nui-textarea auto-resize max-rows="8" min-rows="5">
-                <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox Multilingual system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
+                <textarea id="cb-text" placeholder="Text to synthesize...">This is a test of the Chatterbox streaming system. Zero-shot voice cloning allows the engine to reproduce any speaker from just a few seconds of reference audio.</textarea>
             </nui-textarea>
         </nui-input-group>
 
@@ -82,12 +93,14 @@ function init(element, params, nui) {
     const textArea = element.querySelector('#cb-text');
     const exaggerationEl = element.querySelector('#cb-exaggeration');
     const languageEl = element.querySelector('#cb-language');
+    const modelEl = element.querySelector('#cb-model');
     const exagValEl = element.querySelector('#cb-exag-val');
     const arenaBtn = element.querySelector('#btn-arena-sample');
     const arenaInfo = element.querySelector('#cb-arena-info');
     const batchEl = element.querySelector('#cb-batch');
     const generateBtn = element.querySelector('#btn-generate');
 
+    // Manual auto-resize fallback
     function autoResize(ta) {
         ta.style.height = 'auto';
         ta.style.height = ta.scrollHeight + 'px';
@@ -111,7 +124,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('chatterbox-mtl', null, true)
+        window.nspeech.client.listVoices('chatterbox', null, true)
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices
@@ -126,17 +139,18 @@ function init(element, params, nui) {
 
     // ── Generate via the shared widget (player + progress) ─────────────
     const widget = mountGenerate(element, {
-        filename: 'chatterbox-mtl-speech.mp3',
+        filename: 'chatterbox-speech.mp3',
         buildParams: () => {
             const text = textArea.value.trim();
             if (!text) return null;
             const eb = {
                 expressiveness: parseFloat(exaggerationEl.value),
                 language: languageEl.value || undefined,
+                model: modelEl.value || undefined,
                 batch: batchEl.checked,
             };
             return {
-                model: 'chatterbox-mtl',
+                model: 'chatterbox',
                 input: text,
                 voice: selectEl.value || 'default',
                 extraBody: eb,
@@ -149,6 +163,7 @@ function init(element, params, nui) {
     exaggerationEl.addEventListener('input', () => {
         exagValEl.textContent = exaggerationEl.value;
     });
+    window.nspeechSettings.init(element, "chatterbox");
 
     element.show = () => loadVoices();
     element.hide = () => widget.stop();

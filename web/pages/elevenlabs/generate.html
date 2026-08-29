@@ -165,6 +165,7 @@ function init(element, params, nui) {
     });
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
+    window.nspeechSettings.init(element, "elevenlabs");
 
     element.show = function() { loadVoices(); };
     element.hide = function() { widget.stop(); };

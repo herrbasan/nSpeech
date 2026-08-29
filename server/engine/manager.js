@@ -31,6 +31,9 @@ export class EngineManager {
 
     /** Current default engine (used for voice management endpoints). */
     this.currentEngine = null;
+    // Voice listing may address api_hidden engines by name (dashboard pages
+    // list voices from their own engine). Generation may not — see getEngine.
+    this._allowHiddenLookup = false;
 
     /** Mutex for serialized engine switching. */
     this._switchLock = Promise.resolve();
@@ -128,14 +131,23 @@ export class EngineManager {
     // The dashboard's per-engine pages target specific local engines by
     // name (kokoro, chatterbox-turbo, etc.). getWorker() handles venv checks,
     // lazy spawning, and GPU exclusion.
-    if (getEntry(resolved)) {
+    const entry = getEntry(resolved);
+    if (entry) {
+      // Dashboard-only engines (api_hidden) are not API-addressable by name
+      // for GENERATION — the bilingual f5tts covers both languages. They stay
+      // fully usable via the dashboard (engine switch makes them current, and
+      // their pages address them by name), including voice listing.
+      if (entry.api_hidden && resolved !== this.currentEngine && !this._allowHiddenLookup) {
+        throw new WorkerError(404, 'engine_not_found',
+          `Model "${resolved}" is dashboard-only. Use "f5tts" (bilingual EN/DE) instead.`);
+      }
       const worker = await this.getWorker(resolved);
       return { engine: worker, model: null };
     }
 
     // ── Unknown engine ───────────────────────────────────────────────────
     throw new WorkerError(404, 'engine_not_found',
-      `Unknown model: "${resolved}". Available: nspeech, minimax, elevenlabs, gemini, xai.`);
+      `Unknown model: "${resolved}". Available: nspeech, minimax, elevenlabs, gemini, xai, fish.`);
   }
 
   /**
