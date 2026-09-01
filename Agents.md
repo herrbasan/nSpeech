@@ -52,6 +52,14 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-01 — F5 language misdetection fixed (English → German model)
+
+- **Bug:** one umlaut in an English text (loanword/name like "Übermensch") short-circuited `detect_language` to `de` — English prose quoting German philosophy rendered through the German checkpoint. Reproduced with the real function; typical chat-app texts hit it.
+- **Fix:** weighted scoring, no short-circuit — umlaut/ß +2 per occurrence, unambiguous German function word +1, EN function word +1, ties → EN. `"Time to die."` homograph case fixed as a side effect (was `de`).
+- **defaults.json:** removed the language-dependent `cfg_strength: 1.5` pin (dialed in for Simon_DE); it globally overrode the adapter's per-language cfg (DE 1.5 / EN 2.5) via the relay's fill-only-unset merge. Language-neutral knobs (`nfe_step`, `sway_sampling_coef`) kept.
+- Verified: EN plain, EN + umlaut loanword, EN + German quotes → en; log's real German fixture, umlaut-free German → de.
+- Note for future: per-engine server defaults must stay **language-neutral** for bilingual engines — the adapter owns per-language tuning when the field is unset.
+
 ### 2026-08-29 — Engine cleanup: dots, Audio8, IndexTTS2, Chatterbox eng/mtl retired
 
 **Focus:** Shed engines made redundant by F5. Findings preserved in **[docs/ENGINE_TRIALS.md](docs/ENGINE_TRIALS.md)** — verdicts, root causes, and the cross-cutting trial-decision patterns (prosody-source test, ≥5× RT bar, cfg-before-vocoder).
@@ -66,7 +74,7 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 **Focus:** Local German quality. Base F5 on German = "sudo German" (English pronunciation forced, gibberish-adjacent) — abandoned for DE. Fish S2 German solid but monotone (cloud fallback only).
 
 - **Checkpoint**: `aihpi/F5-TTS-German` (HPI, CC-BY-NC-4.0) `model_420000.safetensors` at `venv/f5tts/models/F5-TTS-German/`. User verdict with German ref voice (Melon_DE): "quite good" — prime local German engine. Metallic sheen = **cfg over-guidance, not the vocoder** — cfg 1.5 (vs EN's 2.5) eliminates it; adapter defaults cfg per language. bigvgan detour unnecessary (machinery kept, registry on vocos).
-- **Bilingual `f5tts` engine**: two lazy-loaded resident checkpoints — EN `F5TTS_v1_Base`, DE German-420k. Per-request routing: `extra_body.language: 'de'|'en'` explicit, else zero-dep heuristic (`detect_language`: umlauts/ß near-decisive, unambiguous function words break ties, EN wins ties). Both resident ~1.4GB allocated — well within the 4-6GB budget.
+- **Bilingual `f5tts` engine**: two lazy-loaded resident checkpoints — EN `F5TTS_v1_Base`, DE German-420k. Per-request routing: `extra_body.language: 'de'|'en'` explicit, else zero-dep heuristic (`detect_language`: default EN — umlauts/ß weigh +2 each but are not decisive (loanwords like "Übermensch" in English text must not flip the render); unambiguous German function words +1, EN function words +1, ties → EN). Both resident ~1.4GB allocated — well within the 4-6GB budget.
 - **Mechanism**: registry `env` overrides (new in worker.js — spreads `entry.env` into worker env, resolves `*_CKPT/*_FILE/*_PATH` against project root). `NSPEECH_F5_CKPT_DE` on `f5tts`; explicit `f5tts-german` engine pins the German checkpoint only.
 - Voices shared across both (sidecar suffix fixed `.f5tts.txt`). Dashboard pages `web/pages/f5tts-german/` (manual override engine).
 - Smoke: DE 6.7s/6.8s + EN 5.9s/3.7s in one process, both models resident (`scripts/smoke-f5-bilingual.py`).

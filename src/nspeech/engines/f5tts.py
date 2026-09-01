@@ -31,15 +31,10 @@ import numpy as np
 from nspeech import config
 from f5_tts.model.utils import seed_everything
 
-# German markers for zero-dep language detection: umlauts/ß are near-decisive;
-# common function words break ties on short/umlaut-free texts.
-_DE_WORDS = frozenset(
-    "der die das und nicht ist ein eine einer eines den dem des mit für auf aus "
-    "bei nach über unter vor durch gegen um am im an sich auch noch nur schon "
-    "wie was wer wann wo von zu da aber oder wenn dann dass hat kann muss will".split()
-    # NOTE: several of these collide with English ("as", "in", "an", "at",
-    # "no", "so", "it", "hat", "can", "will") — only the unambiguous ones score.
-)
+# German markers for zero-dep language detection.
+# _DE_ONLY: unambiguous German function words (no English homographs —
+# note "die" is kept despite the English verb; any English text carries far
+# more English function words than the odd "die" mention can outweigh).
 _DE_ONLY = frozenset(
     "der die das und nicht ist ein eine einer eines den dem des für über unter "
     "durch gegen sich auch noch schon dass kann muss".split()
@@ -48,17 +43,27 @@ _EN_WORDS = frozenset(
     "the and of to in is was are were be been has have had that this these those "
     "with for on at as but not you they there where when what which".split()
 )
+# Umlauts/ß never occur in native English prose but DO occur in English texts
+# quoting German terms/names (Übermensch, Göttin, Straße) — weighted evidence,
+# never a verdict on their own.
+_UMLAUTS = ("ä", "ö", "ü", "ß")
+_UMLAUT_WEIGHT = 2
 
 
 def detect_language(text: str) -> str:
-    """Detect 'de' vs 'en' for narration text. Umlauts/ß are near-decisive;
-    otherwise score unambiguous function words. English wins ties (base model)."""
+    """Detect 'de' vs 'en' for narration text. Default is ENGLISH: the German
+    checkpoint only runs when German evidence forms a weighted majority.
+    Scoring: umlaut/ß occurrence +2 (weighted, not decisive — one loanword in
+    an English text must not flip the render), unambiguous German function
+    word +1, English function word +1, ties → en (base model)."""
     low = text.lower()
-    if "ä" in low or "ö" in low or "ü" in low or "ß" in low:
-        return "de"
-    words = low.replace(",", " ").replace(".", " ").replace("!", " ").replace("?", " ").split()
-    de = sum(1 for w in words if w in _DE_ONLY)
-    en = sum(1 for w in words if w in _EN_WORDS)
+    de = sum(low.count(c) for c in _UMLAUTS) * _UMLAUT_WEIGHT
+    en = 0
+    for w in low.replace(",", " ").replace(".", " ").replace("!", " ").replace("?", " ").split():
+        if w in _DE_ONLY:
+            de += 1
+        elif w in _EN_WORDS:
+            en += 1
     return "de" if de > en else "en"
 
 
