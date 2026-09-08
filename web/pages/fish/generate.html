@@ -9,10 +9,7 @@
             <label for="fish-model">Model</label>
             <nui-select id="fish-model-select">
                 <select id="fish-model">
-                    <option value="fish" selected>s2.1-pro-free (free tier)</option>
-                    <option value="fish_s2_1_pro">s2.1-pro (paid)</option>
-                    <option value="fish_s2_pro">s2-pro (paid, prev. gen)</option>
-                    <option value="fish_s1">s1 (prev. gen, (emotion) tags)</option>
+                    <option value="" disabled selected>Loading models...</option>
                 </select>
             </nui-select>
         </nui-input-group>
@@ -78,7 +75,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('fish', null, true)
+        window.nspeech.client.listVoices('fish')
             .then(d => {
                 const voices = (d.voices || []).filter(v => v.category === 'cloned');
                 if (!voices.length) {
@@ -113,6 +110,7 @@ function init(element, params, nui) {
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
     window.nspeechSettings.init(element, "fish");
+    window.nspeechLoadModels(modelEl, 'fish');
 
     element.show = () => loadVoices();
     element.hide = () => widget.stop();

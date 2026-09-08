@@ -6,6 +6,15 @@
 
     <nui-card>
         <nui-input-group>
+            <label for="gem-model">Model</label>
+            <nui-select id="gem-model-select">
+                <select id="gem-model">
+                    <option value="" disabled selected>Loading models...</option>
+                </select>
+            </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
             <label for="gem-voice">Voice</label>
             <nui-select id="gem-voice-select">
                 <select id="gem-voice">
@@ -56,6 +65,7 @@ This is from a conversation with an LLM, and is of the type I use TTS for.</text
 const mountGenerate = window.nspeechMountGenerate;
 
 function init(element, params, nui) {
+    const modelEl = element.querySelector('#gem-model');
     const voiceSelect = element.querySelector('#gem-voice-select');
     const selectEl = element.querySelector('#gem-voice');
     const instructionsEl = element.querySelector('#gem-instructions');
@@ -64,7 +74,7 @@ function init(element, params, nui) {
     const generateBtn = element.querySelector('#btn-generate');
 
     function loadVoices() {
-        window.nspeech.client.listVoices('gemini', null, true)
+        window.nspeech.client.listVoices('gemini')
             .then(d => {
                 const voices = d.voices || [];
                 const presets = [];
@@ -98,7 +108,7 @@ function init(element, params, nui) {
             const eb = {};
             if (batchEl.checked) eb.batch = true;
             const params = {
-                model: 'gemini',
+                model: modelEl.value || 'gemini',
                 input: text,
                 voice: selectEl.value || 'default',
                 extraBody: eb,
@@ -111,6 +121,7 @@ function init(element, params, nui) {
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
     window.nspeechSettings.init(element, "gemini");
+    window.nspeechLoadModels(modelEl, 'gemini');
 
     element.show = () => loadVoices();
     element.hide = () => widget.stop();

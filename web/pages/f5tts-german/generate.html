@@ -158,7 +158,7 @@ function init(element, params, nui) {
         // Shared voice dir with f5tts — but list via THIS engine so the
         // current f5tts-german worker serves it (GPU engines other than
         // current are not addressable).
-        window.nspeech.client.listVoices('f5tts-german', null, true)
+        window.nspeech.client.listVoices('f5tts-german')
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices

@@ -52,6 +52,18 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-08 — Cloud models exposed to clients + dashboard model selectors
+
+**Focus:** Report each cloud provider's available models to clients and make the dashboard select among them, instead of hard-coding provider defaults.
+
+- **Cloud registry (`server/cloud/registry.js`)** is now the single source of truth for available models. Each provider registers `models: [{ id, provider, label, default }]` plus legacy `aliases` (extra accepted model ids → canonical id). `resolveCloud` matches exact ids and aliases (dropped the fragile underscore→hyphen `normalizeSubModel`); a bare engine prefix still aliases to the provider's default. `listCloudEngines()` returns `{ name, type, models, defaultModel, health }`.
+- **Fixed ElevenLabs bug:** `eleven_v3` (the adapter's default) was not addressable via `resolveCloud` (it doesn't start with `elevenlabs_`) — the dashboard's default `eleven_v3` would 404. Now `eleven_v3` is a canonical model; `elevenlabs_turbo_v2_5` etc. are legacy aliases.
+- **`GET /v1/models`** enriches cloud entries with `engine`, `provider_model`, `label`, `default` (and local entries get `engine`/`default`). **`GET /v1/admin/engines`** cloud entries now carry `models` (objects) + `defaultModel`.
+- **SDK** adds `listEngineModels(engine)` — filters `/v1/models` by engine for a clean model-selector feed.
+- **Dashboard** adds `window.nspeechLoadModels(selectEl, engine)` (in `dashboard.js`) — fetches an engine's models and fills the `<select>`, pre-selecting the provider default unless a saved model was restored. All 5 cloud generate pages (minimax, elevenlabs, gemini, xai, fish) now use it, replacing hard-coded option lists; `buildParams` sends the public model slug as `model`.
+- **Client caching + refresh:** model list is cached (in-memory + localStorage, 15-min TTL) so navigating between pages is instant; a stale cache missing the new `engine` field is discarded. Voice lists now use the SDK's in-memory `VoiceCache` (removed the `forceRefresh` flag from all 10 generate pages — they were re-fetching from the provider on every page load). `warmUpCaches()` runs on dashboard start: pre-fetches the model list + all cloud engines' voice lists in the background (cloud adapters run in Node, no worker spawn; local engine voices remain lazy — listing them is what starts that worker). A **Refresh** button in the dashboard header (`data-action="refresh-data"` → `nspeechRefreshData()`) clears both caches and reloads to re-fetch.
+- Docs updated (`documentation/API_REFERENCE.md`): model field points to `/v1/models`; `/v1/models` and `/v1/admin/engines` sections document the new metadata, `model`-selection semantics (bare prefix / slug / legacy alias), and the SDK `listModels()`/`listEngineModels(engine)` helpers. `documentation/nSpeech_Spec.md` §4.4 rewritten for the new explicit model catalog + aliases.
+
 ### 2026-09-01 — F5 language misdetection fixed (English → German model)
 
 - **Bug:** one umlaut in an English text (loanword/name like "Übermensch") short-circuited `detect_language` to `de` — English prose quoting German philosophy rendered through the German checkpoint. Reproduced with the real function; typical chat-app texts hit it.

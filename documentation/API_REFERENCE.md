@@ -97,7 +97,7 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `model` | string | `"nspeech"` | Engine selector. **Public values:** `"nspeech"` (dashboard-selected local engine), `"minimax"`, `"elevenlabs"`, `"gemini"`, `"xai"`. Cloud sub-models: `"minimax_speech_2_8_hd"`, `"elevenlabs_turbo_v2_5"`. Old local names (`kokoro`, `dots`, etc.) are rejected — use `"nspeech"` and switch via dashboard. |
+| `model` | string | `"nspeech"` | Engine selector. **Public values:** `"nspeech"` (dashboard-selected local engine), `"minimax"`, `"elevenlabs"`, `"gemini"`, `"xai"`. Cloud sub-models: `"minimax_speech_2_8_hd"`, `"eleven_v3"`, `"elevenlabs_turbo_v2_5"` (legacy alias). The authoritative list of available models (with display labels and defaults) is `GET /v1/models`. Old local names (`kokoro`, `dots`, etc.) are rejected — use `"nspeech"` and switch via dashboard. |
 | `input` | string | **required** | Text to synthesize. |
 | `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in Chatterbox. |
 | `response_format` | string | `"mp3"` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`, `pcm_f32`. |
@@ -130,7 +130,7 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `model` | string | Sub-model variant. e.g. `speech-2.8-turbo` (MiniMax), `eleven_turbo_v2_5` (ElevenLabs). |
+| `model` | string | Sub-model override (provider-native id). e.g. `speech-2.8-turbo` (MiniMax), `eleven_v3` (ElevenLabs). Overrides the sub-model chosen by the top-level `model` slug. |
 | `blend` | array | Up to 4 `{voice_id, weight}` pairs. Weight: 1–100. |
 
 #### Audio Output
@@ -184,7 +184,7 @@ Raw audio bytes with `Content-Type` per format. Every streaming response carries
 
 ## Engine Capabilities
 
-The `model` field selects a provider. Each provider has different strengths, price points, and supported `extra_body` fields.
+The `model` field selects a provider. Each provider has different strengths, price points, and supported `extra_body` fields. Each cloud provider also exposes multiple **sub-models** — list them via `GET /v1/models` (or `listEngineModels` in the SDK) and select one by passing its slug as `model` (e.g. `"minimax_speech_2_8_hd"`).
 
 ### Choosing an engine
 
@@ -311,16 +311,48 @@ OpenAI-style model list. Everything usable **without switching engines**:
 
 GPU engines other than the current one are excluded (they require a switch).
 
+Cloud model entries carry the engine's model catalog. Each entry:
+
+| Field | Meaning |
+|-------|---------|
+| `id` | Public model slug — pass as the top-level `model` field |
+| `engine` | Cloud provider id (`minimax`, `elevenlabs`, `gemini`, `xai`, `fish`) |
+| `provider_model` | Native model name sent to the provider API |
+| `label` | Display name (dashboard / docs) |
+| `default` | `true` for the provider's default (a bare engine prefix aliases to it) |
+
 ```json
 {
   "object": "list",
   "data": [
-    { "id": "nspeech", "object": "model", "owned_by": "nspeech" },
-    { "id": "kokoro", "object": "model", "owned_by": "nspeech" },
-    { "id": "minimax_speech_2_8_hd", "object": "model", "owned_by": "minimax" }
+    { "id": "nspeech", "object": "model", "owned_by": "nspeech", "engine": "nspeech" },
+    { "id": "kokoro", "object": "model", "owned_by": "nspeech", "engine": "kokoro" },
+    {
+      "id": "minimax_speech_2_8_hd",
+      "object": "model",
+      "owned_by": "minimax",
+      "engine": "minimax",
+      "provider_model": "speech-2.8-hd",
+      "label": "MiniMax Speech 2.8 HD",
+      "default": false
+    }
   ]
 }
 ```
+
+**Selecting a model** — the top-level `model` field accepts:
+
+| Value | Result |
+|-------|--------|
+| `"nspeech"` | The dashboard-selected local engine |
+| Local engine name (`"kokoro"`) | That resident local engine |
+| Cloud bare prefix (`"minimax"`) | The provider's default model |
+| Cloud model slug (`"minimax_speech_2_8_hd"`) | That specific model |
+| Legacy alias (`"elevenlabs_turbo_v2_5"`) | Resolves to its canonical model |
+
+`extra_body.model` overrides the sub-model with a provider-native id (e.g. `"speech-2.8-hd"`) when you don't want the full-slug form.
+
+**SDK:** `NSpeechClient.listModels()` returns the full model list; `NSpeechClient.listEngineModels(engine)` filters it to a single engine (the dashboard uses this to populate model selectors).
 
 ### `GET /v1/admin/engines`
 
@@ -329,7 +361,7 @@ GPU engines other than the current one are excluded (they require a switch).
   "current": "kokoro",
   "engines": [
     {"name": "kokoro", "type": "local", "gpu": false, "venv_exists": true, "is_current": false, "is_loaded": false},
-    {"name": "minimax", "type": "cloud", "health": "ready", "is_current": false, "is_loaded": true}
+    {"name": "minimax", "type": "cloud", "models": [{"id": "minimax_speech_2_8_turbo", "provider": "speech-2.8-turbo", "label": "MiniMax Speech 2.8 Turbo", "default": true}], "defaultModel": "minimax_speech_2_8_turbo", "health": "ready", "is_current": false, "is_loaded": true}
   ]
 }
 ```

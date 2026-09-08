@@ -238,6 +238,8 @@ export function registerAdminRoutes(app) {
       id: 'nspeech',
       object: 'model',
       owned_by: 'nspeech',
+      engine: 'nspeech',
+      default: true,
       description: `Current local engine (${manager.currentEngine})`,
     });
 
@@ -253,6 +255,8 @@ export function registerAdminRoutes(app) {
         id: name,
         object: 'model',
         owned_by: 'nspeech',
+        engine: name,
+        default: name === manager.currentEngine,
         description: entry.gpu ? 'Local GPU engine (current)' : 'Local engine (always available)',
       });
     }
@@ -260,10 +264,14 @@ export function registerAdminRoutes(app) {
     for (const c of listCloudEngines()) {
       for (const m of c.models) {
         data.push({
-          id: m,
+          id: m.id,
           object: 'model',
           owned_by: c.name,
-          description: `Cloud provider (${c.name})`,
+          engine: c.name,
+          provider_model: m.provider,
+          label: m.label,
+          default: m.default,
+          description: `Cloud provider (${c.name}) — ${m.label}`,
         });
       }
     }
@@ -297,6 +305,7 @@ export function registerAdminRoutes(app) {
       name: c.name,
       type: 'cloud',
       models: c.models,
+      defaultModel: c.defaultModel,
       health: c.health.status,
       is_current: false,
       is_loaded: c.health.status === 'ready',

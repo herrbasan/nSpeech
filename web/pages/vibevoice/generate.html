@@ -148,7 +148,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('vibevoice', null, true)
+        window.nspeech.client.listVoices('vibevoice')
             .then(d => {
                 availableVoices = (d.voices || [])
                     .filter(v => v.voice_type === 'cloned')

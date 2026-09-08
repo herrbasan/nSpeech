@@ -7,10 +7,10 @@
  * know the difference.
  *
  * Registry format:
- *   prefix → { adapter, name, models }
+ *   prefix → { adapter, models, aliases }
  *
  * Model prefix examples:
- *   "minimax" → matches "minimax", "minimax_speech_2_8_hd", etc.
+ *   "minimax" → matches "minimax" (default), "minimax_speech_2_8_hd", etc.
  *   "openai_tts" → matches "openai_tts_1", "openai_tts_1_hd"
  */
 
@@ -23,106 +23,106 @@ import { logger } from '../logger.js';
 
 const log = logger.child('cloud');
 
-/** @type {Map<string, {adapter, models: string[]}>} */
+/**
+ * Registry of cloud engine model catalogs.
+ *
+ * Each provider's `models` array is the authoritative list of addressable
+ * models. Every entry carries:
+ *   - `id`       — public slug the client sends as `model` (listed in /v1/models)
+ *   - `provider` — native model name passed to the provider API
+ *   - `label`    — display name for the dashboard / docs
+ *   - `default`  — marks the provider's default; a bare engine prefix aliases to it
+ *
+ * `aliases` maps extra accepted model ids (legacy/documented forms) to a
+ * canonical `id`. Aliases resolve to the same provider model but are not
+ * listed separately in /v1/models.
+ */
 const _adapters = new Map();
 
 /**
  * Register a cloud adapter for a model prefix.
+ * @param {string} prefix  — engine id, e.g. "minimax"
+ * @param {*} AdapterClass — adapter constructor
+ * @param {Array<{id: string, provider: string, label: string, default?: boolean}>} models
+ * @param {Object<string,string>} [aliases] — extra accepted model ids → canonical id
  */
-function _register(prefix, AdapterClass, models) {
+function _register(prefix, AdapterClass, models, aliases = {}) {
   const adapter = new AdapterClass();
-  _adapters.set(prefix, { adapter, models });
-  log.info('cloud adapter registered', { prefix, models });
+  _adapters.set(prefix, { adapter, models, aliases });
+  log.info('cloud adapter registered', { prefix, models: models.map(m => m.id) });
 }
 
 // ── Register known providers ────────────────────────────────────────────────
 
 _register('minimax', MiniMaxAdapter, [
-  'minimax_speech_2_8_turbo',
-  'minimax_speech_2_8_hd',
-  'minimax_speech_2_6_hd',
-  'minimax_speech_2_6_turbo',
+  { id: 'minimax_speech_2_8_turbo', provider: 'speech-2.8-turbo', label: 'MiniMax Speech 2.8 Turbo', default: true },
+  { id: 'minimax_speech_2_8_hd',    provider: 'speech-2.8-hd',    label: 'MiniMax Speech 2.8 HD' },
+  { id: 'minimax_speech_2_6_hd',    provider: 'speech-2.6-hd',    label: 'MiniMax Speech 2.6 HD' },
+  { id: 'minimax_speech_2_6_turbo', provider: 'speech-2.6-turbo', label: 'MiniMax Speech 2.6 Turbo' },
 ]);
 
 _register('elevenlabs', ElevenLabsAdapter, [
-  'eleven_turbo_v2_5',
-  'elevenlabs_turbo_v2',
-  'elevenlabs_turbo_v2_5',
-  'elevenlabs_multilingual_v2',
-  'elevenlabs_flash_v2_5',
-]);
+  { id: 'eleven_v3',              provider: 'eleven_v3',              label: 'Eleven v3', default: true },
+  { id: 'eleven_multilingual_v2', provider: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
+  { id: 'eleven_flash_v2_5',      provider: 'eleven_flash_v2_5',      label: 'Eleven Flash v2.5' },
+  { id: 'eleven_turbo_v2_5',      provider: 'eleven_turbo_v2_5',      label: 'Eleven Turbo v2.5' },
+  { id: 'eleven_turbo_v2',        provider: 'eleven_turbo_v2',        label: 'Eleven Turbo v2' },
+], {
+  // Legacy prefixed slugs (documented / older clients) → canonical id.
+  'elevenlabs_turbo_v2_5':      'eleven_turbo_v2_5',
+  'elevenlabs_multilingual_v2': 'eleven_multilingual_v2',
+  'elevenlabs_flash_v2_5':      'eleven_flash_v2_5',
+  'elevenlabs_turbo_v2':        'eleven_turbo_v2',
+});
 
 _register('xai', XaiAdapter, [
-  'xai_grok_tts_1',
-  'xai_grok_tts_1_hd',
+  { id: 'xai_grok_tts_1',    provider: 'grok-tts-1',    label: 'xAI Grok TTS 1', default: true },
+  { id: 'xai_grok_tts_1_hd', provider: 'grok-tts-1-hd', label: 'xAI Grok TTS 1 HD' },
 ]);
 
 _register('gemini', GeminiAdapter, [
-  'gemini-3.1-flash-tts-preview',
-  'gemini_3_1_flash_tts_preview',
-  'gemini_3_1_flash_tts',
-]);
+  { id: 'gemini-3.1-flash-tts-preview', provider: 'gemini-3.1-flash-tts-preview', label: 'Gemini 3.1 Flash TTS', default: true },
+  { id: 'gemini_3_1_flash_tts',         provider: 'gemini-3.1-flash-tts',         label: 'Gemini 3.1 Flash TTS (batch)' },
+], {
+  'gemini_3_1_flash_tts_preview': 'gemini-3.1-flash-tts-preview',
+});
 
 _register('fish', FishAdapter, [
-  'fish_s2_1_pro_free',
-  'fish_s2_1_pro',
-  'fish_s2_pro',
-  'fish_s1',
+  { id: 'fish_s2_1_pro_free', provider: 's2.1-pro-free', label: 'Fish S2.1 Pro (free)', default: true },
+  { id: 'fish_s2_1_pro',      provider: 's2.1-pro',      label: 'Fish S2.1 Pro (paid)' },
+  { id: 'fish_s2_pro',        provider: 's2-pro',        label: 'Fish S2 Pro' },
+  { id: 'fish_s1',            provider: 's1',            label: 'Fish S1' },
 ]);
-
-/**
- * Convert a public model slug suffix into the provider's native model name.
- * Handles version numbers (e.g. 2_8 → 2.8, 3_1 → 3.1) and underscores → hyphens.
- */
-function normalizeSubModel(prefix, suffix) {
-  // Version numbers use dots: speech_2_8_hd → speech-2.8-hd
-  let normalized = suffix.replace(/(\d)_(\d)/g, '$1.$2');
-
-  // Remaining underscores become hyphens
-  normalized = normalized.replace(/_/g, '-');
-
-  // Provider-specific prefixes that survive normalization
-  if (prefix === 'gemini') {
-    // gemini_3_1_flash_tts_preview → gemini-3.1-flash-tts-preview
-    normalized = `gemini-${normalized}`;
-  } else if (prefix === 'elevenlabs') {
-    // elevenlabs_turbo_v2_5 → eleven-turbo-v2.5
-    normalized = `eleven-${normalized}`;
-  } else if (prefix === 'xai') {
-    // xai_grok_tts_1 → grok-tts-1 (xai models omit the xai- prefix)
-    normalized = normalized.replace(/^grok-tts-/, 'grok-tts-');
-  }
-
-  return normalized;
-}
 
 /**
  * Resolve a model string to a cloud adapter (if it matches).
  * Returns { adapter, model } or null.
  *
  * Model strings can be:
- *   "minimax" → MiniMax adapter, model="speech-2.8-turbo" (default)
- *   "minimax_speech_2_8_hd" → MiniMax adapter, model="speech-2.8-hd"
- *   "kokoro" → null (not a cloud model)
+ *   "minimax"                     → MiniMax adapter, its default model
+ *   "minimax_speech_2_8_hd"       → MiniMax adapter, model="speech-2.8-hd"
+ *   "elevenlabs_turbo_v2_5"       → ElevenLabs adapter, model="eleven_turbo_v2_5" (legacy alias)
+ *   "kokoro"                      → null (not a cloud model)
  */
 export function resolveCloud(model) {
   if (!model || typeof model !== 'string') return null;
 
-  // Try exact prefix match first, then startsWith
-  for (const [prefix, entry] of _adapters) {
-    if (model === prefix) {
-      // Bare prefix: use the first real model, never the prefix itself.
-      const defaultSlug = entry.models.find(m => m !== prefix) || entry.models[0];
-      // The default slug may still be in public form (e.g. minimax_speech_2_8_turbo).
-      // Convert it to the provider-native model ID (e.g. speech-2.8-turbo).
-      const defaultModel = defaultSlug.startsWith(prefix + '_')
-        ? normalizeSubModel(prefix, defaultSlug.slice(prefix.length + 1))
-        : defaultSlug;
-      return { adapter: entry.adapter, model: defaultModel };
-    }
-    if (model.startsWith(prefix + '_')) {
-      const suffix = model.slice(prefix.length + 1);
-      return { adapter: entry.adapter, model: normalizeSubModel(prefix, suffix) };
+  // Bare engine prefix → the provider's default model.
+  if (_adapters.has(model)) {
+    const entry = _adapters.get(model);
+    const dflt = entry.models.find(m => m.default) || entry.models[0];
+    return { adapter: entry.adapter, model: dflt.provider };
+  }
+
+  // Exact model id, or a documented alias resolving to a canonical id.
+  for (const [, entry] of _adapters) {
+    const exact = entry.models.find(m => m.id === model);
+    if (exact) return { adapter: entry.adapter, model: exact.provider };
+
+    const aliasTarget = entry.aliases?.[model];
+    if (aliasTarget) {
+      const target = entry.models.find(m => m.id === aliasTarget);
+      if (target) return { adapter: entry.adapter, model: target.provider };
     }
   }
 
@@ -137,15 +137,26 @@ export function isCloudModel(model) {
 }
 
 /**
- * Get all registered cloud engines for the admin endpoint.
+ * Get all registered cloud engines for the admin / models endpoints.
+ *
+ * Each engine exposes its model catalog: `models` is an array of
+ * `{ id, provider, label, default }` (the addressable public slugs), and
+ * `defaultModel` is the canonical id of the provider's default.
  */
 export function listCloudEngines() {
   const result = [];
   for (const [prefix, entry] of _adapters) {
+    const models = entry.models.map(m => ({
+      id: m.id,
+      provider: m.provider,
+      label: m.label,
+      default: !!m.default,
+    }));
     result.push({
       name: prefix,
       type: 'cloud',
-      models: entry.models,
+      models,
+      defaultModel: (entry.models.find(m => m.default) || entry.models[0]).id,
       health: entry.adapter.health(),
     });
   }

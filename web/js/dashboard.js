@@ -22,6 +22,101 @@ events.connect();
 window.nspeech = { client, events, cleanMarkdown };
 window.nspeechMountGenerate = mountGenerate;
 
+// ── Shared cloud model-selector loader (cached) ─────────────────────────────
+// Cloud generate pages call nspeechLoadModels(selectEl, engine) instead of
+// hard-coding provider model names. It pulls the engine's addressable models
+// from GET /v1/models (via client.listModels) and fills the <select> with
+// { value: public slug, label: display name }; the provider's default is
+// pre-selected unless the page already restored a saved model.
+//
+// The model list is cached (in-memory + localStorage, 15-min TTL) so
+// navigating between pages renders the dropdown instantly instead of
+// waiting on the endpoint. A cached list missing the new `engine` field
+// (pre-upgrade server shape) is discarded so a stale cache can't mask a
+// server restart.
+const MODELS_CACHE_KEY = 'nspeech.models';
+const MODELS_TTL_MS = 15 * 60 * 1000;
+let _modelList = null;
+let _modelListAt = 0;
+
+function _readCachedModels() {
+    try {
+        const raw = localStorage.getItem(MODELS_CACHE_KEY);
+        if (!raw) return null;
+        const { at, data } = JSON.parse(raw);
+        if (!Array.isArray(data) || (Date.now() - at) > MODELS_TTL_MS) return null;
+        // Requires the new shape (an `engine` field). Old-shape data is stale.
+        if (!data.some(m => m.engine !== undefined)) return null;
+        return data;
+    } catch { return null; }
+}
+
+async function _getModelList() {
+    if (_modelList && (Date.now() - _modelListAt) < MODELS_TTL_MS) return _modelList;
+
+    const cached = _readCachedModels();
+    if (cached) {
+        _modelList = cached;
+        _modelListAt = Date.now();
+        return _modelList;
+    }
+
+    const res = await client.listModels();
+    const list = (res && res.data) || [];
+    _modelList = list;
+    _modelListAt = Date.now();
+    try { localStorage.setItem(MODELS_CACHE_KEY, JSON.stringify({ at: _modelListAt, data: list })); } catch { /* private mode — ignore */ }
+    return list;
+}
+
+window.nspeechLoadModels = async (selectEl, engine) => {
+    try {
+        const models = (await _getModelList()).filter(m => m.engine === engine && m.id !== 'nspeech');
+        if (!models.length) return;
+        const data = models.map(m => ({ value: m.id, label: m.label || m.id, default: !!m.default }));
+        // Preserve an already-selected model (restored from saved settings).
+        const current = selectEl.value;
+        const wrapper = selectEl.closest('nui-select');
+        if (wrapper && typeof wrapper.setItems === 'function') {
+            wrapper.setItems(data);
+        } else {
+            selectEl.innerHTML = data.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+        }
+        const dflt = data.find(o => o.default) || data[0];
+        if (current && data.some(o => o.value === current)) selectEl.value = current;
+        else if (dflt) selectEl.value = dflt.value;
+    } catch { /* leave the page's hard-coded placeholder */ }
+};
+
+// ── Startup warm-up ─────────────────────────────────────────────────────────
+// Pre-fetch the model list and cloud voice lists in the background so pages
+// render from cache immediately instead of waiting on the endpoint. Cloud
+// adapters run in Node (no worker to spawn), so warming their voices is safe;
+// local engine voices warm on their own page load (listing them is what
+// starts/uses that worker).
+async function warmUpCaches() {
+    try { await _getModelList(); } catch { /* ignore */ }
+    try {
+        const { engines } = await client.listEngines();
+        for (const e of (engines || [])) {
+            if (e.type === 'cloud') client.listVoices(e.name).catch(() => {});
+        }
+    } catch { /* ignore */ }
+}
+warmUpCaches();
+
+// ── Manual refresh (header button) ──────────────────────────────────────────
+// Clears the model + voice caches and reloads the dashboard so the current
+// page re-fetches fresh data from the endpoints. Call this from a "Refresh"
+// control; it's what makes the once-on-start caching releasable.
+window.nspeechRefreshData = () => {
+    localStorage.removeItem(MODELS_CACHE_KEY);
+    _modelList = null;
+    _modelListAt = 0;
+    client.clearVoiceCache();
+    window.location.reload();
+};
+
 // ── Per-engine generation settings persistence ─────────────────────────────
 // Pages call nspeechSettings.init(element, engineKey) once in init(). It
 // restores saved defaults into the page's controls, injects "Save as

@@ -163,16 +163,22 @@ stop()
 
 ### 4.4 server/cloud/registry.js — Cloud Adapter Routing
 
-Prefix matching:
+Each cloud provider registers a **model catalog** — the single source of truth for its available models. Registered via `_register(prefix, AdapterClass, models, aliases)`:
 
-| Prefix | Adapter | Default Model | Example Matches |
-|--------|---------|---------------|-----------------|
-| `minimax` | MiniMaxAdapter | `speech-2.8-turbo` | `minimax`, `minimax_speech_2_8_hd` |
-| `elevenlabs` | ElevenLabsAdapter | `eleven_turbo_v2_5` | `elevenlabs`, `elevenlabs_turbo_v2` |
-| `gemini` | GeminiAdapter | `gemini-3.1-flash-tts-preview` | `gemini`, `gemini_3_1_flash_tts` |
-| `xai` | XaiAdapter | `grok-tts-1` | `xai`, `xai_grok_tts_1_hd` |
+- `models`: array of `{ id, provider, label, default? }` — `id` is the public slug (sent as `model`), `provider` is the native model name passed to the provider API, `label` is a display name, `default` marks the provider's default.
+- `aliases`: map of extra accepted model ids (legacy/documented) → canonical `id`. Aliases resolve to the same provider model but are not listed in `/v1/models`.
 
-Sub-model normalization: underscores → hyphens, version numbers use dots (`2_8` → `2.8`).
+`resolveCloud(model)` matches an exact `id` or an alias; a bare engine prefix (`"minimax"`) resolves to the provider's default model. `listCloudEngines()` exposes `{ name, type, models, defaultModel, health }` to `/v1/models` and `/v1/admin/engines`.
+
+| Prefix | Adapter | Default (`id`) | Models |
+|--------|---------|----------------|--------|
+| `minimax` | MiniMaxAdapter | `minimax_speech_2_8_turbo` | `minimax_speech_2_8_turbo`, `minimax_speech_2_8_hd`, `minimax_speech_2_6_hd`, `minimax_speech_2_6_turbo` |
+| `elevenlabs` | ElevenLabsAdapter | `eleven_v3` | `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, `eleven_turbo_v2_5`, `eleven_turbo_v2` |
+| `gemini` | GeminiAdapter | `gemini-3.1-flash-tts-preview` | `gemini-3.1-flash-tts-preview`, `gemini_3_1_flash_tts` |
+| `xai` | XaiAdapter | `xai_grok_tts_1` | `xai_grok_tts_1`, `xai_grok_tts_1_hd` |
+| `fish` | FishAdapter | `fish_s2_1_pro_free` | `fish_s2_1_pro_free`, `fish_s2_1_pro`, `fish_s2_pro`, `fish_s1` |
+
+Provider-native model names are explicit (no underscore→hyphen normalization): e.g. `minimax_speech_2_8_hd` → `speech-2.8-hd`, `eleven_v3` → `eleven_v3`. Legacy ElevenLabs slugs (e.g. `elevenlabs_turbo_v2_5`) are accepted as aliases and resolve to their canonical model.
 
 ### 4.5 server/chunking.js — Auto-Chunking for Long-Form TTS
 

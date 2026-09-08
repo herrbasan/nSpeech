@@ -43,3 +43,4 @@ desktop.ini
 .playwright-mcp/
 logs/
 defaults.json
+tests/

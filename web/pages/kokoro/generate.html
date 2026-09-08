@@ -65,7 +65,7 @@ function init(element, params, nui) {
     const generateBtn = element.querySelector('#btn-generate');
 
     function loadVoices() {
-        window.nspeech.client.listVoices('kokoro', null, true)
+        window.nspeech.client.listVoices('kokoro')
             .then(d => {
                 const allVoices = d.voices || [];
                 const builtins = allVoices.filter(v => v.voice_type === 'builtin');

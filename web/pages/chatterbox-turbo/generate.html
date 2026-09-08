@@ -77,7 +77,7 @@ function init(element, params, nui) {
     });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('chatterbox-turbo', null, true)
+        window.nspeech.client.listVoices('chatterbox-turbo')
             .then(d => {
                 const allVoices = d.voices || [];
                 const cloned = allVoices

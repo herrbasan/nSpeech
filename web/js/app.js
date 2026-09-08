@@ -20,6 +20,10 @@ document.addEventListener('click', (e) => {
             const current = document.documentElement.style.colorScheme || 'light';
             document.documentElement.style.colorScheme = current === 'dark' ? 'light' : 'dark';
             break;
+
+        case 'refresh-data':
+            if (window.nspeechRefreshData) window.nspeechRefreshData();
+            break;
     }
 });
 

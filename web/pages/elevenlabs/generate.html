@@ -18,11 +18,7 @@
             <label for="el-model">Model</label>
             <nui-select>
                 <select id="el-model">
-                    <option value="eleven_v3" selected>Eleven v3</option>
-                    <option value="eleven_turbo_v2_5">Eleven Turbo v2.5</option>
-                    <option value="eleven_multilingual_v2">Eleven Multilingual v2</option>
-                    <option value="eleven_flash_v2_5">Eleven Flash v2.5</option>
-                    <option value="eleven_turbo_v2">Eleven Turbo v2</option>
+                    <option value="" disabled selected>Loading models...</option>
                 </select>
             </nui-select>
         </nui-input-group>
@@ -110,7 +106,7 @@ function init(element, params, nui) {
     speedEl.addEventListener('input', function() { speedValEl.textContent = parseFloat(this.value).toFixed(2); });
 
     function loadVoices() {
-        window.nspeech.client.listVoices('elevenlabs', null, true)
+        window.nspeech.client.listVoices('elevenlabs')
             .then(function(d) {
                 var voices = d.voices || [];
                 var cloned = [], langMap = {};
@@ -147,7 +143,6 @@ function init(element, params, nui) {
             const text = textArea.value.trim();
             if (!text) return null;
             const eb = {
-                model: modelEl.value,
                 stability: parseFloat(stabilityEl.value),
                 expressiveness: parseFloat(styleEl.value),
                 guidance_scale: parseFloat(similarityEl.value),
@@ -155,7 +150,7 @@ function init(element, params, nui) {
                 batch: batchEl.checked,
             };
             return {
-                model: 'elevenlabs',
+                model: modelEl.value || 'elevenlabs',
                 input: text,
                 voice: selectEl.value || 'default',
                 speed: parseFloat(speedEl.value),
@@ -166,6 +161,7 @@ function init(element, params, nui) {
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
     window.nspeechSettings.init(element, "elevenlabs");
+    window.nspeechLoadModels(modelEl, 'elevenlabs');
 
     element.show = function() { loadVoices(); };
     element.hide = function() { widget.stop(); };
