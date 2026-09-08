@@ -352,7 +352,7 @@ Cloud model entries carry the engine's model catalog. Each entry:
 
 `extra_body.model` overrides the sub-model with a provider-native id (e.g. `"speech-2.8-hd"`) when you don't want the full-slug form.
 
-**SDK:** `NSpeechClient.listModels()` returns the full model list; `NSpeechClient.listEngineModels(engine)` filters it to a single engine (the dashboard uses this to populate model selectors).
+**SDK** (`lib/nspeech-client/nspeech-client.js`): `NSpeechClient.listModels()` returns the full model list; `NSpeechClient.listEngineModels(engine)` filters it to a single engine (the dashboard uses this to populate model selectors). See [SDK_REFERENCE.md](SDK_REFERENCE.md) for the full client reference.
 
 ### `GET /v1/admin/engines`
 

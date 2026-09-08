@@ -62,7 +62,7 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 - **SDK** adds `listEngineModels(engine)` — filters `/v1/models` by engine for a clean model-selector feed.
 - **Dashboard** adds `window.nspeechLoadModels(selectEl, engine)` (in `dashboard.js`) — fetches an engine's models and fills the `<select>`, pre-selecting the provider default unless a saved model was restored. All 5 cloud generate pages (minimax, elevenlabs, gemini, xai, fish) now use it, replacing hard-coded option lists; `buildParams` sends the public model slug as `model`.
 - **Client caching + refresh:** model list is cached (in-memory + localStorage, 15-min TTL) so navigating between pages is instant; a stale cache missing the new `engine` field is discarded. Voice lists now use the SDK's in-memory `VoiceCache` (removed the `forceRefresh` flag from all 10 generate pages — they were re-fetching from the provider on every page load). `warmUpCaches()` runs on dashboard start: pre-fetches the model list + all cloud engines' voice lists in the background (cloud adapters run in Node, no worker spawn; local engine voices remain lazy — listing them is what starts that worker). A **Refresh** button in the dashboard header (`data-action="refresh-data"` → `nspeechRefreshData()`) clears both caches and reloads to re-fetch.
-- Docs updated (`documentation/API_REFERENCE.md`): model field points to `/v1/models`; `/v1/models` and `/v1/admin/engines` sections document the new metadata, `model`-selection semantics (bare prefix / slug / legacy alias), and the SDK `listModels()`/`listEngineModels(engine)` helpers. `documentation/nSpeech_Spec.md` §4.4 rewritten for the new explicit model catalog + aliases.
+- Docs updated (`documentation/API_REFERENCE.md`): model field points to `/v1/models`; `/v1/models` and `/v1/admin/engines` sections document the new metadata, `model`-selection semantics (bare prefix / slug / legacy alias), and the SDK helpers. `documentation/nSpeech_Spec.md` §4.4 rewritten for the new explicit model catalog + aliases. Added `documentation/SDK_REFERENCE.md` — standalone reference for `NSpeechClient`, `SpeechPlayer`, `EventStream`, text cleaning, and model discovery/selection.
 
 ### 2026-09-01 — F5 language misdetection fixed (English → German model)
 
@@ -309,6 +309,7 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 | [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) | Canonical API contract and `extra_body` schema (draft) |
 | [docs/VOICE_PRESETS.md](docs/VOICE_PRESETS.md) | Voice preset specification |
 | [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) | Concise endpoint reference |
+| [documentation/SDK_REFERENCE.md](documentation/SDK_REFERENCE.md) | Client SDK reference for `lib/nspeech-client/nspeech-client.js` — `NSpeechClient`, `SpeechPlayer`, `EventStream`, text cleaning, models |
 
 ---
 

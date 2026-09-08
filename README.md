@@ -70,7 +70,7 @@ Local CPU (faster-whisper large-v3 int8). First call spawns the STT worker; subs
 
 ### SDK (Recommended)
 
-The nSpeech Client SDK (`lib/nspeech-client/nspeech-client.js`) is a single-file, zero-dependency ESM module for browser and Node.js. Four exports cover the whole surface:
+The nSpeech Client SDK (`lib/nspeech-client/nspeech-client.js`) is a single-file, zero-dependency ESM module for browser and Node.js. Four exports cover the whole surface. Full reference: [documentation/SDK_REFERENCE.md](documentation/SDK_REFERENCE.md).
 
 - **`NSpeechClient`** — REST API: `speech()` (with `clean:true` for client-side markdown cleaning), `speechStream()` (event-driven lifecycle: `start`, `ttfb`, `progress`, `complete`, `error`), voices, cloning, presets, engine admin. Retry with exponential backoff, typed errors (`VoiceNotFoundError`, `EngineError`, `RateLimitError`), voice cache with TTL.
 - **`SpeechPlayer`** — streaming playback (browser): decoupled download/playback (pause never aborts the stream), MSE with blob fallback, seek/pause/resume, `state`/`time`/`download-progress` events.
@@ -216,6 +216,7 @@ Clients do not need the dashboard — they use the API directly.
 | Document | Purpose |
 |----------|---------|
 | [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) | Concise endpoint reference with examples |
+| [documentation/SDK_REFERENCE.md](documentation/SDK_REFERENCE.md) | Client SDK reference for `lib/nspeech-client/nspeech-client.js` — `NSpeechClient`, `SpeechPlayer`, `EventStream`, models |
 | [docs/AUDIO_API_PLAN.md](docs/AUDIO_API_PLAN.md) | Canonical API contract and `extra_body` schema |
 | [nSpeech_Spec.md](nSpeech_Spec.md) | Full technical specification (for developers/LLMs) |
 | [Agents.md](Agents.md) | Project aims and activity log |
