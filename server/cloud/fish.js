@@ -15,11 +15,17 @@
 
 import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
+import { upstreamError } from './errors.js';
+import { clampNumber } from './params.js';
 
 const log = logger.child('cloud.fish');
 
 const BASE_URL = 'https://api.fish.audio';
 const VOICES_CACHE_TTL_MS = 300_000; // 5 minutes
+
+// Fish accepts 0.5–2.0 for `prosody.speed` and rejects anything outside it with
+// HTTP 400; nSpeech's API allows 0.25–4.0. See cloud/params.js.
+const SPEED_RANGE = { name: 'speed', min: 0.5, max: 2, provider: 'Fish', fallback: 1.0 };
 
 /** Map our extra_body fields to Fish-native request params. */
 function mapExtraBody(eb) {
@@ -85,7 +91,7 @@ export class FishAdapter {
       format: 'pcm',
       sample_rate: 24000,
       prosody: {
-        speed: speed ?? 1.0,
+        speed: clampNumber(speed, SPEED_RANGE),
         normalize_loudness: true,
       },
     };
@@ -118,7 +124,7 @@ export class FishAdapter {
     if (!resp.ok) {
       const errText = await resp.text();
       log.error('Fish TTS failed', { status: resp.status, body: errText.slice(0, 500) });
-      throw new Error(`Fish TTS failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'Fish TTS failed');
     }
 
     if (isBatch) {
@@ -224,13 +230,8 @@ export class FishAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      let detail = errText;
-      try {
-        const errJson = JSON.parse(errText);
-        detail = errJson.message || errText;
-      } catch {}
       log.error('Fish clone failed', { status: resp.status, body: errText.slice(0, 300) });
-      throw new Error(`Fish clone failed: HTTP ${resp.status} — ${detail.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'Fish clone failed');
     }
 
     const data = await resp.json();
@@ -281,7 +282,7 @@ export class FishAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`Fish delete failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'Fish delete failed');
     }
 
     this._voicesCache = null;

@@ -12,11 +12,56 @@
 
 import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
+import { upstreamError } from './errors.js';
+import { clampNumber } from './params.js';
+import { WorkerError } from '../engine/worker.js';
 
 const log = logger.child('cloud.minimax');
 
 const BASE_URL = 'https://api.minimax.io';
 const VOICES_CACHE_TTL_MS = 300_000; // 5 minutes
+
+// MiniMax accepts 0.5–2.0; nSpeech's API allows 0.25–4.0. An out-of-range value
+// comes back as base_resp 2013 "invalid input parameters". See cloud/params.js.
+const SPEED_RANGE = { name: 'speed', min: 0.5, max: 2, provider: 'MiniMax', fallback: 1.0 };
+
+/**
+ * MiniMax reports request failures inside an **HTTP 200** body as
+ * `base_resp.status_code` — so a 200 does not mean success. Codes from the T2A
+ * OpenAPI spec, plus 2054 observed live ("voice id not exist"):
+ *
+ *   0 success · 1000 unknown · 1001 timeout · 1002 rate limit
+ *   1004 authentication failed · 1039 TPM rate limit
+ *   1042 invalid characters > 10% · 2013 invalid input parameters
+ *   2054 voice id not exist (undocumented, observed)
+ *
+ * An unrecognised code is reported as a 502 upstream_error rather than guessed
+ * at — the provider's own status_msg always survives in the message.
+ */
+const BASE_RESP_MAP = {
+  1000: [502, 'upstream_error'],
+  1001: [504, 'upstream_timeout'],
+  1002: [429, 'rate_limit_exceeded'],
+  1004: [401, 'invalid_api_key'],
+  1039: [429, 'rate_limit_exceeded'],
+  1042: [400, 'invalid_request_error'],
+  2013: [400, 'invalid_request_error'],
+  2042: [404, 'voice_not_found'],   // "you don't have access to this voice_id" (observed)
+  2054: [404, 'voice_not_found'],
+};
+
+/**
+ * Turn a non-zero `base_resp` into an API error, or null when the response is
+ * clean. Without this the provider's reason was only logged at INFO and the
+ * caller got a generic 503 "produced no audio".
+ */
+function baseRespError(baseResp, what) {
+  const statusCode = baseResp?.status_code;
+  if (!statusCode) return null;
+  const [status, code] = BASE_RESP_MAP[statusCode] || [502, 'upstream_error'];
+  const msg = baseResp.status_msg || `unknown status ${statusCode}`;
+  return new WorkerError(status, code, `${what}: ${msg} (MiniMax status ${statusCode})`);
+}
 
 /**
  * Map our extra_body fields to MiniMax-native request params.
@@ -106,7 +151,10 @@ export class MiniMaxAdapter {
    *
    * @param {object} params
    * @param {string} params.text
-   * @param {string} params.voice_name  — MiniMax voice_id
+   * @param {string} params.voice_name  — MiniMax voice_id. The 'default'
+   *   sentinel (and an empty value) means "provider default", NOT a voice id —
+   *   forwarding it verbatim returns status 2042 "you don't have access to this
+   *   voice_id".
    * @param {number} params.speed       — 0.5–2.0
    * @param {string} [params.instruct_text]  — ignored (MiniMax has no text-to-style)
    * @param {object} [params.extra_body]
@@ -124,8 +172,11 @@ export class MiniMaxAdapter {
       stream: !isBatch,
       output_format: 'hex',
       voice_setting: {
-        voice_id: voice_name || 'English_expressive_narrator',
-        speed: speed ?? 1.0,
+        // 'default' is nSpeech's "engine default" sentinel, not a MiniMax voice
+        // id — sending it verbatim is rejected with 2042. Fall back to a real
+        // system voice, exactly as Fish omits reference_id for the same input.
+        voice_id: (voice_name && voice_name !== 'default') ? voice_name : 'English_expressive_narrator',
+        speed: clampNumber(speed, SPEED_RANGE),
         vol: eb.vol ?? 1,
         pitch: eb.pitch ?? 0,
       },
@@ -168,7 +219,7 @@ export class MiniMaxAdapter {
     if (!resp.ok) {
       const errText = await resp.text();
       log.error('MiniMax T2A failed', { status: resp.status, body: errText.slice(0, 500) });
-      throw new Error(`MiniMax T2A failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'MiniMax T2A failed');
     }
 
     // ── Batch: non-streaming, single hex blob → Buffer ───────────────────
@@ -184,9 +235,13 @@ export class MiniMaxAdapter {
       });
       const audio = data?.data?.audio;
       if (!audio) {
+        // A 200 with no audio is almost always a base_resp error — surface the
+        // provider's own reason instead of a generic "no audio".
+        const baseErr = baseRespError(data?.base_resp, 'MiniMax TTS failed');
+        if (baseErr) throw baseErr;
         throw new Error(
           `MiniMax batch: no audio in response (status=${data?.data?.status}, ` +
-          `base_status=${data?.base_resp?.status_code}, msg=${data?.base_resp?.status_msg})`
+          `trace=${data?.trace_id})`
         );
       }
       const pcmBuf = Buffer.from(audio, 'hex');
@@ -194,6 +249,23 @@ export class MiniMaxAdapter {
     }
 
     // ── Streaming: SSE hex chunks → progressive Readable ─────────────────
+    // A rejected streaming request does NOT come back as SSE — MiniMax answers
+    // with a plain JSON error body (content-type application/json), so the
+    // error never arrives as a `data:` line and the pump below would only see
+    // zero audio. Catch it here.
+    const contentType = resp.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      const bodyText = await resp.text();
+      log.error('MiniMax streaming returned a non-SSE response', {
+        contentType, body: bodyText.slice(0, 300),
+      });
+      let parsed = null;
+      try { parsed = JSON.parse(bodyText); } catch { /* not JSON */ }
+      const baseErr = baseRespError(parsed?.base_resp, 'MiniMax TTS failed');
+      if (baseErr) throw baseErr;
+      throw new Error(`MiniMax streaming: unexpected non-SSE response — ${bodyText.slice(0, 200)}`);
+    }
+
     const decoder = new TextDecoder();
     const reader = resp.body.getReader();
     let buffer = '';
@@ -245,6 +317,20 @@ export class MiniMaxAdapter {
               }
 
               const audio = chunk?.data?.audio;
+
+              // An error chunk carries no audio and is reported at HTTP 200 —
+              // check it before treating the chunk as empty.
+              const chunkErr = baseRespError(chunk?.base_resp, 'MiniMax TTS failed');
+              if (chunkErr) {
+                log.error('MiniMax streaming reported an error', {
+                  statusCode: chunk.base_resp.status_code,
+                  statusMsg: chunk.base_resp.status_msg,
+                  traceId: chunk.trace_id,
+                });
+                this.destroy(chunkErr);
+                return;
+              }
+
               if (audio && audio.length > 0) {
                 const pcm = Buffer.from(audio, 'hex');
                 totalBytes += pcm.length;
@@ -387,7 +473,7 @@ export class MiniMaxAdapter {
 
     if (!uploadResp.ok) {
       const errText = await uploadResp.text();
-      throw new Error(`MiniMax file upload failed: HTTP ${uploadResp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(uploadResp.status, errText, 'MiniMax file upload failed');
     }
 
     const uploadData = await uploadResp.json();
@@ -419,14 +505,12 @@ export class MiniMaxAdapter {
 
     if (!cloneResp.ok) {
       const errText = await cloneResp.text();
-      throw new Error(`MiniMax voice clone failed: HTTP ${cloneResp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(cloneResp.status, errText, 'MiniMax voice clone failed');
     }
 
     const cloneData = await cloneResp.json();
-    const cloneStatus = cloneData?.base_resp?.status_code;
-    if (cloneStatus !== 0) {
-      throw new Error(`MiniMax voice clone error ${cloneStatus}: ${cloneData?.base_resp?.status_msg || 'unknown'}`);
-    }
+    const cloneErr = baseRespError(cloneData?.base_resp, 'MiniMax voice clone failed');
+    if (cloneErr) throw cloneErr;
 
     // Step 3: Activate the voice — MiniMax requires at least one T2A
     // call before the voice appears in get_voice.
@@ -552,13 +636,12 @@ export class MiniMaxAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`MiniMax voice delete failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'MiniMax voice delete failed');
     }
 
     const data = await resp.json();
-    if (data?.base_resp?.status_code !== 0) {
-      throw new Error(`MiniMax voice delete error ${data.base_resp.status_code}: ${data.base_resp.status_msg}`);
-    }
+    const deleteErr = baseRespError(data?.base_resp, 'MiniMax voice delete failed');
+    if (deleteErr) throw deleteErr;
 
     this._voicesCache = null;
     return { success: true };

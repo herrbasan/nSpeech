@@ -24,6 +24,10 @@
 
 **Pricing note:** 2.8 and 2.6 series are current. speech-02 and speech-01 are legacy. Voice cloning: $1.50/voice. Voice design: $3/voice.
 
+The API accepts eight models: `speech-2.8-hd`, `speech-2.8-turbo`, `speech-2.6-hd`, `speech-2.6-turbo`, `speech-02-hd`, `speech-02-turbo`, `speech-01-hd`, `speech-01-turbo`.
+
+> **nSpeech registry (2026-09-10):** advertises the four current models — `speech-2.8-turbo` (default), `speech-2.8-hd`, `speech-2.6-hd`, `speech-2.6-turbo`. The legacy `speech-02-*` and `speech-01-*` generations still work if you name them explicitly, but they are not listed in `GET /v1/models` and have no dashboard selector entry.
+
 ### Token Plan (Subscription) Pricing
 
 If you have a Token Plan (`sk-cp-` key), pay-as-you-go prices are converted to token usage from your monthly quota:
@@ -419,6 +423,8 @@ nSpeech sanitizes user-entered names before sending (normalizes to `[a-zA-Z0-9_]
 
 ## 7. Error Codes
 
+`base_resp.status_code` is reported inside an **HTTP 200 body** — a 200 does not mean success.
+
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
@@ -429,6 +435,27 @@ nSpeech sanitizes user-entered names before sending (normalizes to `[a-zA-Z0-9_]
 | 1039 | TPM rate limit exceeded |
 | 1042 | Invalid characters > 10% |
 | 2013 | Invalid input parameters |
+| 2054 | Voice id does not exist (undocumented — observed live 2026-09-10) |
+
+### How nSpeech maps these
+
+A rejected **streaming** request does not come back as SSE — MiniMax answers with a plain JSON body (`content-type: application/json`), so the error never arrives as a `data:` line. The adapter checks the content-type and raises from the body instead.
+
+| MiniMax `status_code` | nSpeech status | `code` |
+|----------------------|----------------|--------|
+| 1000 | `502` | `upstream_error` |
+| 1001 | `504` | `upstream_timeout` |
+| 1002 / 1039 | `429` | `rate_limit_exceeded` |
+| 1004 | `401` | `invalid_api_key` |
+| 1042 / 2013 | `400` | `invalid_request_error` |
+| 2054 | `404` | `voice_not_found` |
+| anything else non-zero | `502` | `upstream_error` |
+
+An unrecognised code is reported as `502 upstream_error` rather than guessed at, and the provider's `status_msg` is always preserved in the message. Before this mapping existed, every one of these collapsed into `503 engine_error` / `code: unknown` with a generic "produced no audio" — the reason was only logged at INFO.
+
+### `speed` is clamped
+
+MiniMax accepts `0.5`–`2.0`; nSpeech's API allows `0.25`–`4.0`. An out-of-range value is rejected as `2013`, so the adapter clamps to the nearest bound and logs a warning carrying the requested value.
 
 ---
 

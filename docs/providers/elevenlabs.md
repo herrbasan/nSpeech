@@ -16,17 +16,25 @@
 
 ## Models
 
-| Model | Description | Latency | Quality |
-|-------|-------------|---------|---------|
-| `eleven_v3` | Latest flagship, 29+ languages | Low | Best |
-| `eleven_turbo_v2` | Fast, English-only, agent-optimized | Lowest | Good |
-| `eleven_flash_v2_5` | Fastest multilingual (32 languages) | Very low | Good |
-| `eleven_multilingual_v2` | Full quality, 29 languages | Moderate | Best |
-| `eleven_turbo_v2_5` | High quality multilingual turbo | Low | Very good |
-| `eleven_v2_flash` | Legacy fast model | Low | Good |
-| `eleven_v2_5_flash` | Latest flash | Very low | Good |
+Verified against `GET /v1/models` on 2026-09-10 — that endpoint is authoritative.
+
+| Model | Description | Max chars | TTS |
+|-------|-------------|-----------|-----|
+| `eleven_v3` | Latest flagship, 29+ languages | 5,000 | ✅ |
+| `eleven_v3_conversational` | Conversational variant of v3 | 5,000 | ✅ |
+| `eleven_multilingual_v2` | Full quality, 29 languages | 10,000 | ✅ |
+| `eleven_flash_v2_5` | Fastest multilingual | 40,000 | ✅ |
+| `eleven_turbo_v2_5` | Deprecated → use Flash v2.5 | 40,000 | ✅ |
+| `eleven_turbo_v2` | Deprecated → use Flash v2 | 30,000 | ✅ |
+| `eleven_flash_v2` | English-only fast | 30,000 | ✅ |
+| `eleven_english_sts_v2` | Speech-to-speech, **not** TTS | 5,000 | ❌ |
+| `eleven_multilingual_sts_v2` | Speech-to-speech, **not** TTS | 10,000 | ❌ |
 
 **nSpeech default:** `eleven_v3` — latest flagship, best quality (verified 2026-08-13).
+
+> **nSpeech registry (2026-09-10):** exposes `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, `eleven_flash_v2`, `eleven_turbo_v2_5` and `eleven_turbo_v2`. `eleven_v3_conversational` is not exposed — it targets conversational/barge-in use, not batch narration — and the two `_sts_` models are speech-to-speech, so they cannot do TTS.
+>
+> This table previously listed `eleven_v2_flash` and `eleven_v2_5_flash`. **Those ids do not exist** — the real ones are `eleven_flash_v2` and `eleven_flash_v2_5` — and `eleven_flash_v2`, which ElevenLabs' own docs name as the replacement for the deprecated `eleven_turbo_v2`, was missing from the registry entirely.
 
 ### Character limits per model
 
@@ -40,6 +48,12 @@ Authoritative limits from the [Models overview](https://elevenlabs.io/docs/overv
 | `eleven_flash_v2` | **30,000** | ~30 min | English-only. Supports `previous_text`/`next_text`. |
 
 **Deprecated:** `eleven_turbo_v2_5` → `eleven_flash_v2_5`, `eleven_turbo_v2` → `eleven_flash_v2`. Use Flash models instead.
+
+### `speed`
+
+Speed is sent as `voice_settings.speed`. The range is **0.7–1.2** — verified 2026-09-10: `eleven_flash_v2_5` accepts 0.7 and 1.2 and rejects 1.21 with `invalid_voice_settings`. `eleven_v3` happens to accept wider values (0.5–2.0 all returned audio) but is clamped to the same 0.7–1.2 so every model behaves identically.
+
+> nSpeech clamps to that range at the boundary and logs a warning carrying the requested value. Before 2026-09-10 the adapter destructured `speed` and never sent it — the API advertised a speed control that silently did nothing on this provider.
 
 ### Model metadata — `GET /v1/models`
 

@@ -65,25 +65,36 @@ _register('elevenlabs', ElevenLabsAdapter, [
   { id: 'eleven_v3',              provider: 'eleven_v3',              label: 'Eleven v3', default: true },
   { id: 'eleven_multilingual_v2', provider: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
   { id: 'eleven_flash_v2_5',      provider: 'eleven_flash_v2_5',      label: 'Eleven Flash v2.5' },
-  { id: 'eleven_turbo_v2_5',      provider: 'eleven_turbo_v2_5',      label: 'Eleven Turbo v2.5' },
-  { id: 'eleven_turbo_v2',        provider: 'eleven_turbo_v2',        label: 'Eleven Turbo v2' },
+  { id: 'eleven_flash_v2',        provider: 'eleven_flash_v2',        label: 'Eleven Flash v2 (English)' },
+  { id: 'eleven_turbo_v2_5',      provider: 'eleven_turbo_v2_5',      label: 'Eleven Turbo v2.5 (deprecated)' },
+  { id: 'eleven_turbo_v2',        provider: 'eleven_turbo_v2',        label: 'Eleven Turbo v2 (deprecated)' },
 ], {
   // Legacy prefixed slugs (documented / older clients) → canonical id.
   'elevenlabs_turbo_v2_5':      'eleven_turbo_v2_5',
   'elevenlabs_multilingual_v2': 'eleven_multilingual_v2',
   'elevenlabs_flash_v2_5':      'eleven_flash_v2_5',
+  'elevenlabs_flash_v2':        'eleven_flash_v2',
   'elevenlabs_turbo_v2':        'eleven_turbo_v2',
 });
 
 _register('xai', XaiAdapter, [
-  { id: 'xai_grok_tts_1',    provider: 'grok-tts-1',    label: 'xAI Grok TTS 1', default: true },
-  { id: 'xai_grok_tts_1_hd', provider: 'grok-tts-1-hd', label: 'xAI Grok TTS 1 HD' },
-]);
+  { id: 'xai', provider: 'tts', label: 'Grok Voice (TTS)', default: true },
+], {
+  // xAI's TTS endpoint has NO model parameter — one endpoint, selected only by
+  // voice. The two slugs we used to advertise were never real models; the
+  // adapter never sent them, so choosing between them did nothing.
+  // Kept as aliases so stored client values still resolve.
+  'xai_grok_tts_1': 'xai',
+  'xai_grok_tts_1_hd': 'xai',
+});
 
 _register('gemini', GeminiAdapter, [
-  { id: 'gemini-3.1-flash-tts-preview', provider: 'gemini-3.1-flash-tts-preview', label: 'Gemini 3.1 Flash TTS', default: true },
-  { id: 'gemini_3_1_flash_tts',         provider: 'gemini-3.1-flash-tts',         label: 'Gemini 3.1 Flash TTS (batch)' },
+  { id: 'gemini-3.1-flash-tts-preview', provider: 'gemini-3.1-flash-tts-preview', label: 'Gemini 3.1 Flash TTS (preview)', default: true },
 ], {
+  // There is no non-preview gemini-3.1-flash-tts — Google answers 404
+  // "Model not found" (verified 2026-09-10). It was never a second model, just
+  // an inert selector entry. Kept as an alias so stored values still resolve.
+  'gemini_3_1_flash_tts': 'gemini-3.1-flash-tts-preview',
   'gemini_3_1_flash_tts_preview': 'gemini-3.1-flash-tts-preview',
 });
 

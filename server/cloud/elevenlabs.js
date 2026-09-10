@@ -12,11 +12,19 @@
 
 import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
+import { upstreamError } from './errors.js';
+import { clampNumber } from './params.js';
 
 const log = logger.child('cloud.elevenlabs');
 
 const BASE_URL = 'https://api.elevenlabs.io';
 const VOICES_CACHE_TTL_MS = 300_000; // 5 minutes
+
+// VoiceSettings.speed range. Verified 2026-09-10: eleven_flash_v2_5 accepts 0.7
+// and 1.2 and rejects 1.21 with `invalid_voice_settings`; eleven_v3 happens to
+// accept wider values but is clamped to the same documented range so every
+// model behaves identically. See cloud/params.js.
+const SPEED_RANGE = { name: 'speed', min: 0.7, max: 1.2, provider: 'ElevenLabs', fallback: 1.0 };
 
 function mapExtraBody(eb) {
   if (!eb || typeof eb !== 'object') return {};
@@ -80,6 +88,9 @@ export class ElevenLabsAdapter {
       similarity_boost: eb.similarity_boost ?? 0.75,
       style: eb.style ?? 0,
       use_speaker_boost: true,
+      // Previously `speed` was destructured and then never sent, so the API's
+      // speed control silently did nothing on this provider.
+      speed: clampNumber(speed, SPEED_RANGE),
     };
 
     const reqBody = {
@@ -120,7 +131,7 @@ export class ElevenLabsAdapter {
       if (!resp.ok) {
         const errText = await resp.text();
         log.error('ElevenLabs batch TTS failed', { status: resp.status, body: errText.slice(0, 300) });
-        throw new Error(`ElevenLabs TTS failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+        throw upstreamError(resp.status, errText, 'ElevenLabs TTS failed');
       }
 
       const pcmBuf = Buffer.from(await resp.arrayBuffer());
@@ -139,7 +150,7 @@ export class ElevenLabsAdapter {
     if (!resp.ok) {
       const errText = await resp.text();
       log.error('ElevenLabs stream TTS failed', { status: resp.status, body: errText.slice(0, 300) });
-      throw new Error(`ElevenLabs TTS failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'ElevenLabs TTS failed');
     }
 
     // ElevenLabs stream returns raw PCM chunks — pipe directly into Readable
@@ -230,7 +241,7 @@ export class ElevenLabsAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`ElevenLabs clone failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'ElevenLabs clone failed');
     }
 
     const data = await resp.json();
@@ -270,7 +281,7 @@ export class ElevenLabsAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      throw new Error(`ElevenLabs delete failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'ElevenLabs delete failed');
     }
 
     this._voicesCache = null;

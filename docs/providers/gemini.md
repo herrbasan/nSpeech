@@ -23,6 +23,14 @@ Legacy models (consider migrating):
 | `gemini-2.5-flash-preview-tts` | $0.50 | $10.00 | ❌ | ✅ |
 | `gemini-2.5-pro-preview-tts` | $1.00 | $20.00 | ❌ | ❌ (paid only) |
 
+> **Verified against `GET /v1beta/models` on 2026-09-10.** The TTS-capable models Google returns are `gemini-3.1-flash-tts-preview`, `gemini-2.5-flash-preview-tts` and `gemini-2.5-pro-preview-tts`.
+>
+> **There is no non-preview `gemini-3.1-flash-tts`** — Google answers `404 Model not found`. nSpeech used to advertise it as a second model labelled "(batch)"; the dashboard selector entry did nothing and every request 404'd. It is now an alias of the preview model so stored values still resolve.
+>
+> nSpeech exposes only `gemini-3.1-flash-tts-preview`. The 2.5-series TTS models are real but unregistered — name one via `extra_body.model` if you need it.
+>
+> A 404 during Gemini synthesis is reported as `model_not_found`, **not** `voice_not_found`. Gemini has no voice cloning, so a 404 there can only mean the model.
+
 Audio output is billed at 25 tokens per second of audio. Text input is billed at standard text token rates.
 
 ---

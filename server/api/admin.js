@@ -3,7 +3,7 @@
  *
  * POST /v1/admin/engine
  *
- * Request body: {"engine": "dots"}
+ * Request body: {"engine": "f5tts"}
  * Response: SSE stream of status events
  *
  * Events:

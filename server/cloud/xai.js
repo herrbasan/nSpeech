@@ -18,11 +18,23 @@
 
 import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
+import { upstreamError } from './errors.js';
+import { clampNumber } from './params.js';
 
 const log = logger.child('cloud.xai');
 
 const BASE_URL = 'https://api.x.ai';
 const VOICES_CACHE_TTL_MS = 300_000; // 5 minutes
+
+// xAI enforces 0.7–1.5; nSpeech's API accepts 0.25–4.0. See cloud/params.js.
+const SPEED_RANGE = { name: 'speed', min: 0.7, max: 1.5, provider: 'xAI', fallback: 1.0 };
+
+/**
+ * Map an upstream xAI failure onto the API error contract (status + code).
+ * xAI's error table: 400 bad request, 401 unauthorized, 403 (cloning without
+ * an Enterprise plan), 404 unknown voice_id, 429 rate limited, 500/503 down.
+ * See server/cloud/errors.js.
+ */
 
 /** Map our extra_body fields to xAI-native request params. */
 function mapExtraBody(eb) {
@@ -30,10 +42,8 @@ function mapExtraBody(eb) {
 
   const mapped = {};
 
-  // Voice character
-  if (eb.expressiveness !== undefined) mapped.expressiveness = eb.expressiveness;
-
-  // Quality — xAI has no inference_steps/guidance_scale equivalent
+  // xAI has no expressiveness / inference_steps / guidance_scale equivalent —
+  // delivery is driven by inline speech tags in the text (see docs/providers/xai.md).
 
   // Text processing
   if (eb.language) mapped.language = eb.language;
@@ -91,16 +101,18 @@ export class XaiAdapter {
    * xAI's HTTP endpoint returns the full audio in one response (no SSE
    * streaming). We request PCM at 24kHz and return the full buffer.
    *
+   * xAI has **no model parameter** — one TTS endpoint, selected only by voice.
+   *
    * @param {object} params
    * @param {string} params.text
-   * @param {string} params.voice_name  — xAI voice_id (eve, ara, rex, sal, leo)
-   * @param {number} params.speed       — 0.7–1.5
-   * @param {string} [params.instruct_text]  — ignored (xAI uses speech tags in text)
+   * @param {string} params.voice_name  — xAI voice_id (from GET /v1/tts/voices)
+   * @param {number} params.speed       — clamped to xAI's 0.7–1.5
+   * @param {string} [params.instruct_text]  — unsupported; xAI takes delivery
+   *   direction as inline speech tags in the text ([pause], <whisper>…)
    * @param {object} [params.extra_body]
-   * @param {string} [params.model]     — not used (xAI has no model param)
    * @returns {Promise<Readable>}
    */
-  async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body, model }) {
+  async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body }) {
     const apiKey = this._getApiKey();
     const eb = mapExtraBody(extra_body);
 
@@ -112,7 +124,7 @@ export class XaiAdapter {
         codec: 'pcm',
         sample_rate: eb.sample_rate ?? 24000,
       },
-      speed: speed ?? 1.0,
+      speed: clampNumber(speed, SPEED_RANGE),
       optimize_streaming_latency: eb.optimize_latency ?? 0,
     };
 
@@ -137,7 +149,7 @@ export class XaiAdapter {
     if (!resp.ok) {
       const errText = await resp.text();
       log.error('xAI TTS failed', { status: resp.status, body: errText.slice(0, 500) });
-      throw new Error(`xAI TTS failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'xAI TTS failed');
     }
 
     // xAI returns raw audio bytes (PCM in our case)
@@ -237,13 +249,9 @@ export class XaiAdapter {
 
     if (!resp.ok) {
       const errText = await resp.text();
-      let detail = errText;
-      try {
-        const errJson = JSON.parse(errText);
-        detail = errJson.error || errJson.message || errText;
-      } catch {}
       log.error('xAI clone failed', { status: resp.status, body: errText.slice(0, 300) });
-      throw new Error(`xAI clone failed: HTTP ${resp.status} — ${detail}`);
+      // Custom-voices POST is Enterprise-only — a standard key gets 403/503.
+      throw upstreamError(resp.status, errText, 'xAI clone failed');
     }
 
     const data = await resp.json();

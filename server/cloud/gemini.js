@@ -18,6 +18,7 @@
 
 import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
+import { upstreamError } from './errors.js';
 
 const log = logger.child('cloud.gemini');
 
@@ -271,7 +272,7 @@ export class GeminiAdapter {
         return this._generateBatch({ url, fetchOpts, attempt: attempt + 1 });
       }
 
-      throw new Error(`Gemini TTS failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'Gemini TTS failed', 'model_not_found');
     }
 
     const data = await resp.json();
@@ -296,7 +297,7 @@ export class GeminiAdapter {
         return this._generateStreaming({ url, fetchOpts, attempt: attempt + 1 });
       }
 
-      throw new Error(`Gemini TTS failed: HTTP ${resp.status} — ${errText.slice(0, 200)}`);
+      throw upstreamError(resp.status, errText, 'Gemini TTS failed', 'model_not_found');
     }
 
     const nodeStream = new Readable({ read() {} });

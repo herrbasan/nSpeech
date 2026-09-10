@@ -192,10 +192,13 @@ class F5TtsAdapter:
         join exists only once both sides exist), so joins are never re-sent.
 
         Engine-specific kwargs:
-            nfe_step: ODE steps (default 32). 16=faster, 64=audiobook quality.
-            speed: duration divisor (default 1.0). 0.8 = 25% longer/slower.
-            cfg_strength: guidance strength (default 2.5; user-tuned 2026-08-18 —
-                2.5 tightens the 'scattered' timbre vs 1.5).
+            nfe_step: ODE steps (default 64). 16=faster, 64=audiobook quality.
+                'inference_steps' is accepted as an alias.
+            speed: duration divisor (default 0.9). 0.8 = 25% longer/slower.
+            cfg_strength: guidance strength — the default depends on the routed
+                language: 2.5 for EN (tightens the 'scattered' timbre vs 1.5)
+                and 1.5 for DE (2.5 over-guides and sounds metallic — the
+                German fine-tune uses an older F5TTS_Base arch).
             sway_sampling_coef: variation sampling (default -0.5; user-tuned
                 2026-08-18 — audibly smoother than -1).
             cross_fade_duration: chunk cross-fade seconds (default 0.15).

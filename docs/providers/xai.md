@@ -5,34 +5,48 @@
 **API Key source:** [xAI Console > API Keys](https://console.x.ai/team/default/api-keys)  
 **Playground:** [console.x.ai/voice/text-to-speech](https://console.x.ai/team/default/voice/text-to-speech)
 
-> xAI's TTS launched mid-2026 alongside Grok. 5 built-in voices with distinct personalities, custom voice cloning, inline speech tags (`[pause]`, `[laugh]`, `<whisper>...`), 20 languages, and a WebSocket streaming endpoint with multi-turn sessions and barge-in. Returns MP3 by default — effectively the closest thing to an "OpenAI TTS" cloud provider (same company DNA).
+> xAI's TTS launched mid-2026 alongside Grok. A growing built-in voice set (**28 as of 2026-09-10**, up from 5 at launch), custom voice cloning, inline speech tags (`[pause]`, `[laugh]`, `<whisper>...`), 20 languages, and a WebSocket streaming endpoint with multi-turn sessions and barge-in. Returns MP3 by default — effectively the closest thing to an "OpenAI TTS" cloud provider (same company DNA).
 
 ---
 
 ## Models
 
-| Model | Description |
-|-------|-------------|
-| `grok-tts-1` | Standard quality, fast |
-| `grok-tts-1-hd` | Higher fidelity, slightly slower |
+**xAI's TTS endpoint has no model parameter.** `POST /v1/tts` selects only a voice — there is no `model` field in the request body. xAI's model list prices TTS per character with no model name attached; the `grok-voice-think-fast-*` entries belong to the separate [Speech-to-Speech API](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech), not TTS.
 
-**nSpeech default:** `grok-tts-1` — best latency/quality balance. Model selection is implicit via the endpoint — there is no `model` parameter in the request body.
+nSpeech therefore exposes a single model for xAI:
+
+| Value | Meaning |
+|-------|---------|
+| `xai` | Grok Voice TTS — the only choice. Listed once in `GET /v1/models`. |
+
+The legacy slugs `xai_grok_tts_1` and `xai_grok_tts_1_hd` are still accepted as **aliases** so stored client values keep resolving, but both select the same single endpoint. `xai_grok_tts_1_hd` never did anything — nSpeech's adapter never sent a `model`, so the dashboard's selector was inert.
 
 ---
 
 ## Voices
 
-Five built-in voices, each with a distinct personality:
+**The built-in set has grown well past the original five — 28 as of 2026-09-10.** `GET /v1/tts/voices` is authoritative; treat any list here as a snapshot, not a contract.
+
+```
+altair  ara     atlas   aurora  carina  castor  celeste cosmo
+eve     helios  helix   iris    kepler  leo     liora   lumen
+luna    lux     naksh   orion   perseus rex     rigel   sal
+sirius  ursa    zagan   zenith
+```
+
+The original five, with their documented personalities:
 
 | Voice ID | Tone | Best for |
 |----------|------|----------|
-| `eve` | Energetic, upbeat | Demos, announcements, upbeat content |
+| `eve` | Energetic, upbeat | Demos, announcements — the default |
 | `ara` | Warm, friendly | Conversational interfaces, customer support, warm narration |
 | `rex` | Confident, clear | Business presentations, corporate communications, tutorials |
 | `sal` | Smooth, balanced | Versatile, mixed content types |
 | `leo` | Authoritative, strong | Instructions, educational content, authoritative narration |
 
-Voice IDs are **case-insensitive**. Custom cloned voices use a unique ID from the [Custom Voices API](https://docs.x.ai/developers/model-capabilities/audio/custom-voices).
+The rest (Altair, Atlas, Aurora, Carina, …) follow the same naming style. Voice IDs are **case-insensitive**. Custom cloned voices use a unique ID from the [Custom Voices API](https://docs.x.ai/developers/model-capabilities/audio/custom-voices).
+
+nSpeech lists all of them via `GET /v1/voices?engine=xai`, merged with any Node-managed presets.
 
 ---
 
@@ -87,6 +101,10 @@ Primary integration path for nSpeech. Returns raw audio bytes. Maximum 15,000 ch
 | `optimize_streaming_latency` | | `0` | 0=best quality, 1=lower TTFA, 2=lowest TTFA (more quality tradeoff) |
 | `text_normalization` | | `false` | When true, expands numbers/abbreviations/symbols into spoken form. |
 | `with_timestamps` | | `false` | When true, returns JSON envelope with base64 audio + per-char timestamps. |
+
+> **nSpeech clamps `speed` to `0.7`–`1.5`.** nSpeech's own API accepts `0.25`–`4.0`, but xAI hard-rejects anything outside its range with a `400`. Rather than passing that through — which surfaced as a `503 engine_error` and read as "xAI is down" — the adapter clamps to the nearest bound and logs a warning carrying the requested value. `speed: 2.0` becomes `1.5`; `speed: 0.5` becomes `0.7`.
+
+> **`instructions` is not forwarded.** xAI has no style/expressiveness parameter — delivery is driven by [speech tags](#speech-tags) embedded in the `text`. Passing `instructions` to an xAI request has no effect.
 
 ### Output Formats
 
@@ -319,6 +337,21 @@ So I walked in and [pause] there it was. [laugh] I honestly could not believe it
 | `429` | Rate limited | Exponential backoff retry |
 | `500` | Server error | Exponential backoff retry |
 | `503` | Service unavailable | Retry with backoff |
+
+### How nSpeech maps these
+
+The adapter propagates xAI's status rather than flattening every failure into a `503 engine_error`, so a bad request stays distinguishable from an outage:
+
+| xAI status | nSpeech status | `code` |
+|-----------|----------------|--------|
+| `400` | `400` | `invalid_request_error` |
+| `401` | `401` | `invalid_api_key` |
+| `403` | `403` | `permission_denied` (e.g. cloning without an Enterprise plan) |
+| `404` | `404` | `voice_not_found` |
+| `429` | `429` | `rate_limit_exceeded` |
+| `500` / `503` | `500` / `503` | `upstream_error` |
+
+The `404` + `voice_not_found` pair is what lets the SDK raise `VoiceNotFoundError` instead of a generic engine failure.
 
 ---
 
