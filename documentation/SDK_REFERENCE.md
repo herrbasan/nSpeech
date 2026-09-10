@@ -88,6 +88,8 @@ await client.mixVoices({ name: 'AB', voiceA: 'a', voiceB: 'b', ratio: 0.5, engin
 await client.deleteVoice('minimax', 'voice_id');
 ```
 
+Two cache layers are in play. The **server** answers `/v1/voices` from a persisted snapshot (disk scan for local engines, one provider call for cloud) so a listing never waits on a worker spawn — see "Voice cache" in `API_REFERENCE.md`. This client keeps its own copy on top (`cacheTtl`, default 5 min). They are independent: `clearVoiceCache()` clears only the client-side copy; `refreshCache()` rebuilds both.
+
 ### Presets
 
 ```js
@@ -109,6 +111,10 @@ const minimaxModels = await client.listEngineModels('minimax');
 await client.listEngines();     // { engines, current }
 await client.getEngine();       // current engine name
 await client.getStatus();       // /health
+
+// Cache admin (added 2026-09-10)
+await client.getCacheStatus();  // { file, engines: [{ engine, type, voices, builtins, age_ms }] }
+await client.refreshCache();    // rebuild the SERVER cache, then clear this client's voice cache
 ```
 
 ### Model selection
@@ -124,6 +130,8 @@ The `model` field accepts (`GET /v1/models` is the authoritative list):
 | Legacy alias (`"elevenlabs_turbo_v2_5"`) | Resolves to its canonical model |
 
 For cloud providers, `extraBody.model` overrides the sub-model with a provider-native id (e.g. `"speech-2.8-hd"`).
+
+`GET /v1/models` advertises only what is usable **without an engine switch** — cloud slugs, always-resident CPU engines (Kokoro), and `"nspeech"`. A GPU engine other than the current one is reachable by name but forces an unload/reload, so it is not listed; reach it through `"nspeech"` after selecting it in the dashboard.
 
 ### Errors
 

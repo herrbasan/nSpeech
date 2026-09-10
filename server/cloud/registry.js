@@ -137,6 +137,23 @@ export function isCloudModel(model) {
 }
 
 /**
+ * The engine (registry prefix) a model string belongs to, or null.
+ *
+ * "minimax" and "minimax_speech_2_8_hd" both → "minimax"; legacy aliases
+ * ("elevenlabs_turbo_v2_5") → "elevenlabs". Used to key engine-scoped caches
+ * by a canonical name regardless of which addressable slug the caller sent.
+ */
+export function cloudEngineName(model) {
+  if (!model || typeof model !== 'string') return null;
+  if (_adapters.has(model)) return model;
+  for (const [prefix, entry] of _adapters) {
+    if (entry.models.some(m => m.id === model)) return prefix;
+    if (entry.aliases?.[model]) return prefix;
+  }
+  return null;
+}
+
+/**
  * Get all registered cloud engines for the admin / models endpoints.
  *
  * Each engine exposes its model catalog: `models` is an array of

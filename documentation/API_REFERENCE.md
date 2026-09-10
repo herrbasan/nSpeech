@@ -28,6 +28,8 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
 | GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
+| GET | `/v1/admin/cache` | Voice-cache state — per-engine voice/built-in counts and age |
+| POST | `/v1/admin/cache/refresh` | Rebuild the voice cache now (disk re-scan, cloud re-fetch, resident re-warm) |
 | POST | `/v1/audio/transcriptions` | Speech-to-text (local faster-whisper, CPU) |
 | POST | `/v1/audio/align` | Forced alignment, text-constrained (local MMS CTC, CPU) |
 | POST | `/v1/text/clean` | Speech-ready text cleaning (regex / LLM) |
@@ -47,6 +49,20 @@ curl -X PUT http://127.0.0.1:2233/v1/defaults/f5tts \
   -H "Content-Type: application/json" \
   -d '{"voice":"Melon_DE","speed":1.0,"extra_body":{"cfg_strength":1.5,"nfe_step":32}}'
 ```
+
+### Voice cache
+
+`GET /v1/voices` is served from a server-side snapshot, never from the engine directly. The snapshot is built at service start and persisted to `.cache/voice-cache.json`, so a voice listing can't be delayed by a worker spawn or a cloud round-trip.
+
+- **Local engines** — cloned/blended voices are read straight from the engine's voice directory (`venv/<engine>/voices/`) by the same rules the worker applies (Chatterbox needs a `.pt` beside the wav; F5-TTS needs a `.f5tts.txt` transcript sidecar; `__preview__` entries are excluded). No worker, no VRAM. The engine's native catalog (Kokoro's 54 built-ins) is cached from the last authoritative worker answer and persisted across restarts.
+- **Cloud engines** — the adapter's catalog is fetched and cached (15-min TTL; the adapter's own 5-min cache sits underneath).
+- **Resident CPU engines** — `gpu:false` engines (Kokoro) are warmed at startup by spawning their worker, so their native catalog is captured without any dashboard visit. GPU engines are **never** spawned just to answer a voice listing.
+
+Mutations — clone, delete, mix, preset write — re-derive the affected engine synchronously before responding, so the next read is instant and reflects the write. A successful engine switch also refreshes the now-loaded engine's voices in the background.
+
+**A read never calls an engine.** A stale snapshot is returned as-is and revalidated in the background (stale-while-revalidate), so a client waits only for audio generation — never for a worker relay or a provider round-trip. The one exception is a cache with no entry at all, which can occur only on the very first request after a fresh install before warm-up has landed; even then a local engine resolves without a worker via the disk scan.
+
+Engines and models are deliberately **not** cached: both are built from the local registry and the cloud registry with no network, no worker, and no I/O beyond a `venv` existence check, so there is nothing to gain. Their live fields (`default`, `is_loaded`, `is_current`) are computed per request.
 
 ### Bilingual F5-TTS (`model: "f5tts"`)
 
@@ -97,7 +113,7 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `model` | string | `"nspeech"` | Engine selector. **Public values:** `"nspeech"` (dashboard-selected local engine), `"minimax"`, `"elevenlabs"`, `"gemini"`, `"xai"`. Cloud sub-models: `"minimax_speech_2_8_hd"`, `"eleven_v3"`, `"elevenlabs_turbo_v2_5"` (legacy alias). The authoritative list of available models (with display labels and defaults) is `GET /v1/models`. Old local names (`kokoro`, `dots`, etc.) are rejected — use `"nspeech"` and switch via dashboard. |
+| `model` | string | `"nspeech"` | Engine selector. Accepts any registered engine: `"nspeech"` (the dashboard-selected local engine), a local engine name (`"kokoro"` — always resident), a cloud prefix (`"minimax"`), a cloud model slug (`"minimax_speech_2_8_hd"`, `"eleven_v3"`), or a legacy alias (`"elevenlabs_turbo_v2_5"`). `GET /v1/models` is the authoritative list of what is usable **without an engine switch**, with display labels and defaults. |
 | `input` | string | **required** | Text to synthesize. |
 | `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in Chatterbox. |
 | `response_format` | string | `"mp3"` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`, `pcm_f32`. |
@@ -196,7 +212,7 @@ The `model` field selects a provider. Each provider has different strengths, pri
 | `"gemini"` | Cloud | 80+ languages, auto-detect | ~1s | — | 5K chars |
 | `"xai"` | Cloud | Grok integration | ~1s | ✅ | 5K chars |
 
-The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). The local engines (kokoro, chatterbox, dots) are NOT exposed as model names — clients use `"nspeech"` and get whatever engine the dashboard selected.
+The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). Local engines are also addressable by name: `"kokoro"` is always available (CPU, `gpu:false`, survives engine switches). Naming a GPU engine other than the current one also works, but forces an engine switch (unload + reload). `GET /v1/models` advertises only the models usable **without** a switch — cloud slugs, resident CPU engines, and `"nspeech"` itself — so GPU engines are reached through `"nspeech"` after selecting them in the dashboard.
 
 ### `extra_body` support by provider
 
@@ -207,9 +223,10 @@ The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/en
 | `expressiveness` | engine-dependent | emotion map | `style` | — | — |
 | `stability` | — | — | ✅ native | — | — |
 | `batch` | engine-dependent | ✅ | ✅ | ✅ | ✅ |
-| `inference_steps` | dots only | — | — | — | — |
-| `guidance_scale` | dots only | — | `similarity_boost` | — | — |
-| `seed` | dots only | — | ✅ | — | — |
+| `nfe_step` | ✅ f5tts (ODE steps; 16 fast, 64 audiobook) | — | — | — | — |
+| `cfg_strength` | ✅ f5tts (guidance; DE 1.5 / EN 2.5) | — | — | — | — |
+| `sway_sampling_coef` | ✅ f5tts (variation) | — | — | — | — |
+| `seed` | ✅ f5tts | — | ✅ | — | — |
 | `blend` | kokoro only | ✅ `timbre_weights` | — | — | — |
 | `language` | engine-dependent | ✅ `language_boost` | ✅ | ✅ (auto) | — |
 | `sample_rate` | — | ✅ | ✅ | — | — |
@@ -222,8 +239,9 @@ When `model: "nspeech"`, the actual engine behind the request is the one selecte
 | Engine | Voices | Strengths | `extra_body` notes |
 |--------|--------|-----------|--------------------|
 | Kokoro | 54 built-in + cloned/blended | Most stable, reliable for long-form narration, ONNX-based (fast startup) | `blend` via voice mixing endpoint; no `batch` support |
-| Chatterbox | cloned only | Three models (Turbo 350M / Eng 500M / Multilingual 500M), 23 languages | `expressiveness` via `exaggeration`; model type via `extra_body.model` |
-| dots.tts | cloned only | SOTA expressiveness, 48kHz native, best emotion range (2B AR model) | `batch`, `inference_steps`, `guidance_scale`, `seed`; slowest TTFA |
+| F5-TTS | cloned only (`<name>.wav` + `<name>.f5tts.txt` sidecar) | Primary GPU engine — bilingual EN/DE with per-request language routing | `speed`, `nfe_step`, `cfg_strength`, `sway_sampling_coef`, `seed`, `language` |
+| Chatterbox Turbo | cloned only | English alternative to F5-TTS | `expressiveness` (mapped to `exaggeration`) |
+| VibeVoice | cloned only | Multi-speaker dialogue (batch only, no streaming) | `voices: {1: "Alice", 2: "Bob"}`; script format `Speaker N: text` |
 
 ---
 

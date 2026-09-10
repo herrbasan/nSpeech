@@ -52,6 +52,30 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-10 — Server-side engine-data cache + model-selection doc fixes
+
+**Focus:** Client voice listings were the last thing that could stall on a worker spawn. Engines and models were already free; voices were not.
+
+**Finding:** `/v1/models` and `/v1/admin/engines` are registry-derived — no network, no worker, no I/O beyond a `venv` existence check (`adapter.health()` is a local API-key check). There is nothing to cache there, and caching them would only introduce stale `default`/`is_loaded`/`is_current` fields. The whole job was voices.
+
+**`server/voice-cache.js` (new)** — one snapshot per engine, in memory + persisted to `.cache/voice-cache.json`:
+- **Local engines** — cloned/blended voices are scanned straight off the engine's voice directory, mirroring the worker's rules (`chatterbox*` requires a `.pt` beside the wav; `f5tts`/`f5tts-german` require a `.f5tts.txt` sidecar; `__preview__` excluded). No worker, no VRAM. The scan rules are declarative now — `registry.json` gained `voice_scan.sidecar`.
+- **Native catalogs** — only Kokoro actually has one (54 built-ins); `f5tts`/`chatterbox-turbo`/`vibevoice` all return `[]` from `list_voices()`. The catalog is captured from the last authoritative worker answer and persisted, so it survives restarts even before the worker is up.
+- **Cloud** — adapter catalog fetched and cached (15-min TTL; the adapter's 5-min cache sits underneath).
+- **Warm-up** — `warm()` at startup: load disk snapshot → rebuild every local engine from disk (instant availability) → *then*, in the background, refresh cloud and warm `gpu:false` engines (Kokoro) so its built-ins land without a dashboard visit. GPU engines are never spawned to answer a listing.
+- **Reads never call an engine** — the design goal is that a client waits only for generation. A stale snapshot is returned as-is and revalidated in the background (stale-while-revalidate). With a persisted catalog in hand, even a Kokoro request during boot is served immediately rather than awaiting the in-flight warm.
+- Mutations (clone/delete/mix/preset) re-derive the affected engine *synchronously* before responding — a stale-while-revalidate read straight after a write would be a read-your-own-write failure. A successful engine switch refreshes the now-loaded engine in the background.
+
+**Routes/SDK:** `GET /v1/admin/cache` (state), `POST /v1/admin/cache/refresh` (rebuild). SDK adds `getCacheStatus()` / `refreshCache()`; the dashboard **Refresh** button now rebuilds the *server* cache too — a client-side clear alone just re-read the same snapshot.
+
+**Docs:** `API_REFERENCE.md` gains a "Voice cache" section + the two routes.
+
+**Model-selection doc fixes (drift audit):** `API_REFERENCE.md` claimed local engine names are "rejected" as `model` and that kokoro/chatterbox/dots are "NOT exposed as model names" — both false. `manager.getEngine()` accepts any registered local name, and `/v1/models` explicitly lists resident CPU engines. Corrected to: `model` accepts local names; `/v1/models` advertises only what needs no switch. The local-engine table still listed **dots.tts** (removed 2026-08-29) and a three-model Chatterbox (eng/mtl retired) — replaced with Kokoro / F5-TTS (bilingual) / Chatterbox Turbo / VibeVoice. The `extra_body` matrix's `inference_steps` / `guidance_scale` / `seed` rows were still "dots only" — now the real f5tts fields (`nfe_step`, `cfg_strength`, `sway_sampling_coef`, `seed`). `SDK_REFERENCE.md` was already correct and only gained the cache helpers + a GPU-engine caveat.
+
+**Incidental:** `server/presets.js` `_read()` swallows a corrupt presets JSON with `catch { return [] }` — a fail-silent path that hides a damaged preset store (logged separately).
+
+**Open:** first-ever boot has a few seconds where Kokoro's built-ins are absent (worker still booting); harmless after the snapshot exists. `nSpeech_Spec.md` §§3, 11, 25 still list dots/Chatterbox-Turbo-as-primary — stale from the engine cleanup, not touched here.
+
 ### 2026-09-08 — Cloud models exposed to clients + dashboard model selectors
 
 **Focus:** Report each cloud provider's available models to clients and make the dashboard select among them, instead of hard-coding provider defaults.
@@ -325,4 +349,4 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ---
 
-*Last updated: 2026-08-29*
+*Last updated: 2026-09-10*

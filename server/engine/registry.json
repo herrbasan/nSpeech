@@ -22,6 +22,9 @@
     "health_check_timeout_ms": 180000,
     "env": {
       "NSPEECH_F5_CKPT_DE": "venv/f5tts/models/F5-TTS-German/model_420000.safetensors"
+    },
+    "voice_scan": {
+      "sidecar": ".f5tts.txt"
     }
   },
   "f5tts-german": {
@@ -35,6 +38,9 @@
     "env": {
       "NSPEECH_F5_MODEL": "F5TTS_Base",
       "NSPEECH_F5_CKPT": "venv/f5tts/models/F5-TTS-German/model_420000.safetensors"
+    },
+    "voice_scan": {
+      "sidecar": ".f5tts.txt"
     }
   },
   "vibevoice": {

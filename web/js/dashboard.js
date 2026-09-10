@@ -107,13 +107,14 @@ warmUpCaches();
 
 // ── Manual refresh (header button) ──────────────────────────────────────────
 // Clears the model + voice caches and reloads the dashboard so the current
-// page re-fetches fresh data from the endpoints. Call this from a "Refresh"
-// control; it's what makes the once-on-start caching releasable.
-window.nspeechRefreshData = () => {
+// page re-fetches fresh data from the endpoints. It also rebuilds the
+// server-side voice cache — a client-side clear alone would just re-read the
+// same server snapshot. Call this from a "Refresh" control.
+window.nspeechRefreshData = async () => {
     localStorage.removeItem(MODELS_CACHE_KEY);
     _modelList = null;
     _modelListAt = 0;
-    client.clearVoiceCache();
+    try { await client.refreshCache(); } catch { client.clearVoiceCache(); }
     window.location.reload();
 };
 

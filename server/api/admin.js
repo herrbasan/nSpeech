@@ -35,6 +35,10 @@ import { manager } from '../engine/manager.js';
 import { getEntry } from '../engine/registry.js';
 import { resolveCloud } from '../cloud/registry.js';
 import { subscribe, getHistory } from '../events.js';
+import { logger } from '../logger.js';
+import * as voiceCache from '../voice-cache.js';
+
+const log = logger.child('admin');
 
 /**
  * Register admin routes on a Fastify instance.
@@ -148,6 +152,9 @@ export function registerAdminRoutes(app) {
       manager.setCurrentEngine(engineName);
       sendEvent('result', { engine: engineName, status: 'switched' });
       reply.raw.end();
+      // Refresh this engine's cached voices in the background — the adapter
+      // round-trip must not hold the switch SSE open.
+      voiceCache.refresh(engineName).catch(err => log.warn('post-switch voice refresh failed', { engine: engineName, error: err.message }));
       return;
     }
 
@@ -206,6 +213,9 @@ export function registerAdminRoutes(app) {
       });
 
       sendEvent('result', result);
+      // The engine is now loaded, so its answer is authoritative (native
+      // catalog + disk). Fire-and-forget — the switch SSE must not wait on it.
+      voiceCache.refresh(engineName).catch(err => log.warn('post-switch voice refresh failed', { engine: engineName, error: err.message }));
     } catch (err) {
       const errorObj = err.toJSON ? err.toJSON() : {
         error: { message: err.message, type: 'engine_error', code: 'unknown' },
@@ -315,5 +325,24 @@ export function registerAdminRoutes(app) {
       engines: [...localEngines, ...cloudEngines],
       current: manager.currentEngine,
     };
+  });
+
+  // ── GET /v1/admin/cache — voice-cache state ──────────────────────────────
+  //
+  // Engines and models are deliberately absent: both are built from the local
+  // registry and the cloud registry with no network and no worker, so there is
+  // nothing to cache. Only voices needed a snapshot.
+
+  app.get('/v1/admin/cache', async () => voiceCache.status());
+
+  // ── POST /v1/admin/cache/refresh — rebuild the cache now ─────────────────
+  //
+  // Re-reads every engine's voice directory, re-fetches every cloud catalog,
+  // and re-warms the resident CPU engines. Returns once the local engines are
+  // rebuilt; cloud and resident warm-ups continue in the background.
+
+  app.post('/v1/admin/cache/refresh', async () => {
+    await voiceCache.warm();
+    return voiceCache.status();
   });
 }

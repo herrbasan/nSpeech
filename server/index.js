@@ -19,6 +19,7 @@ import { registerSttRoutes } from './api/transcriptions.js';
 import { registerTextRoutes } from './api/text.js';
 import { registerDefaultsRoutes } from './api/defaults.js';
 import { registerAdminRoutes } from './api/admin.js';
+import * as voiceCache from './voice-cache.js';
 
 // ── Initialize logger ───────────────────────────────────────────────────────
 
@@ -234,6 +235,13 @@ try {
   console.log(`• Health:    ${url}health`);
   console.log('• Stop Server: Press Ctrl+C');
   console.log('=========================================\n');
+
+  // Warm the voice cache so client voice listings are served from memory
+  // instead of waiting on a worker spawn or a cloud round-trip. Deliberately
+  // not awaited: the server accepts requests immediately, and warm() returns
+  // as soon as the local disk scans finish (cloud + resident warm-ups run on
+  // in the background).
+  voiceCache.warm().catch(err => log.warn('voice cache warm-up failed', { error: err.message }));
 } catch (err) {
   log.error('failed to start server', { error: err.message });
   console.error('\n=========================================');

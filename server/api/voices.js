@@ -17,6 +17,7 @@ import { pipePcmToClient } from '../transcode.js';
 import { logger } from '../logger.js';
 import { parseMultipart } from './multipart.js';
 import * as presets from '../presets.js';
+import * as voiceCache from '../voice-cache.js';
 
 /**
  * Register all voice management routes on a Fastify instance.
@@ -27,25 +28,35 @@ export function registerVoiceRoutes(app) {
 
   const getVoicesHandler = async (request, reply) => {
     const model = request.query.engine || request.query.model;
+    const engineName = voiceCache.engineKey(model, manager.currentEngine);
 
-    let engine;
+    // Cached path: serve from the server-side snapshot. It reads the engine's
+    // voice directory directly and never spawns a worker, so a voice listing
+    // can't trigger a GPU load. An engine this cache doesn't know falls
+    // through to getEngine() so unknown names still fail with a 404.
+    let engineData;
     try {
-      // Voice listing may target dashboard-only (api_hidden) engines — the
-      // dashboard's per-engine voices pages need their engine's list even
-      // when it's not current. Generation stays guarded (speech relay).
-      manager._allowHiddenLookup = true;
-      const resolved = await manager.getEngine(model);
-      engine = resolved.engine;
+      if (voiceCache.isCacheable(model, manager.currentEngine)) {
+        engineData = await voiceCache.get(engineName);
+      } else {
+        // Voice listing may target dashboard-only (api_hidden) engines — the
+        // dashboard's per-engine voices pages need their engine's list even
+        // when it's not current. Generation stays guarded (speech relay).
+        manager._allowHiddenLookup = true;
+        try {
+          const resolved = await manager.getEngine(model);
+          engineData = await resolved.engine.listVoices();
+        } finally {
+          manager._allowHiddenLookup = false;
+        }
+      }
     } catch (err) {
       return sendError(reply, err);
-    } finally {
-      manager._allowHiddenLookup = false;
     }
 
     try {
-      // Clone the engine response so we don't mutate the engine's internal
-      // cache (e.g. cloud adapters cache the voices object by reference).
-      const engineData = await engine.listVoices();
+      // Clone the list so we don't mutate the engine's internal cache
+      // (cloud adapters cache the voices array by reference).
       const data = { voices: engineData.voices ? [...engineData.voices] : [] };
 
       // Normalize: ensure each voice has voice_id and engine fields
@@ -55,21 +66,17 @@ export function registerVoiceRoutes(app) {
           name: v.name ?? v.voice_id,
           category: v.category ?? 'cloned',
           voice_type: v.voice_type ?? v.category ?? 'cloned',
-          engine: v.engine ?? (typeof engine.engineName === 'string' ? engine.engineName : 'cloud'),
+          engine: v.engine ?? engineName,
           ...v,
         }));
       } else {
         data.voices = [];
       }
 
-      // Merge Node-managed presets into the voice list.
-      // Use the query param (model) for the engine name — cloud adapters
-      // don't expose engineName, and the model string is the canonical name.
-      const engineName = model || (typeof engine.engineName === 'string' ? engine.engineName : null);
-      if (engineName) {
-        const presetVoices = presets.toVoiceList(engineName);
-        data.voices.push(...presetVoices);
-      }
+      // Merge Node-managed presets into the voice list. Presets are keyed by
+      // engine name — engineKey() normalizes model slugs (cloud aliases, bare
+      // prefixes) to the same name the preset store uses.
+      data.voices.push(...presets.toVoiceList(engineName));
 
       reply.send(data);
     } catch (err) {
@@ -110,6 +117,7 @@ export function registerVoiceRoutes(app) {
         model: data.model,
       });
 
+      await voiceCache.invalidate(voiceCache.engineKey(model, manager.currentEngine));
       reply.send(result);
     } catch (err) {
       sendError(reply, err);
@@ -194,6 +202,7 @@ export function registerVoiceRoutes(app) {
         voice_b: request.body.voice_b,
         ratio: request.body.ratio ?? 0.5,
       });
+      await voiceCache.invalidate(voiceCache.engineKey(model, manager.currentEngine));
       reply.send(result);
     } catch (err) {
       sendError(reply, err);
@@ -219,6 +228,7 @@ export function registerVoiceRoutes(app) {
 
     try {
       const result = presets.set(engineName, { id, name, voice, instructions, speed, extra_body });
+      await voiceCache.invalidate(engineName);
       reply.send({
         voice_id: result.id,
         name: result.name,
@@ -247,6 +257,7 @@ export function registerVoiceRoutes(app) {
     // delete it locally without involving the engine.
     const engineName = model && typeof model === 'string' ? model : manager.currentEngine;
     if (presets.remove(engineName, voiceId)) {
+      await voiceCache.invalidate(engineName);
       return reply.send({ deleted: true });
     }
 
@@ -260,6 +271,7 @@ export function registerVoiceRoutes(app) {
 
     try {
       const result = await engine.deleteVoice(voiceId);
+      await voiceCache.invalidate(voiceCache.engineKey(model, manager.currentEngine));
       reply.send(result);
     } catch (err) {
       sendError(reply, err);
