@@ -52,6 +52,17 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-10 — nui_wc2 submodule updated (drift caught mid-session)
+
+`lib/nui_wc2` moved `16d1bc1` → `9ceab81` — 17 commits, a clean fast-forward, with the submodule sitting on `main` matching `origin/main`. It surfaced only as a ` M` gitlink in `git status` while the submodule's own tree was clean: the pin had moved without a single file changing, which is exactly the kind of drift that goes unnoticed until the dashboard renders differently. Recorded as its **own** commit rather than folded into the session's feature work.
+
+Two of the commits matter to this project directly:
+
+- `fix(nui-select): support direct DOM population` — the dashboard's model and voice selectors fall back to `editorSel.innerHTML = ...` when the component has no `setItems`. That path is now supported upstream.
+- a `nui-media-player` fix declaring state **before** the `ResizeObserver` / `readyState` reads — `nui-media-player` is what the generate widget plays through.
+
+Prompted the new `### Submodules — keep them current` section under Development Maxims: check `git submodule status` at session start, surface drift and ask before updating, never edit inside a stale checkout, and never fold a gitlink bump into an unrelated commit.
+
 ### 2026-09-10 — "Save as Default" never applied: engine-scoped stores were keyed by the raw model string
 
 **Reported:** dashboard "Save as Default" doesn't persist; after a restart the engine reverts to hardwired settings.
@@ -440,6 +451,24 @@ Every engine in `server/engine/registry.json` and every provider in `server/clou
 - **Zero dependencies:** Standard library first. Dependencies only when truly necessary.
 - **.env is NEVER committed:** API keys stay local.
 - **Never start/stop the server:** The assistant must NEVER run `npm start`, restart, or kill the nSpeech server. If a restart is needed, ask the user to do it.
+
+### Submodules — keep them current
+
+Three submodules. Each is a separate repo this project only *consumes*:
+
+| Path | Repo | Provides |
+|------|------|----------|
+| `lib/nlogger` | `herrbasan/nLogger` | the shared Node logger |
+| `lib/nui_wc2` | `herrbasan/nui_wc2` | the dashboard's UI components |
+| `lib/nvideo` | `herrbasan/nvideo` | the bundled ffmpeg binary |
+
+**Check at the start of every session.** `git submodule status` — a `+` prefix means the checked-out commit differs from what this repo records, and that difference is invisible in the code but decides how the dashboard builds and renders.
+
+- **Behind upstream? Say so and ask before updating.** A snapshot refresh changes build output and rendered behaviour, so it is a deliberate act, not housekeeping.
+- **Never edit inside a submodule** without fetching and comparing against upstream first. A drifted checkout is a *read-only baseline* — authoring a change against a stale vendored clone produces a fix that does not apply upstream.
+- **Record an update when you make one.** After pulling a submodule forward, commit the new gitlink here in the same session. Otherwise the tree sits permanently dirty and every later session re-litigates the same question.
+- **Never fold a gitlink bump into an unrelated commit.** Committing the pin is a deliberate statement that the project now depends on that revision — it belongs in its own commit with its own reason.
+- **A submodule pin is not content.** `git status` showing ` M lib/<name>` with a *clean* working tree inside means the pin moved, not that files changed. Confirm with `git -C lib/<name> status --short` before deciding anything.
 
 ---
 
