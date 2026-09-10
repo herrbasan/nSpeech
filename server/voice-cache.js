@@ -262,6 +262,13 @@ export function isCacheable(model, currentEngine) {
   return cloudEngineName(name) !== null;
 }
 
+/** Store an authoritative voice list and persist it. */
+function _store(engineName, voices) {
+  _memory.set(engineName, { voices, at: Date.now() });
+  _persist();
+  log.info('voice cache refreshed', { engine: engineName, count: voices.length, source: _isCloud(engineName) ? 'cloud' : 'local' });
+}
+
 /**
  * Fetch fresh voices for one engine and store them. Never spawns a worker.
  * @param {string} engineName
@@ -275,9 +282,7 @@ export async function refresh(engineName) {
 
   const run = (async () => {
     const voices = await _fetchVoices(engineName);
-    _memory.set(engineName, { voices, at: Date.now() });
-    _persist();
-    log.info('voice cache refreshed', { engine: engineName, count: voices.length, source: _isCloud(engineName) ? 'cloud' : 'local' });
+    _store(engineName, voices);
     return { voices };
   })();
   _inFlight.set(engineName, run);
@@ -404,9 +409,16 @@ export async function warm() {
 async function _warmResident(engineName) {
   const run = (async () => {
     const { manager } = await import('./engine/manager.js');
-    await manager.getWorker(engineName);
-    await refresh(engineName);
-    log.info('resident engine warmed', { engine: engineName });
+    const worker = await manager.getWorker(engineName);
+    // Read the worker directly — do NOT go through refresh(). _fetchVoices
+    // awaits this very promise when no native catalog is cached yet, so
+    // calling refresh() from inside it is a self-deadlock: the promise would
+    // await itself and never settle, silently leaving Kokoro's built-ins
+    // uncaptured forever.
+    const data = await worker.listVoices();
+    const voices = data.voices || [];
+    _store(engineName, voices);
+    log.info('resident engine warmed', { engine: engineName, count: voices.length });
   })();
   _residentWarm.set(engineName, run);
   try {
