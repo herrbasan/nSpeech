@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 
 import { getEntry, listEngines, venvExists, PROJECT_ROOT } from './registry.js';
 import { WorkerProcess, WorkerError } from './worker.js';
-import { resolveCloud } from '../cloud/registry.js';
+import { resolveCloud, cloudEngineName } from '../cloud/registry.js';
 import { logger } from '../logger.js';
 import { emit } from '../events.js';
 
@@ -379,3 +379,24 @@ export class EngineManager {
 
 // Singleton instance
 export const manager = new EngineManager();
+
+/**
+ * Canonical engine name for a `model` string — the key that engine-scoped
+ * stores (generation defaults, voice presets) are keyed by.
+ *
+ * A client may legitimately send `"nspeech"` (the documented value for the
+ * current local engine), a cloud model slug (`"minimax_speech_2_8_hd"`), a
+ * legacy alias, or a bare engine name. Only the last of those matches a stored
+ * key, so looking the stores up by the raw `model` string silently missed
+ * every other form — a saved dial-in then appeared "not to persist" while the
+ * engine fell back to its own hardwired defaults.
+ *
+ * Unknown strings pass through unchanged, so they simply match nothing.
+ *
+ * @param {string} [model]
+ * @returns {string|null}
+ */
+export function engineNameFor(model) {
+  if (!model || model === 'nspeech') return manager.currentEngine;
+  return cloudEngineName(model) || model;
+}

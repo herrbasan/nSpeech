@@ -52,6 +52,62 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-10 — "Save as Default" never applied: engine-scoped stores were keyed by the raw model string
+
+**Reported:** dashboard "Save as Default" doesn't persist; after a restart the engine reverts to hardwired settings.
+
+**Root cause:** the speech relay looked up generation defaults with `const defKey = body.model || manager.currentEngine`, i.e. by the **raw `model` string**. The dashboard saves under the *engine name* (`f5tts`, `minimax`), but a client may send `"nspeech"` (the documented value for the current local engine), a cloud model slug (`"minimax_speech_2_8_hd"`), or a legacy alias. None of those equal a stored key, so `defaults.get()` returned null and the entry was silently ignored — the engine fell back to its own hardwired adapter defaults, which looks exactly like "the setting didn't persist".
+
+Proven live: `model: "minimax"` logged `defaults applied {engine: minimax}`, while `model: "minimax_speech_2_8_hd"` logged nothing at all for the same saved entry. `"nspeech"` was the same failure one level down — it is never a stored key.
+
+**Fix — `engineNameFor(model)` in `server/engine/manager.js`:** one normalizer mapping a model string to its canonical engine name (`nspeech`/null → current engine; cloud slug or alias → provider prefix; local name → itself; unknown passes through so it matches nothing). Used for **both** the defaults lookup and preset resolution — presets had the identical bug, so a preset saved for `f5tts` was invisible to a client asking via `"nspeech"`.
+
+**Second bug in the same merge:** `voice: "default"` is the documented "engine default" sentinel, but the default-fill guard only fired on `body.voice == null`. The dashboard always sends the sentinel when nothing is selected, so a saved **voice** default could never take effect from the dashboard. `'default'` is now treated as unset.
+
+**Third bug, found while testing:** MiniMax passed the `'default'` sentinel straight through as a `voice_id`, returning status `2042` "you don't have access to this voice_id" → reported as a 502. Fish already omitted `reference_id` for the same input. MiniMax now falls back to a real system voice, and `2042` is mapped to `404 voice_not_found` alongside `2054` (both observed, neither documented).
+
+**Fourth bug — the SDK defeated the whole feature.** `NSpeechClient.speech()` sent `speed: speed ?? 1.0`, so a client that *"didn't specify options"* still sent an explicit `1.0`. The relay's fill-only-unset contract then correctly refused to override it — meaning a dialled-in `speed` could never reach **any** SDK client. The SDK now sends only what the caller actually passed; `speed` is omitted when unset and falls through to the saved per-engine default, then the engine's own. `voice: "default"` is still sent (it is the documented sentinel, and the relay now treats it as unset).
+
+**Intent (confirmed by the user):** the dashboard is the **admin** surface, API clients are the **consumers**. The whole point of a dial-in is that a client can call the API *without* specifying an option and get the admin's value. Two rules follow, and both were being broken: don't send defaulted values, and treat `voice: "default"` as unset. `API_REFERENCE.md` now states this explicitly, and `speed`'s documented default is "engine default" rather than a hardcoded `1.0`.
+
+**Verified:** `engineNameFor` maps `undefined`/`null`/`nspeech` → current engine, every cloud slug, alias and bare prefix → its provider, local names → themselves, unknown strings unchanged. Syntax clean; live confirmation needs a restart.
+
+**Not changed — deliberate:** the dashboard restores its controls from `localStorage` only; it never reads `/v1/defaults/<engine>`. That is correct for an admin surface — the admin is looking at the sliders they are about to send. A fresh browser profile shows the pages' HTML defaults until the page is re-opened and re-saved.
+
+### 2026-09-10 — Cloud provider audit: error mapping, fabricated model catalogs, speed ranges
+
+**Trigger:** "xAI doesn't work." It did — our error handling was hiding the reason.
+
+**Root cause:** xAI enforces `speed` 0.7–1.5 and returns HTTP 400 outside it. nSpeech's API accepts 0.25–4.0, passed it straight through, and the adapter threw a plain `Error` — which every route's `sendError()` turns into `503 engine_error` / `code: unknown`. A bad speed value was indistinguishable from an outage.
+
+**That was systemic.** All five adapters threw plain errors, so *every* upstream 4xx (400 bad params, 401 auth, 402 no credit, 404 unknown voice, 429 rate limit) became `503 unknown`. The SDK's `RateLimitError` and `VoiceNotFoundError` were unreachable for cloud engines because nSpeech never returned those statuses. Fixed with **`server/cloud/errors.js`** — `upstreamError(status, body, what, notFoundCode)` → `WorkerError` (the shared type `sendError()` already honours: `status` + `toJSON()`). Applied at ~15 sites. `notFoundCode` exists because a blind 404 → `voice_not_found` mislabels a *model* 404 (Gemini).
+
+**Speed ranges** moved to **`server/cloud/params.js`** — `clampNumber(value, {name, min, max, provider, fallback})`, one uniform warning. xAI 0.7–1.5, ElevenLabs 0.7–1.2, MiniMax 0.5–2.0, Fish 0.5–2.0. All four verified live against the providers.
+
+- **ElevenLabs' speed did nothing at all** — the adapter destructured `speed` and never sent it. Now sent as `voice_settings.speed`. Range verified: `eleven_flash_v2_5` accepts 0.7 and 1.2, rejects 1.21 (`invalid_voice_settings`); `eleven_v3` accepts 0.5–2.0 but is clamped to the same window so models behave alike.
+
+**Fabricated model catalogs** (checked against the providers' own model endpoints, not the docs):
+
+- **xAI has no `model` parameter at all** — the complete request body is `text`, `voice_id`, `language`, `output_format`, `speed`, `optimize_streaming_latency`, `text_normalization`, `with_timestamps`, `replace`. We advertised `xai_grok_tts_1` + `xai_grok_tts_1_hd` and the adapter never sent one, so the dashboard selector was inert. Collapsed to a single `xai` entry; old slugs kept as aliases. xAI also has **28 built-in voices now, not the 5 documented**.
+- **`gemini_3_1_flash_tts` does not exist** — Google answers `404 Model 'gemini-3.1-flash-tts' not found` (verified). Removed; aliased to the preview model. Gemini 404s during synthesis now report `model_not_found`.
+- **MiniMax** exposes 4 of its 8 real models (the current 2.8/2.6 series); legacy `speech-02-*`/`speech-01-*` still work unadvertised. Its catalogue was honest.
+- **ElevenLabs**: `eleven_flash_v2` is real and was *missing* from the registry even though their docs name it as the replacement for the deprecated `eleven_turbo_v2`; added. `elevenlabs.md` had invented ids `eleven_v2_flash`/`eleven_v2_5_flash` — corrected. `eleven_turbo_v2`/`_v2_5` kept but labelled deprecated.
+- **Fish** is honest — all four models resolve; the three paid ones return `402 Insufficient credit`, which now surfaces with the real reason.
+
+**MiniMax's hidden errors:** MiniMax reports failure inside an **HTTP 200 body** via `base_resp.status_code`, and a rejected *streaming* request comes back as plain JSON (`application/json`), **not SSE** — so the error never arrived as a `data:` line. The adapter logged the reason at INFO and threw a generic "produced no audio" → `503 unknown`. Now: content-type check + a `base_resp` mapping table. `2054 voice id not exist` is undocumented — found live → `404 voice_not_found`.
+
+**Verified live after restart:** xAI speed 2.0/0.5 → 200; xAI bad voice → 404 `voice_not_found`; xAI legacy `_hd` slug still resolves; MiniMax bad voice (stream *and* batch) → 404 `voice_not_found` with "voice id not exist"; MiniMax speed 3.5 → clamped; ElevenLabs speed 2.0 → clamped, 200; Kokoro 60 voices / 54 builtins; cloud caches all populated.
+
+**Docs updated:** `xai.md`, `minimax.md`, `elevenlabs.md`, `gemini.md`, and the `speed` row in `API_REFERENCE.md`.
+
+**Docs added/removed:** `docs/providers/dots.md` deleted (engine removed 2026-08-29). `docs/providers/fish.md` and `docs/providers/f5tts.md` written fresh — the F5 doc centres on the **two-checkpoint bilingual design** (EN `F5TTS_v1_Base` + DE `aihpi/F5-TTS-German`, explicit `extra_body.language` override, weighted `detect_language` fallback, per-language `cfg_strength` 2.5 EN / 1.5 DE, both checkpoints resident). Dangling `dots` examples also removed from `API_REFERENCE.md` §3 and the `admin.js` docstring, and the F5 adapter's docstring corrected (nfe_step default 64 not 32, speed 0.9 not 1.0, cfg_strength per-language not a flat 2.5).
+
+**Process change — new `## Documentation Rules` section.** The two new docs were first drafted from our own adapter code and this log, with source links that were never actually opened. That is the wrong basis, so the rule is now written down: provider docs must be grounded in the provider's own docs or endpoints (live API wins on disagreement), **our code is not evidence of provider behaviour**, and no model/voice/param/status code may be documented without having been seen in the provider's own output. Uncertainty does not belong in a provider doc — it belongs here as an open item.
+
+**Re-verified against official sources, then corrected:** `fish.md` — documented `latency` values are `balanced`/`normal` (the `low` in our adapter comment is not in Fish's docs); Fish's own default model is `s2.1-pro` when the header is omitted, while nSpeech sends `s2.1-pro-free`; added output formats + `mp3_bitrate` and `max_new_tokens`. `f5tts.md` — upstream is **MIT code but CC-BY-NC weights**, and that applies to the base checkpoints too, not only the German fine-tune; architecture is DiT with ConvNeXt V2; the German card is by HPI, trained on Common Voice + Emilia_DE, publishing both vocos and bigvgan variants.
+
+**Still open:** `install.py` and `requirements/dots.txt` still list the retired `dots` engine; `docs/AUDIO_API_PLAN.md` and `documentation/nSpeech_Spec.md` still describe it as current (the spec also calls Chatterbox Turbo the primary GPU engine — F5 is).
+
 ### 2026-09-10 — Server-side engine-data cache + model-selection doc fixes
 
 **Focus:** Client voice listings were the last thing that could stall on a worker spawn. Engines and models were already free; voices were not.
@@ -335,6 +391,43 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 | [docs/VOICE_PRESETS.md](docs/VOICE_PRESETS.md) | Voice preset specification |
 | [documentation/API_REFERENCE.md](documentation/API_REFERENCE.md) | Concise endpoint reference |
 | [documentation/SDK_REFERENCE.md](documentation/SDK_REFERENCE.md) | Client SDK reference for `lib/nspeech-client/nspeech-client.js` — `NSpeechClient`, `SpeechPlayer`, `EventStream`, text cleaning, models |
+
+---
+
+## Documentation Rules
+
+**Engine and provider documentation must be grounded in official sources.**
+
+`docs/providers/*.md` states how a third-party engine or provider actually behaves. That is a factual claim about the outside world, and it has to come from the source — never from inference, memory, or our own code comments.
+
+### Sourcing
+
+- **Ground every provider doc in the official source:** the provider's API docs or OpenAPI spec, its model-list endpoint, its changelog — or a live probe against the API. Where two sources disagree, the **live API wins**.
+- **Our own code is not a source for provider behaviour.** `server/cloud/*.js` and the Python adapters record what *we* send; they do not establish what the provider accepts, what its defaults are, or what its error codes mean. A comment in an adapter (say, `latency: 'normal'|'balanced'|'low'`) is a claim to verify, not evidence.
+- **Never document a model, voice, parameter, or status code that hasn't been seen in the provider's own list or docs.** Catalogues drift and get invented — nSpeech has shipped fabricated model names at least twice (`xai_grok_tts_1_hd`, `gemini_3_1_flash_tts`); both 404'd at the provider, and both had been advertised to clients through `/v1/models` and the dashboard model selector.
+- **Prefer the provider's enumeration endpoint** (`GET /v1/models`, `/v1beta/models`, `/v1/tts/voices`) over prose tables in their docs — that list is what the client is actually billed against.
+
+### Keeping docs current
+
+- `docs/providers/*.md` are **live documents, not historical records.** A model added or retired, an endpoint changed, a range moved, a parameter renamed — update the doc in the same session.
+- **A wrong doc claim is a bug.** Fix the doc *and* whatever relied on it (registry entry, adapter, dashboard selector).
+- **No hedging inside a provider doc.** A doc that says "unverified" or "treat as uncertain" is unfinished. Either verify the claim from the source or leave it out — uncertainty belongs in the Activity Log as an open item, not in a reference document.
+- **Our own measurements are legitimate content**, but attribute them as nSpeech measurements with a date. Never present them as the provider's published specs.
+
+### Doc set
+
+| Doc | Covers |
+|-----|--------|
+| `docs/providers/kokoro.md` | Local — Kokoro |
+| `docs/providers/chatterbox.md` | Local — Chatterbox Turbo |
+| `docs/providers/f5tts.md` | Local — F5-TTS (bilingual EN/DE, two checkpoints) |
+| `docs/providers/fish.md` | Cloud — Fish Audio |
+| `docs/providers/elevenlabs.md` | Cloud — ElevenLabs |
+| `docs/providers/minimax.md` | Cloud — MiniMax |
+| `docs/providers/gemini.md` | Cloud — Gemini |
+| `docs/providers/xai.md` | Cloud — xAI |
+
+Every engine in `server/engine/registry.json` and every provider in `server/cloud/registry.js` must have a doc here. When an engine is retired, its doc goes with it (`dots.md`, removed 2026-09-10).
 
 ---
 

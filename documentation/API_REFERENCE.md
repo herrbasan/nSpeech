@@ -44,6 +44,13 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 
 `PUT /v1/defaults/:engine` persists a dial-in (`{voice, speed, extra_body}`) saved from the dashboard's **Save as Default** button. The speech relay merges saved defaults into any request: fields the request leaves unset are filled from the store — explicit request values always win. Defaults apply before preset resolution. `DELETE` (or the dashboard **Reset** button) clears them.
 
+**The dashboard is the admin surface; API clients are the consumers.** The point of a dial-in is that a client can call the API *without* specifying an option and get the admin's value. Two things are therefore essential:
+
+- **Do not send defaulted values.** A client that sends `speed: 1.0` “because that's the default” has made it explicit, and the saved value will be ignored. Omit the field to inherit.
+- `voice: "default"` counts as **unset** — that sentinel means "engine default", so a saved voice still applies.
+
+Defaults are stored and looked up **by engine name**, not by the raw `model` string: `"nspeech"`, a cloud slug (`"minimax_speech_2_8_hd"`), a legacy alias and the bare engine name all resolve to the same entry.
+
 ```bash
 curl -X PUT http://127.0.0.1:2233/v1/defaults/f5tts \
   -H "Content-Type: application/json" \
@@ -117,7 +124,7 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
 | `input` | string | **required** | Text to synthesize. |
 | `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in Chatterbox. |
 | `response_format` | string | `"mp3"` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`, `pcm_f32`. |
-| `speed` | float | `1.0` | OpenAI range `0.25`–`4.0`. Engines may clamp (e.g. ElevenLabs: 0.7–1.2). |
+| `speed` | float | engine default | OpenAI range `0.25`–`4.0`. **Leave it out** to inherit the saved per-engine default (see “Server-side defaults”) or, failing that, the engine's own tuned default (F5-TTS `0.9`, others `1.0`). Cloud providers enforce narrower ranges and are clamped at the boundary with a warning logged carrying the requested value: xAI `0.7`–`1.5`, ElevenLabs `0.7`–`1.2`, MiniMax `0.5`–`2.0`, Fish `0.5`–`2.0`. Local engines are unclamped. |
 | `instructions` | string | — | Natural-language style direction. Passed through where supported. |
 
 ### `extra_body` Extensions
@@ -304,7 +311,7 @@ Removes the voice. Cloud adapters call the provider's delete endpoint.
 ## 3. Engine Switch — `POST /v1/admin/engine`
 
 ```json
-{"engine": "dots"}
+{"engine": "f5tts"}
 ```
 
 Returns SSE stream of status events:
@@ -312,9 +319,9 @@ Returns SSE stream of status events:
 ```
 event: status   data: {"stage":"unload_start","engine":"kokoro"}
 event: status   data: {"stage":"unload_done","engine":"kokoro"}
-event: status   data: {"stage":"load_start","engine":"dots"}
-event: status   data: {"stage":"load_done","engine":"dots"}
-event: result   data: {"engine":"dots","status":"switched"}
+event: status   data: {"stage":"load_start","engine":"f5tts"}
+event: status   data: {"stage":"load_done","engine":"f5tts"}
+event: result   data: {"engine":"f5tts","status":"switched"}
 ```
 
 Cloud engines (MiniMax, ElevenLabs) emit a single `switch_done` status event since they have no worker lifecycle.

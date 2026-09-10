@@ -8,7 +8,7 @@
  * The engine always emits raw s16le 24kHz mono PCM — regardless of whether
  * it's a Python worker or cloud adapter. Node owns all format transcoding.
  */
-import { manager } from '../engine/manager.js';
+import { manager, engineNameFor } from '../engine/manager.js';
 import { WorkerError } from '../engine/worker.js';
 import { getContentType, normalizeFormat } from './formats.js';
 import { logger } from '../logger.js';
@@ -68,10 +68,19 @@ export async function relaySpeech(request, reply, body) {
   // Fill ONLY fields the request left unset — explicit values always win.
   // Applied before preset resolution: a preset voice request keeps its own
   // identity; defaults still fill unset extra_body/speed for it.
-  const defKey = body.model || manager.currentEngine;
-  const def = defaults.get(defKey);
+  //
+  // Keyed by the CANONICAL engine name, not the raw model string: a client
+  // sending "nspeech" or a cloud slug must still find the entry the dashboard
+  // saved under the engine name.
+  const defKey = engineNameFor(body.model);
+  const def = defKey ? defaults.get(defKey) : null;
   if (def) {
-    if (body.voice == null && def.voice != null && def.voice !== 'default') body.voice = def.voice;
+    // `voice: "default"` is the documented "engine default" sentinel — treat
+    // it as unset, or a saved voice default could never take effect (the
+    // dashboard always sends the sentinel when nothing is picked).
+    if ((body.voice == null || body.voice === 'default') && def.voice != null && def.voice !== 'default') {
+      body.voice = def.voice;
+    }
     if (body.speed == null && def.speed != null) body.speed = def.speed;
     if (def.extra_body) {
       for (const [k, v] of Object.entries(def.extra_body)) {
@@ -90,7 +99,8 @@ export async function relaySpeech(request, reply, body) {
   if (speed != null && Number.isNaN(speed)) {
     return sendError(reply, Object.assign(new Error(`invalid speed: ${JSON.stringify(body.speed)}`), { status: 400, type: 'invalid_request' }));
   }
-  const engineName = body.model || manager.currentEngine;
+  // Presets are keyed by engine name too — same normalization as defaults.
+  const engineName = engineNameFor(body.model);
   if (engineName) {
     const resolved = presets.lookup(engineName, voiceName);
     if (resolved) {
