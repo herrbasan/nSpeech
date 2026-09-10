@@ -134,6 +134,11 @@ export async function relaySpeech(request, reply, body) {
     log.info('text cleaned', { before, after: inputText.length });
   }
 
+  // Client-disconnect → abort the worker fetch so the Python worker stops
+  // generating (relay forwards this signal to its AbortController, aborting the
+  // worker request → the worker sees the disconnect and halts GPU work).
+  const clientAbort = new AbortController();
+
   let pcmStream;
   try {
     const mode = extraBody.mode
@@ -150,6 +155,7 @@ export async function relaySpeech(request, reply, body) {
           instructions,
           extraBody,
           subModel,
+          signal: clientAbort.signal,
           // Progress flows to the admin SSE bus (/v1/admin/events) via emit()
           // inside chunking. The callback hook exists for future job APIs.
           onProgress: undefined,
@@ -167,6 +173,7 @@ export async function relaySpeech(request, reply, body) {
           instructions,
           extraBody,
           subModel,
+          signal: clientAbort.signal,
         });
       }
     } else {
@@ -177,6 +184,7 @@ export async function relaySpeech(request, reply, body) {
         instruct_text: instructions,
         extra_body: extraBody,
         model: subModel,
+        signal: clientAbort.signal,
       });
     }
   } catch (err) {
@@ -212,7 +220,16 @@ export async function relaySpeech(request, reply, body) {
   reply.hijack();
   const rawResponse = reply.raw;
 
-  request.raw.on('close', () => {
+  // Detect client disconnect on the RESPONSE socket (reply.raw), not the
+  // incoming request. IncomingMessage 'close' can fire before/without the
+  // response streaming, so it won't reliably catch a mid-response abort.
+  // 'finish' = response completed normally; 'close' without it = client went
+  // away → abort the worker fetch so the engine stops generating.
+  let respFinished = false;
+  reply.raw.on('finish', () => { respFinished = true; });
+  reply.raw.on('close', () => {
+    if (respFinished) return;
+    clientAbort.abort();
     pcmStream.destroy();
   });
 

@@ -567,7 +567,7 @@ export class WorkerProcess {
     return { status: this.state, engine: this.engineName };
   }
 
-  async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body, model }) {
+  async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body, model, signal }) {
     const eb = extra_body || {};
     const workerBody = {
       text,
@@ -586,6 +586,7 @@ export class WorkerProcess {
     const resp = await this.relay('POST', '/v1/audio/speech', {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(workerBody),
+      signal,
     });
 
     if (resp._stallTimer) clearTimeout(resp._stallTimer);

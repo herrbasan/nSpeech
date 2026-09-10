@@ -427,7 +427,7 @@ export function buildChunkRequests(text, maxChars, opts = {}) {
  *          Called once per stage transition; cheap, synchronous, never blocks audio.
  * @returns {Promise<Readable>} — PCM stream of the stitched audio
  */
-export async function generateChunkedBatch({ text, engine, voiceName, speed, instructions, extraBody, subModel, onProgress }) {
+export async function generateChunkedBatch({ text, engine, voiceName, speed, instructions, extraBody, subModel, signal, onProgress }) {
   if (!text || typeof text !== 'string') throw new Error('generateChunkedBatch: text required');
   if (!engine || typeof engine.generatePcmStream !== 'function') {
     throw new Error('generateChunkedBatch: engine with generatePcmStream required');
@@ -498,6 +498,7 @@ export async function generateChunkedBatch({ text, engine, voiceName, speed, ins
       instruct_text: instructions,
       extra_body: chunkExtra,
       model: subModel,
+      signal,
     });
 
     // Consume with byte ticks: emit a progress update at most every 5s while
@@ -617,7 +618,7 @@ export async function generateChunkedBatch({ text, engine, voiceName, speed, ins
  * @param {string} [opts.subModel]
  * @returns {Promise<Readable>} — s16le 24kHz mono PCM, pushed per chunk
  */
-export async function generateChunkedStream({ text, engine, voiceName, speed, instructions, extraBody, subModel }) {
+export async function generateChunkedStream({ text, engine, voiceName, speed, instructions, extraBody, subModel, signal }) {
   if (!text || typeof text !== 'string') throw new Error('generateChunkedStream: text required');
   if (!engine || typeof engine.generatePcmStream !== 'function') {
     throw new Error('generateChunkedStream: engine with generatePcmStream required');
@@ -665,6 +666,7 @@ export async function generateChunkedStream({ text, engine, voiceName, speed, in
         instruct_text: instructions,
         extra_body: chunkExtra,
         model: subModel,
+        signal,
       });
 
       const parts = [];
