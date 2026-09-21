@@ -494,14 +494,25 @@ OpenAI-compatible shape:
 {"error": {"message": "...", "type": "invalid_request_error", "code": "voice_not_found", "param": "voice"}}
 ```
 
-| HTTP | `type` | When |
-|------|--------|------|
-| 400 | `invalid_request_error` | Missing/invalid input, bad format, old local engine name (use `"nspeech"`) |
-| 404 | `invalid_request_error` | Voice/model/engine not found |
-| 409 | `invalid_request_error` (`engine_busy`) | Engine switch while requests active |
-| 429 | `rate_limit_exceeded` | Cloud provider rate limit |
-| 500 | `engine_error` | Engine failed during generation |
-| 503 | `service_unavailable` | Worker crashed / starting / cloud unavailable |
+| HTTP | `type` | `code` | When |
+|------|--------|--------|------|
+| 400 | `invalid_request_error` | `missing_input`, `invalid_request`, `blend_not_supported`, `blend_failed` | Missing/invalid input, bad format, old local engine name (use `"nspeech"`) |
+| 404 | `invalid_request_error` | `voice_not_found`, `model_not_found` | Voice/model/engine not found |
+| 409 | `invalid_request_error` | `engine_busy` | Engine switch while requests active |
+| 429 | `rate_limit_exceeded` | `rate_limit_exceeded` | Cloud provider rate limit |
+| 500 | `engine_error` | `unknown` | Engine failed during generation |
+| 502 | `engine_error` | `empty_audio`, `worker_error` | Engine produced no audio at all |
+| 503 | `service_unavailable` | `worker_unavailable`, `engine_start_failed`, `engine_error`, `unknown` | Worker crashed / starting / cloud unavailable |
+
+### Voices
+
+`voice` is optional. Omitted or `"default"` is the **engine-default sentinel**: each
+engine substitutes its own default voice (Kokoro: `af_heart`; Chatterbox: its loaded
+voice). An engine with no default carries on to its own generation step.
+
+A voice the engine cannot resolve is always `404 voice_not_found` — never a 500 and
+never a `200` with an empty body. The check runs before any audio is produced, so a
+bad voice costs no render quota.
 
 ---
 

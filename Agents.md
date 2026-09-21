@@ -52,6 +52,27 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-20 — Three voice/limit bugs fixed: overlap budget, Kokoro 500, empty-audio 200
+
+**#3 — the stitch overlap was never budgeted.** `buildChunkRequests` prepended the previous chunk's trailing paragraph *on top of* a chunk already filled to the full `maxChars`, so an emitted request could exceed the engine limit. Production: 23,440 chars → sizes `[9575, 10061, 4361]`, chunk 2 **261 over** → MiniMax 2013 "text too long" (400), **after** chunk 1 had already rendered. Each retry re-rendered that prefix — ~36s of HD audio, real quota, three times.
+
+**"Nothing changed in nSpeech" — correct, and that was the point.** `server/chunking.js` was last touched 2026-08-15 (the commit that *added* the overlap); `maxChars` (MiniMax 9800) came in with it. The defect shipped with the feature. Two things hid it: **(a)** only `mode:'stitch'` has an overlap — `generateChunkedStream` passes `overlapParagraphs: 0`, so default-mode long-form never engages it; **(b)** `9800` is the 10000 API limit *minus a 200-char margin*, absorbing overflows under 200. Failure needs `overlap > 200` **and** the chunk to have filled within `overlap − 200` of the limit — narrow, hence 1 unlucky plan in 10 (nPM's log sweep: 09-11 chunk 2 at 9381 with 419 headroom, 09-13 at 8914, 09-20 at 10061).
+
+**Fixed:** `overlapTextFor()` is now the single definition of the overlap (budgeter and emitter call it, so the reserve cannot drift from the emitted text); `splitIntoChunks(text, maxChars, {overlapParagraphs})` reserves the exact length — exactly computable, since chunk *i*'s overlap comes from the already-closed chunk *i−1* — and re-splits a segment that no longer fits the reduced budget; `buildChunkRequests` asserts `text.length <= maxChars` so an over-limit request dies **in the planner**, not at the engine after the prefix chunks are paid for. Degenerate case: a previous chunk that is one unbroken paragraph — reserve exceeds the budget and the planner throws loudly.
+
+**#2 — Kokoro crashed on `voice:'default'` with an unhandled ASGI 500.** Root cause was a silent fallback in `kokoro.py`: `generate()` caught `FileNotFoundError` from `load_voice` and *invented* an entry (`active_voices[voice_name] = voice_name`), then called `pipeline.get_voice_style('default')` two lines later and raised **inside the streaming generator** — after headers, so the client got a bare 500 (and `worker_routes`' typed-404 path never ran, because the route deliberately skips voice validation for the `default` sentinel). Fixed at both ends: Kokoro resolves the sentinel to its real default (`DEFAULT_VOICE = "af_heart"`) and the fabrication is gone — a missing voice now raises `FileNotFoundError`, the same type every other adapter raises. `worker_routes` maps a `FileNotFoundError` from the first-chunk peek to the typed `404 voice_not_found`, so **no engine can turn a bad voice into a 500**. Also: `WorkerError` now carries the worker's own error `code` through the relay instead of flattening every worker failure to `worker_error`.
+
+**#1 — a 200 with a 0-byte body read as success.** An unknown voice id returned `200` and no audio; the client only noticed by measuring the payload and had to add its own guard. `relaySpeech` now peeks for the first non-empty chunk **before** committing the response and answers `502 empty_audio` if the engine produced nothing. The peek is deliberately in-place (`read()` + `unshift()`) rather than a `Readable.from()` wrapper: measured, a wrapper does **not** forward `destroy()` into a delegated async iterator, so a disconnect would have left the engine generating. Returning the same stream keeps cancellation native.
+
+**Verification** — three probes, all runnable and passing:
+- `scripts/probe-chunk-overflow.js` — deterministic repro (chunk filled to exactly the limit + long trailing paragraph), a random-article sweep, and the **real** `tests/stitch-ghost/` fixture (chunk 2 recorded at 5074 against a 4800 budget — a second recorded instance of the bug) rebuilt, re-planned, and checked for zero byte loss.
+- `scripts/probe-kokoro-voice.py` — runs under `venv/kokoro/env/Scripts/python.exe` against a fake pipeline: `default` → `af_heart`, unknown voice → `FileNotFoundError`, nothing fabricated into `active_voices`, built-ins unaffected.
+- `scripts/probe-empty-audio.js` — lossless/duplicate-free replay, `null` for genuinely silent streams, error and cancellation transparency.
+
+**Honest note on frequency:** the synthetic sweep reported a much higher overflow rate than production does (72.5% of synthetic 23.4K articles vs 1 of 10 real plans). The synthetic paragraph lengths (150–850 chars) leave smaller gaps than the real corpus, so the sweep is a stress model, not a rate. Real trigger: boundary luck.
+
+**Open:** the degenerate single-paragraph-chunk case (reserve exceeds the budget) fails loud rather than degrading — a bounded overlap (the overlap only needs enough words to warm the engine and locate the boundary) would remove the case entirely if it ever occurs.
+
 ### 2026-09-10 — nui_wc2 submodule updated (drift caught mid-session)
 
 `lib/nui_wc2` moved `16d1bc1` → `9ceab81` — 17 commits, a clean fast-forward, with the submodule sitting on `main` matching `origin/main`. It surfaced only as a ` M` gitlink in `git status` while the submodule's own tree was clean: the pin had moved without a single file changing, which is exactly the kind of drift that goes unnoticed until the dashboard renders differently. Recorded as its **own** commit rather than folded into the session's feature work.
@@ -472,4 +493,4 @@ Three submodules. Each is a separate repo this project only *consumes*:
 
 ---
 
-*Last updated: 2026-09-10*
+*Last updated: 2026-09-20*

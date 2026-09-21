@@ -593,7 +593,12 @@ export class WorkerProcess {
 
     if (resp.status >= 400) {
       const errText = await resp.text();
-      throw new WorkerError(resp.status, 'worker_error', errText);
+      // Preserve the worker's typed error code (voice_not_found, blend_failed,
+      // …) — the code is part of the client-visible contract, not just the
+      // status. FastAPI's own {"detail": …} bodies carry no code and fall back
+      // to the generic one.
+      const code = errText.match(/"code"\s*:\s*"([^"]+)"/)?.[1] ?? 'worker_error';
+      throw new WorkerError(resp.status, code, errText);
     }
 
     return Readable.fromWeb(resp.body);

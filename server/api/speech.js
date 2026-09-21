@@ -201,6 +201,27 @@ export async function relaySpeech(request, reply, body) {
     return sendError(reply, err);
   }
 
+  // ── Fail fast on empty audio ───────────────────────────────────────────
+  // A 200 with a 0-byte body is undetectable by the caller — it reads as
+  // success and only shows up later as silence (issue #1: an unknown voice id
+  // returned 200 with no audio, so clients stored empty files until they
+  // added their own guard). Peek for the first non-empty chunk BEFORE
+  // committing the response: once the transcode pipe has started, the status
+  // can no longer change.
+  try {
+    const peeked = await peekFirstAudioChunk(pcmStream);
+    if (!peeked.firstChunk) {
+      return sendError(reply, new WorkerError(502, 'empty_audio',
+        `engine produced no audio for voice ${JSON.stringify(voiceName)}`));
+    }
+    pcmStream = peeked.stream;
+  } catch (err) {
+    // Client vanished during the peek — nothing can be sent, and its abort
+    // signal has already stopped the engine.
+    if (clientAbort.signal.aborted) return;
+    return sendError(reply, err);
+  }
+
   // ── Set response headers ────────────────────────────────────────────────
   const isBatch = extraBody.batch ?? false;
   reply.code(200);
@@ -273,6 +294,72 @@ export function registerSpeechRoute(app) {
       speed: q.speed ? parseFloat(q.speed) : undefined,
     };
     await relaySpeech(request, reply, body);
+  });
+}
+
+/**
+ * Peek for the first non-empty chunk of an engine's PCM stream, in place.
+ *
+ * Engines sometimes yield empty Buffers before real audio (and, when a voice
+ * cannot be resolved, nothing at all). A caller cannot tell an empty audio
+ * response from a successful one — it arrives as HTTP 200 with a 0-byte body
+ * (issue #1), so emptiness has to become a status code before the response is
+ * committed.
+ *
+ * The chunk is put back with unshift(), so the SAME stream is returned and the
+ * relay's cancellation (destroy() on client disconnect) keeps working natively.
+ * Wrapping the stream instead — Readable.from() around a delegated async
+ * iterator — does not forward destroy() into the source (measured: the source
+ * stayed open after both destroy() and iterator return()), which would leave
+ * the engine generating after a disconnect.
+ *
+ * @param {import('node:stream').Readable} pcmStream — PCM chunks
+ * @returns {Promise<{ firstChunk: Buffer|null, stream: import('node:stream').Readable|null }>}
+ *          `stream` is `pcmStream` itself, rewound. Both fields are null when
+ *          the stream held no audio at all.
+ */
+export async function peekFirstAudioChunk(pcmStream) {
+  if (typeof pcmStream?.read !== 'function' || typeof pcmStream?.unshift !== 'function') {
+    throw new Error('peekFirstAudioChunk: expected a Node Readable (needs read + unshift)');
+  }
+  while (true) {
+    const chunk = pcmStream.read();
+    if (chunk !== null) {
+      if (chunk.length > 0) {
+        pcmStream.unshift(chunk);
+        return { firstChunk: chunk, stream: pcmStream };
+      }
+      continue; // empty chunk — skip it and keep looking for real audio
+    }
+    // Nothing buffered: wait for data, or for the stream to finish.
+    if (!(await waitForMore(pcmStream))) {
+      return { firstChunk: null, stream: null };
+    }
+  }
+}
+
+/**
+ * Resolve true when `stream` has data available again, false when it is done.
+ * Rejects on stream error.
+ * @private
+ */
+function waitForMore(stream) {
+  return new Promise((resolve, reject) => {
+    const settle = (ready, err) => {
+      stream.off('readable', onReadable);
+      stream.off('end', onEnd);
+      stream.off('close', onClose);
+      stream.off('error', onError);
+      if (err) reject(err); else resolve(ready);
+    };
+    const onReadable = () => settle(true);
+    const onEnd = () => settle(false);
+    const onClose = () => settle(false);
+    const onError = (err) => settle(false, err);
+    stream.once('readable', onReadable);
+    stream.once('end', onEnd);
+    stream.once('close', onClose);
+    stream.once('error', onError);
   });
 }
 

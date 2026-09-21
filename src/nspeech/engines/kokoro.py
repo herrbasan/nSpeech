@@ -102,6 +102,11 @@ class KokoroAdapter:
         # internals; fallback: N pipeline instances (one per worker thread).
         self._voice_lock = threading.Lock()
 
+    #: Voice used when a client sends the "default" sentinel. Kokoro has no
+    #: voice by that name; this is its own generate() fallback, and every
+    #: Kokoro v1.0 model ships it.
+    DEFAULT_VOICE = "af_heart"
+
     def load_voice(self, voice_name: str) -> None:
         """
         Load a cached voice embedding for subsequent generate() calls.
@@ -142,7 +147,14 @@ class KokoroAdapter:
         runs concurrently (Session.run() is thread-safe per ONNX Runtime docs).
         """
         speed = kwargs.get("speed", 1.0)
-        voice_name = kwargs.get("voice_name", getattr(self, "current_voice", "af_heart"))
+        voice_name = kwargs.get("voice_name", getattr(self, "current_voice", self.DEFAULT_VOICE))
+
+        # "default" is the API's "engine default voice" sentinel. Kokoro's
+        # pipeline has no voice by that name, so passing it through ended as an
+        # unhandled exception inside this streaming generator — the client got
+        # a bare 500 (issue #2). Resolve it to this engine's real default.
+        if not voice_name or voice_name == "default":
+            voice_name = getattr(self, "current_voice", None) or self.DEFAULT_VOICE
         
         # ── Voice resolution (lock-protected dict access only) ──────────
         # Lock guards active_voices dict reads/writes. Data loading and
@@ -151,12 +163,14 @@ class KokoroAdapter:
             voice_data = self.active_voices.get(voice_name)
         
         if voice_data is None:
-            try:
-                self.load_voice(voice_name)
-            except FileNotFoundError:
-                with self._voice_lock:
-                    self.active_voices[voice_name] = voice_name
-                    self.current_voice = voice_name
+            # Fails fast (FileNotFoundError) when the voice is neither in the
+            # ONNX catalog nor a cached .kokoro.pt. The previous fallback
+            # invented a string entry here and then crashed a few lines later
+            # inside pipeline.get_voice_style() — an unhandled exception in the
+            # streaming generator, i.e. a bare 500 to the client (issue #2).
+            # FileNotFoundError is the error every other adapter raises for an
+            # unresolvable voice, and worker_routes maps it to a typed 404.
+            self.load_voice(voice_name)
             
             with self._voice_lock:
                 voice_data = self.active_voices[voice_name]

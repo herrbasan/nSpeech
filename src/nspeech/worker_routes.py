@@ -400,12 +400,29 @@ def create_app(engine_name: str) -> FastAPI:
             )
             return Response(content=audio_bytes, media_type=media_type)
 
-        # Streaming path: peek first chunk, then stream
+        # Streaming path: peek first chunk, then stream.
+        #
+        # The peek exists so a failure BEFORE any audio is produced can still
+        # become a typed HTTP error. Once the StreamingResponse has started the
+        # status is already on the wire, so anything raised inside the
+        # generator reaches the client as a bare 500 or a truncated body
+        # (issue #2: Kokoro's worker crashed with an unhandled ASGI exception
+        # on voice:'default').
         gen = engine.generate(req.text, **gen_kwargs)
         try:
             first_tensor, first_final = await asyncio.to_thread(next, gen)
         except StopIteration:
             raise HTTPException(status_code=500, detail="TTS engine produced empty audio")
+        except FileNotFoundError as e:
+            # Adapters raise FileNotFoundError for a voice that cannot be
+            # resolved — no catalog entry, no voice cache, no transcript
+            # sidecar. That is an invalid request, not an engine failure.
+            error(f"voice resolution failed at generation: {e}",
+                  meta={"engine": engine_name, "voice": req.voice_name}, category="worker")
+            return JSONResponse(
+                status_code=404,
+                content={"error": {"message": f"Voice not found: {req.voice_name}", "type": "invalid_request_error", "code": "voice_not_found"}},
+            )
 
         if first_tensor.numel() == 0:
             raise HTTPException(status_code=500, detail="TTS engine produced empty audio")

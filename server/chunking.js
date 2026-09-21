@@ -39,29 +39,39 @@ export function shouldChunk(text, engine) {
   return typeof text === 'string' && text.length > max;
 }
 
+/** Separator between segments and between overlap prefix and chunk body. */
+const JOIN = '\n\n';
+
 /**
- * Split text into chunks of at most maxChars, on natural boundaries.
+ * The overlap prefix emitted before a chunk — the trailing `overlapParagraphs`
+ * paragraphs of the previous chunk, joined.
+ *
+ * Single definition of what the overlap IS: the budgeter (splitIntoChunks) and
+ * the emitter (buildChunkRequests) both call this, so the reserved length can
+ * never drift from the emitted text. These two disagreeing was issue #3 — the
+ * reserve didn't exist at all.
+ *
+ * @param {string} chunkText — a chunk's text (no overlap)
+ * @param {number} overlapParagraphs
+ * @returns {string} — the overlap prefix, '' when disabled
+ */
+export function overlapTextFor(chunkText, overlapParagraphs) {
+  if (overlapParagraphs <= 0) return '';
+  const paras = chunkText.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  return paras.slice(-overlapParagraphs).join(JOIN);
+}
+
+/**
+ * Flatten text into the smallest natural segments.
  *
  * Boundary hierarchy: paragraph (\n\n) → sentence (. ! ? … followed by
  * whitespace) → comma/semicolon → hard cut. Each level only applies when the
  * previous one can't produce segments under the limit.
  *
- * @param {string} text
- * @param {number} maxChars
- * @returns {{text: string, isFirst: boolean, isLast: boolean}[]}
+ * @private
  */
-export function splitIntoChunks(text, maxChars) {
-  if (typeof text !== 'string' || text.length === 0) {
-    throw new Error(`splitIntoChunks: text must be a non-empty string, got ${typeof text}`);
-  }
-  if (!Number.isFinite(maxChars) || maxChars < 1) {
-    throw new Error(`splitIntoChunks: maxChars must be a finite number >= 1, got ${maxChars}`);
-  }
-
-  // ── Level 1: paragraphs ─────────────────────────────────────────────────
+function collectSegments(text, maxChars) {
   const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
-
-  // Any paragraph over the limit needs deeper splitting
   const segments = [];
   for (const para of paragraphs) {
     if (para.length <= maxChars) {
@@ -70,19 +80,84 @@ export function splitIntoChunks(text, maxChars) {
       segments.push(...splitSentences(para, maxChars));
     }
   }
+  return segments;
+}
 
-  // ── Accumulate segments into chunks ─────────────────────────────────────
-  // Join with double newline to preserve paragraph structure for the engine.
+/**
+ * Split text into chunks of at most maxChars, on natural boundaries.
+ *
+ * When `opts.overlapParagraphs > 0`, each chunk after the first will have the
+ * previous chunk's trailing paragraph(s) PREPENDED to it (see
+ * buildChunkRequests). That prefix counts against the engine's per-request
+ * limit, so it is reserved out of the chunk's own budget here — otherwise a
+ * chunk filled to maxChars sails past the limit by the overlap length, and the
+ * engine rejects it after the earlier chunks have already been rendered
+ * (issue #3, MiniMax 2013 "text too long").
+ *
+ * The reserve is exact, not a guess: chunk i's overlap comes from chunk i-1,
+ * which is fully determined by the time chunk i starts accumulating.
+ *
+ * @param {string} text
+ * @param {number} maxChars
+ * @param {object} [opts]
+ * @param {number} [opts.overlapParagraphs=0] — must match buildChunkRequests'
+ * @returns {{text: string, isFirst: boolean, isLast: boolean}[]}
+ */
+export function splitIntoChunks(text, maxChars, opts = {}) {
+  if (typeof text !== 'string' || text.length === 0) {
+    throw new Error(`splitIntoChunks: text must be a non-empty string, got ${typeof text}`);
+  }
+  if (!Number.isFinite(maxChars) || maxChars < 1) {
+    throw new Error(`splitIntoChunks: maxChars must be a finite number >= 1, got ${maxChars}`);
+  }
+  const overlapParagraphs = opts.overlapParagraphs ?? 0;
+
+  const pending = collectSegments(text, maxChars);
   const chunks = [];
   let current = '';
-  for (const seg of segments) {
-    const candidate = current ? current + '\n\n' + seg : seg;
-    if (candidate.length <= maxChars) {
-      current = candidate;
-    } else {
-      if (current) chunks.push(current);
-      current = seg;
+  let prevChunk = ''; // last CLOSED chunk — the source of this chunk's overlap
+
+  while (pending.length > 0) {
+    const seg = pending.shift();
+
+    // The overlap prefix rides on top of this chunk, so reserve it here.
+    const overlapLen = overlapTextFor(prevChunk, overlapParagraphs).length;
+    const reserve = overlapLen > 0 ? overlapLen + JOIN.length : 0;
+    const limit = maxChars - reserve;
+    if (limit < 1) {
+      throw new Error(
+        `splitIntoChunks: the previous chunk's trailing paragraph (${overlapLen} chars) leaves no room ` +
+        `under maxChars (${maxChars}) — it is too long to serve as an overlap prefix`
+      );
     }
+
+    // Accumulate segments into chunks. Join with a double newline to preserve
+    // paragraph structure for the engine.
+    const candidate = current ? current + JOIN + seg : seg;
+    if (candidate.length <= limit) {
+      current = candidate;
+      continue;
+    }
+
+    if (current) {
+      chunks.push(current);
+      prevChunk = current;
+      current = '';
+      // Re-evaluate this segment against the new chunk's reduced budget.
+      pending.unshift(seg);
+      continue;
+    }
+
+    // current is empty and this segment alone does not fit the reduced budget
+    // — it was sized against the FULL maxChars. Re-split it.
+    const pieces = splitSentences(seg, limit);
+    if (pieces.some(p => p.length > limit)) {
+      throw new Error(
+        `splitIntoChunks: a ${Math.max(...pieces.map(p => p.length))}-char segment cannot be split ` +
+        `under the ${limit}-char budget (maxChars ${maxChars} minus ${reserve} reserved for the overlap prefix)`
+      );
+    }
+    pending.unshift(...pieces);
   }
   if (current) chunks.push(current);
 
@@ -373,7 +448,7 @@ function snapToZeroCrossing(pcm, byteOffset) {
  */
 export function buildChunkRequests(text, maxChars, opts = {}) {
   const overlapParagraphs = opts.overlapParagraphs ?? DEFAULT_OVERLAP_PARAGRAPHS;
-  const chunks = splitIntoChunks(text, maxChars);
+  const chunks = splitIntoChunks(text, maxChars, { overlapParagraphs });
 
   return chunks.map((chunk, i) => {
     const prev = chunks[i - 1];
@@ -381,11 +456,19 @@ export function buildChunkRequests(text, maxChars, opts = {}) {
 
     let chunkText = chunk.text;
     let overlapText = '';
-    if (prev && overlapParagraphs > 0) {
-      const prevParagraphs = prev.text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
-      const overlapParas = prevParagraphs.slice(-overlapParagraphs);
-      overlapText = overlapParas.join('\n\n');
-      chunkText = overlapText + '\n\n' + chunk.text;
+    if (prev) {
+      overlapText = overlapTextFor(prev.text, overlapParagraphs);
+      if (overlapText) chunkText = overlapText + JOIN + chunk.text;
+    }
+
+    // Invariant: `text` is exactly what the engine receives. An over-limit
+    // request must die in the planner — at the engine it costs the earlier
+    // chunks of quota first (issue #3 burned three MiniMax HD renders).
+    if (chunkText.length > maxChars) {
+      throw new Error(
+        `buildChunkRequests: chunk ${i} is ${chunkText.length} chars, over the ${maxChars}-char budget ` +
+        `(${chunk.text.length} content + ${overlapText.length} overlap) — planner reserved too little`
+      );
     }
 
     // Continuity context for v2 models (adapters drop these for v3)
