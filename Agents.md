@@ -485,6 +485,8 @@ Three submodules. Each is a separate repo this project only *consumes*:
 
 **Check at the start of every session.** `git submodule status` — a `+` prefix means the checked-out commit differs from what this repo records, and that difference is invisible in the code but decides how the dashboard builds and renders.
 
+**Fast path:** `.\sync-submodules.ps1` — attaches any detached submodule to its branch, fast-forwards all three to their branch tips, and commits the pointer bumps in one step. All three submodules declare `branch = main` in `.gitmodules` and sit ON their local branches, so VS Code's Source Control surfaces upstream drift automatically (detached-HEAD checkouts are invisible to it).
+
 - **Behind upstream? Say so and ask before updating.** A snapshot refresh changes build output and rendered behaviour, so it is a deliberate act, not housekeeping.
 - **Never edit inside a submodule** without fetching and comparing against upstream first. A drifted checkout is a *read-only baseline* — authoring a change against a stale vendored clone produces a fix that does not apply upstream.
 - **Record an update when you make one.** After pulling a submodule forward, commit the new gitlink here in the same session. Otherwise the tree sits permanently dirty and every later session re-litigates the same question.
@@ -493,4 +495,4 @@ Three submodules. Each is a separate repo this project only *consumes*:
 
 ---
 
-*Last updated: 2026-09-20*
+*Last updated: 2026-09-24*
