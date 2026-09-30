@@ -171,13 +171,13 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 | `sound_effects` | string | `spacious_echo`, `auditorium_echo`, `lofi_telephone`, `robotic`. |
 | `pronunciation` | object | `{tone: ["original/replacement"]}`. IPA, pinyin, jyutping, kana. |
 | `ssml` | boolean | Interpret input as SSML. |
-| `language` | string | ISO-639-1 hint or `auto`. |
+| `language` | string | ISO-639-1 code (`"de"`, `"en"`, ...), BCP-47 for xAI (`"pt-BR"`), or `"auto"`. Omitted = engine default (usually auto-detect). Unsupported values fail with 400 — never silently ignored. See the engine map below. |
 
 #### Text Cleaning
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `clean` | boolean \| string | `true` = server-side regex clean (fast, deterministic). `'llm'` = regex + LLM prosody pass via local gateway — **parked** (2026-08-18: consistently worse than regex in ear tests). Legacy alias: `markdown` (same values). |
+| `clean` | boolean \| string | `true` = server-side regex clean (fast, deterministic). `'llm'` = regex + LLM **date pass** via local gateway — every date is rewritten as fully spoken words with correct grammar ("12. September" → "am zwölften September" / "September twelfth"). Replaced the prosody-mark pass 2026-09-24 (that pass was parked: worse than regex in ear tests). Legacy alias: `markdown` (same values). |
 
 **Architecture (2026-08-18):** cleaning is **server-authoritative**. Clients that don't need the cleaned text pass `extra_body.clean: true` (SDK: `clean:true` on `speech()`/`speak()`). Clients that need the exact spoken text (e.g. text/audio alignment) call [`POST /v1/text/clean`](#post-v1textclean) first, then send the returned text with `clean` unset. The regex cleaner is also exported by the SDK (`cleanMarkdown`) for offline/preview use — same code the server runs. Rules: emphasis strips silently, label colons (1–2 words, line-initial) merge with em-dash, clause colons split into sentence + paragraph break, headers get terminal periods, strikethrough drops, acronyms spell out (`GLM5` → "G L M five"), file extensions speak ("notes.md" → "notes dot m d").
 
@@ -195,7 +195,7 @@ When `input` exceeds the engine's per-request char limit, nSpeech transparently 
 | `chunk_tail_fade_ms` | int | `75` | Fade-out at every chunk tail. Engines may cut the final phoneme with zero decay; without this fade the cliff into the inter-chunk silence is audible as a pop. |
 | `chunk_overlap` | int | `1` | Number of trailing paragraphs prepended as overlap in batch mode. |
 
-Engine char limits (model-aware): eleven_v3 4800, eleven_multilingual_v2 9600, eleven_flash_v2_5 38400, MiniMax ~9800, Gemini ~4800, xAI ~14800, local engines unlimited.
+Engine char limits (model-aware): eleven_v4_turbo 9600, eleven_v3 4800, eleven_v4 9600, eleven_multilingual_v2 9600, eleven_flash_v2_5 38400, MiniMax ~9800, Gemini ~4800, xAI ~14800, local engines unlimited. ElevenLabs v4 models have no speed/style control (values are ignored with a warning); the ElevenLabs default is `eleven_v4_turbo`.
 
 **Stream vs stitch:** `stream` (default) uses simple chunks with silence padding — first byte early, no overlap. `stitch` renders everything before first byte but produces seamless joints: the overlap paragraph is generated as part of each next chunk (warming the engine's prosody), located in the audio via **forced alignment constrained to the known text** (word count is mathematically guaranteed), trimmed at the exact word boundary snapped to the nearest zero crossing (click-free cut), and faded in. Alignment runs on nSpeech's own CPU worker — no external service, unaffected by engine switching anywhere.
 
@@ -235,7 +235,7 @@ The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/en
 | `sway_sampling_coef` | ✅ f5tts (variation) | — | — | — | — |
 | `seed` | ✅ f5tts | — | ✅ | — | — |
 | `blend` | kokoro only | ✅ `timbre_weights` | — | — | — |
-| `language` | engine-dependent | ✅ `language_boost` | ✅ | ✅ (auto) | — |
+| `language` | `f5tts`: `de`/`en` checkpoint routing (`auto`/unset = heuristic detect) · `chatterbox-mtl`: `language_id` (23 codes; turbo/eng ignore it) | ✅ `language_boost` (ISO mapped to MiniMax's official names; unsupported → 400) | ✅ `language_code` (ISO 639-1; `auto` = omit) | — (auto-detect, no API field) | ✅ BCP-47 (`de`, `pt-BR`) or `auto` |
 | `sample_rate` | — | ✅ | ✅ | — | — |
 | `sound_effects` | — | ✅ | — | — | — |
 

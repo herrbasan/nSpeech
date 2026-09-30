@@ -13,6 +13,7 @@
 import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
 import { upstreamError } from './errors.js';
+import { normalizeLanguage } from './language.js';
 import { clampNumber } from './params.js';
 
 const log = logger.child('cloud.elevenlabs');
@@ -38,19 +39,21 @@ function mapExtraBody(eb) {
 
 export class ElevenLabsAdapter {
   /** Per-request char limit (API limit minus safety margin). Used by chunking.
-   * Note: this is the limit for the DEFAULT model (eleven_v3). For model-aware
-   * limits, use getMaxChars(model) — v3=5K, multilingual_v2=10K, flash_v2.5=40K. */
-  get maxChars() { return 4800; }
+   * Note: this is the limit for the DEFAULT model (eleven_v4_turbo). For model-aware
+   * limits, use getMaxChars(model) — v4/v4_turbo=10K, v3=5K, multilingual_v2=10K, flash_v2.5=40K. */
+  get maxChars() { return 9600; }
 
   /** Model-aware char limit. Returns the limit for the given model ID minus safety margin. */
   getMaxChars(model) {
     const limits = {
+      'eleven_v4': 10000,
+      'eleven_v4_turbo': 10000,
       'eleven_v3': 5000,
       'eleven_multilingual_v2': 10000,
       'eleven_flash_v2_5': 40000,
       'eleven_flash_v2': 30000,
     };
-    const limit = limits[model] ?? limits['eleven_v3'];
+    const limit = limits[model] ?? limits['eleven_v4_turbo'];
     return Math.floor(limit * 0.96); // 4% safety margin
   }
 
@@ -83,27 +86,44 @@ export class ElevenLabsAdapter {
     const voiceId = voice_name || 'JBFqnCBsd6RMkjVDRZzb'; // George default
     const isBatch = (extra_body?.batch) ?? false;
 
+    // v4 exposes only Stability and Similarity (official docs: "Style and
+    // Speed sliders are not available in Eleven v4"). The API still ACCEPTS
+    // the extra fields — probe 2026-09-30 returned 200 with speed 0.5–2.0 —
+    // but per the docs they have no effect, so sending them is a silent
+    // no-op: omit them and warn when a caller explicitly set one.
+    const modelId = model || 'eleven_v4_turbo';
+    const isV4 = modelId.startsWith('eleven_v4');
     const voiceSettings = {
       stability: eb.stability ?? 0.5,
       similarity_boost: eb.similarity_boost ?? 0.75,
-      style: eb.style ?? 0,
-      use_speaker_boost: true,
+    };
+    if (isV4) {
+      if (eb.style !== undefined) log.warn('ElevenLabs v4 has no style control — extra_body.expressiveness ignored', { style: eb.style });
+      if (speed !== undefined) log.warn('ElevenLabs v4 has no speed control — speed ignored', { speed });
+    } else {
+      voiceSettings.style = eb.style ?? 0;
+      voiceSettings.use_speaker_boost = true;
       // Previously `speed` was destructured and then never sent, so the API's
       // speed control silently did nothing on this provider.
-      speed: clampNumber(speed, SPEED_RANGE),
-    };
+      voiceSettings.speed = clampNumber(speed, SPEED_RANGE);
+    }
 
     const reqBody = {
       text,
-      model_id: model || 'eleven_v3',
+      model_id: modelId,
       voice_settings: voiceSettings,
     };
     if (eb.seed !== undefined) reqBody.seed = eb.seed;
-    if (extra_body?.language) reqBody.language_code = extra_body.language;
+    // language_code is ISO 639-1; "auto" / unset means the model detects it
+    // (the field's documented default is null — omit it rather than send a
+    // value the API would reject).
+    const lang = normalizeLanguage(extra_body?.language, 'extra_body.language');
+    if (lang && lang !== 'auto') reqBody.language_code = lang;
     // Continuity context for multi-request sequences (auto-chunking).
     // previous_text/next_text give the engine prosody context across chunks.
-    // NOTE: eleven_v3 does NOT support these fields (HTTP 400 unsupported_model).
-    // Only inject for v2 models (eleven_multilingual_v2, eleven_turbo_v2_5, etc.).
+    // v3 and v3_conversational reject these fields (HTTP 400); v4 ACCEPTS
+    // them (probe 2026-09-30); v2 models accept them. The startsWith check
+    // covers both v3 variants.
     const supportsContinuity = !reqBody.model_id.startsWith('eleven_v3');
     if (supportsContinuity) {
       if (extra_body?.previous_text) reqBody.previous_text = extra_body.previous_text;
@@ -115,9 +135,10 @@ export class ElevenLabsAdapter {
       batch: isBatch, textPreview: (text || '').slice(0, 200),
     });
 
-    // optimize_streaming_latency is deprecated AND rejected by eleven_v3.
-    // Only include it for legacy v2 models. New models should not see it.
-    const latencyParam = reqBody.model_id.startsWith('eleven_v3') ? '' : '&optimize_streaming_latency=3';
+    // optimize_streaming_latency is deprecated AND rejected by the v3/v4
+    // generations (HTTP 400 — probed 2026-09-30 on v4 and v3_conversational).
+    // Only the v2 models still accept it.
+    const latencyParam = reqBody.model_id.includes('_v2') ? '&optimize_streaming_latency=3' : '';
 
     if (isBatch) {
       // ── Batch: full render before first byte ────────────────────────────

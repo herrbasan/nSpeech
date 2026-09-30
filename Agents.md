@@ -52,6 +52,43 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-09-30 — ElevenLabs v4 generation added (`eleven_v4`, `eleven_v4_turbo`)
+
+**Verified from the provider, not the docs page alone:** `GET /v1/models` lists `eleven_v4` and `eleven_v4_turbo` (85 languages, 10K char limit each) plus `eleven_v3_conversational`. A synthesis probe (`scripts/probe-elevenlabs-v4.js`, statuses only) established the actual parameter surface — which differs from v3 in ways that would have broken requests:
+
+- **`optimize_streaming_latency` 400s on v4** (and v3_conversational) — our adapter appended it to every non-v3 model, so every v4 request would have died. Gating changed from "not v3" to "v2-family only" (`includes('_v2')`).
+- **v4 has no speed/style control** — official v4 page: "Style and Speed sliders are not available in Eleven v4"; only Stability and Similarity exist. The API still *accepts* the fields (speed 0.5–2.0 all 200) — a silent no-op, the same class as the 2026-09-10 "speed did nothing" bug. Adapter omits both for v4 and warns when a caller explicitly set one.
+- **v4 accepts `previous_text`/`next_text`** (probe OK) and `language_code: de` — continuity chunking works. v3_conversational rejects both continuity and latency fields (probed), consistent with it staying unexposed.
+- Char limits in `getMaxChars`: v4 = 10000 (→ 9600 after the 4% margin).
+
+**Registry:** both models exposed. **Default flipped to `eleven_v4_turbo` same day:** user ear test found v4 and v4_turbo indistinguishable (turbo's real difference is latency, irrelevant for batch narration), and `model_rates.character_cost_multiplier` shows turbo at 0.5 credits/char vs v4's and v3's 1.0 — same audio, half price. Adapter fallbacks updated to match (`maxChars` getter 4800→9600, `getMaxChars` unknown-model fallback, `model ||` fallback). Dashboard picks the default up automatically via `nspeechLoadModels` (no changes needed).
+
+**Docs:** `docs/providers/elevenlabs.md` models/limits tables gained v4 rows + a Cost/char column with the pricing rule (flagships 1.0, latency variants 0.5), the speed section documents the v4 no-control fact with source, and the default-model note explains the turbo choice. `API_REFERENCE.md` and `nSpeech_Spec.md` §engine table updated.
+
+**Open:** v4_turbo vs v3 was never A/B'd by ear — the flip was driven by the v4≈v4_turbo result + pricing. If v3 delivery is missed on a narration voice, pin `eleven_v3` explicitly per request. v4 cross-language behavior is a deliberate change (target-language accent, not reference accent) — matters for German narration with EN reference voices.
+
+### 2026-09-24 — Normalized `extra_body.language` across all engines (German number-reading fix)
+
+**Reported:** MiniMax German renders pronounced numbers in English. Root cause was ours, not the provider's: the MiniMax dashboard page hardcoded `language: 'en'` into every request (ElevenLabs' page had the same hardcode), and the adapter forwarded the value verbatim as `language_boost` — which MiniMax doesn't even accept in code form.
+
+**Contract (`server/cloud/language.js`, new):** `extra_body.language` is an ISO-639-1 code (`"de"`, `"en"`), BCP-47 for xAI (`"pt-BR"`), or `"auto"`; omitted = engine default. Each adapter converts to its provider's native field, and an unsupported value **fails with 400** — never silently ignored. `language_boost` values verified against the official MiniMax T2A HTTP reference (capitalized names: `German`, `English`, ..., 40 entries + `auto`, default `null`; speech-01/02 lack Persian/Filipino/Tamil). ElevenLabs v3's 74-language list verified the same way.
+
+**Per-engine:**
+
+- **MiniMax** — `toLanguageBoost` maps ISO → official name; unknown codes throw locally instead of surfacing as base_resp 2013 after the round-trip.
+- **ElevenLabs** — `language_code` passthrough; `"auto"` now omits the field (would have been sent as the literal string `"auto"` before).
+- **xAI** — shape-validated BCP-47 passthrough (case preserved — `pt-BR` stays `pt-BR`). Behavior unchanged, now validated.
+- **Gemini** — removed the fabricated `generation_config.speech_config[0].language` (no such field in Google's API; Gemini auto-detects). Requests with `language` are a documented no-op and now log a warning instead of being absorbed silently.
+- **F5-TTS — real bug found:** the adapter read `kwargs["extra_body"]`, but the worker flattens `extra_body` into top-level generate kwargs (`worker_routes.py`), so **explicit language was silently ignored through the server** — only in-process smoke scripts ever worked; every server request ran the detector. Now reads the flattened `language` (extra_body dict kept for in-process callers), `auto`/unset detects, and unknown codes raise — previously an unknown code silently loaded a *second* base checkpoint (~1.4GB VRAM) and rendered English phonetics.
+- **Chatterbox mtl** — `LANGUAGE_MAP.get(lang, "en")` silently rendered English delivery for unsupported codes; now raises with the supported list. turbo/eng still ignore `language` (documented: English-only).
+- **Fish / Kokoro** — no language field (voice id carries the language on Kokoro); documented no-ops.
+
+**Dashboard:** Language selectors on the MiniMax (official boost enum, ISO values), ElevenLabs, and F5 (auto/en/de) pages; Auto omits the field. xAI already had one. MiniMax/ElevenLabs pages lost the hardcoded `'en'` — **the actual German bug**.
+
+**Verification (offline — server not restarted):** `scripts/probe-language.js` (25 cases: normalization, MiniMax mapping, error shapes) — all pass; `scripts/probe-language.py` under the f5tts and chatterbox venvs (13 + 11 cases incl. the previously-broken worker-kwarg path) — all pass; `node --check` clean on all touched JS; `py_compile` clean.
+
+**Docs:** `docs/providers/minimax.md` gained a "Language boost" section (official enum + source + nSpeech mapping); the `language_boost` row no longer claims "language code or auto" (false). `API_REFERENCE.md` `language` rows rewritten (field contract + per-engine matrix; Gemini/xAI columns were wrong). `f5tts.md` and `chatterbox.md` note the new validation behavior.
+
 ### 2026-09-20 — Three voice/limit bugs fixed: overlap budget, Kokoro 500, empty-audio 200
 
 **#3 — the stitch overlap was never budgeted.** `buildChunkRequests` prepended the previous chunk's trailing paragraph *on top of* a chunk already filled to the full `maxChars`, so an emitted request could exceed the engine limit. Production: 23,440 chars → sizes `[9575, 10061, 4361]`, chunk 2 **261 over** → MiniMax 2013 "text too long" (400), **after** chunk 1 had already rendered. Each retry re-rendered that prefix — ~36s of HD audio, real quota, three times.
@@ -495,4 +532,4 @@ Three submodules. Each is a separate repo this project only *consumes*:
 
 ---
 
-*Last updated: 2026-09-24*
+*Last updated: 2026-09-30*

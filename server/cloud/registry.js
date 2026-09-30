@@ -62,7 +62,15 @@ _register('minimax', MiniMaxAdapter, [
 ]);
 
 _register('elevenlabs', ElevenLabsAdapter, [
-  { id: 'eleven_v3',              provider: 'eleven_v3',              label: 'Eleven v3', default: true },
+  // v4 generation — verified live in GET /v1/models on 2026-09-30 (85 langs,
+  // 10K char limit, v4=1.0 / v4_turbo=0.5 credit per char). v4_turbo is the
+  // nSpeech default: user ear test found v4 and v4_turbo indistinguishable,
+  // and turbo costs half the credits — latency, turbo's other benefit, is
+  // irrelevant for nSpeech's batch narration. Flip is trivially reversible
+  // by moving the `default` flag.
+  { id: 'eleven_v4_turbo',        provider: 'eleven_v4_turbo',        label: 'Eleven v4 Turbo', default: true },
+  { id: 'eleven_v4',              provider: 'eleven_v4',              label: 'Eleven v4' },
+  { id: 'eleven_v3',              provider: 'eleven_v3',              label: 'Eleven v3' },
   { id: 'eleven_multilingual_v2', provider: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
   { id: 'eleven_flash_v2_5',      provider: 'eleven_flash_v2_5',      label: 'Eleven Flash v2.5' },
   { id: 'eleven_flash_v2',        provider: 'eleven_flash_v2',        label: 'Eleven Flash v2 (English)' },

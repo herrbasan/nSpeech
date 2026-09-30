@@ -173,7 +173,7 @@ Each cloud provider registers a **model catalog** — the single source of truth
 | Prefix | Adapter | Default (`id`) | Models |
 |--------|---------|----------------|--------|
 | `minimax` | MiniMaxAdapter | `minimax_speech_2_8_turbo` | `minimax_speech_2_8_turbo`, `minimax_speech_2_8_hd`, `minimax_speech_2_6_hd`, `minimax_speech_2_6_turbo` |
-| `elevenlabs` | ElevenLabsAdapter | `eleven_v3` | `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, `eleven_turbo_v2_5`, `eleven_turbo_v2` |
+| `elevenlabs` | ElevenLabsAdapter | `eleven_v4_turbo` | `eleven_v4_turbo`, `eleven_v4`, `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, `eleven_flash_v2`, `eleven_turbo_v2_5`, `eleven_turbo_v2` |
 | `gemini` | GeminiAdapter | `gemini-3.1-flash-tts-preview` | `gemini-3.1-flash-tts-preview`, `gemini_3_1_flash_tts` |
 | `xai` | XaiAdapter | `xai_grok_tts_1` | `xai_grok_tts_1`, `xai_grok_tts_1_hd` |
 | `fish` | FishAdapter | `fish_s2_1_pro_free` | `fish_s2_1_pro_free`, `fish_s2_1_pro`, `fish_s2_pro`, `fish_s1` |

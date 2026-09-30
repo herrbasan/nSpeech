@@ -16,23 +16,27 @@
 
 ## Models
 
-Verified against `GET /v1/models` on 2026-09-10 — that endpoint is authoritative.
+Verified against `GET /v1/models` on 2026-09-10 (models) and 2026-09-30 (pricing multipliers) — that endpoint is authoritative.
 
-| Model | Description | Max chars | TTS |
-|-------|-------------|-----------|-----|
-| `eleven_v3` | Latest flagship, 29+ languages | 5,000 | ✅ |
-| `eleven_v3_conversational` | Conversational variant of v3 | 5,000 | ✅ |
-| `eleven_multilingual_v2` | Full quality, 29 languages | 10,000 | ✅ |
-| `eleven_flash_v2_5` | Fastest multilingual | 40,000 | ✅ |
-| `eleven_turbo_v2_5` | Deprecated → use Flash v2.5 | 40,000 | ✅ |
-| `eleven_turbo_v2` | Deprecated → use Flash v2 | 30,000 | ✅ |
-| `eleven_flash_v2` | English-only fast | 30,000 | ✅ |
-| `eleven_english_sts_v2` | Speech-to-speech, **not** TTS | 5,000 | ❌ |
-| `eleven_multilingual_sts_v2` | Speech-to-speech, **not** TTS | 10,000 | ❌ |
+| Model | Description | Max chars | Cost/char | TTS |
+|-------|-------------|-----------|-----------|-----|
+| `eleven_v4` | Latest flagship, 85 languages | 10,000 | 1.0 | ✅ |
+| `eleven_v4_turbo` | Low-latency v4 variant | 10,000 | 0.5 | ✅ |
+| `eleven_v3` | Previous flagship, 74 languages | 5,000 | 1.0 | ✅ |
+| `eleven_v3_conversational` | Conversational variant of v3 | 5,000 | 0.5 | ✅ |
+| `eleven_multilingual_v2` | Full quality, 29 languages | 10,000 | 1.0 | ✅ |
+| `eleven_flash_v2_5` | Fastest multilingual | 40,000 | 0.5 | ✅ |
+| `eleven_turbo_v2_5` | Deprecated → use Flash v2.5 | 40,000 | 0.5 | ✅ |
+| `eleven_turbo_v2` | Deprecated → use Flash v2 | 30,000 | 0.5 | ✅ |
+| `eleven_flash_v2` | English-only fast | 30,000 | 0.5 | ✅ |
+| `eleven_english_sts_v2` | Speech-to-speech, **not** TTS | 5,000 | 1.0 | ❌ |
+| `eleven_multilingual_sts_v2` | Speech-to-speech, **not** TTS | 10,000 | 1.0 | ❌ |
 
-**nSpeech default:** `eleven_v3` — latest flagship, best quality (verified 2026-08-13).
+**Pricing (from `model_rates.character_cost_multiplier` in `GET /v1/models`, 2026-09-30):** flagships cost 1 credit/char (`eleven_v3`, `eleven_v4`, `eleven_multilingual_v2`); latency-optimized variants cost 0.5 (`eleven_v4_turbo`, `eleven_v3_conversational`, the flash/turbo v2 family). nSpeech listening check: v4 and v4_turbo sound the same by ear, so for **API batch narration v4_turbo gives identical audio at half the credits** — turbo's only benefit is latency, which batch doesn't need.
 
-> **nSpeech registry (2026-09-10):** exposes `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, `eleven_flash_v2`, `eleven_turbo_v2_5` and `eleven_turbo_v2`. `eleven_v3_conversational` is not exposed — it targets conversational/barge-in use, not batch narration — and the two `_sts_` models are speech-to-speech, so they cannot do TTS.
+**nSpeech default:** `eleven_v4_turbo` (since 2026-09-30). User ear test found v4 and v4_turbo indistinguishable, and turbo costs 0.5 credits/char vs v4's and v3's 1.0 — half price for the same audio, with latency (turbo's other benefit) irrelevant for batch narration. Note ElevenLabs' docs: a v4 clone "may sound quite different from its Eleven v3 version" — v4 tracks the source voice more faithfully. Pin `eleven_v3` explicitly where the old v3 delivery is wanted.
+
+> **nSpeech registry (2026-09-30):** exposes `eleven_v4_turbo` (default), `eleven_v4`, `eleven_v3`, `eleven_multilingual_v2`, `eleven_flash_v2_5`, `eleven_flash_v2`, `eleven_turbo_v2_5` and `eleven_turbo_v2`. `eleven_v3_conversational` is not exposed — it targets conversational/barge-in use, not batch narration — and the two `_sts_` models are speech-to-speech, so they cannot do TTS.
 >
 > This table previously listed `eleven_v2_flash` and `eleven_v2_5_flash`. **Those ids do not exist** — the real ones are `eleven_flash_v2` and `eleven_flash_v2_5` — and `eleven_flash_v2`, which ElevenLabs' own docs name as the replacement for the deprecated `eleven_turbo_v2`, was missing from the registry entirely.
 
@@ -42,16 +46,17 @@ Authoritative limits from the [Models overview](https://elevenlabs.io/docs/overv
 
 | Model | Char limit | Approx. duration | Notes |
 |-------|-----------|-----------------|-------|
-| `eleven_v3` | **5,000** | ~5 min | Latest flagship. Rejects `previous_text`, `next_text`, `optimize_streaming_latency` (HTTP 400 `unsupported_model`). |
+| `eleven_v4` / `eleven_v4_turbo` | **10,000** | ~10 min | Latest generation. Accepts `previous_text`/`next_text` + `language_code` (probed 2026-09-30). Rejects `optimize_streaming_latency` (HTTP 400). **No style/speed control** — API accepts `voice_settings.style`/`speed` but per docs they do nothing; nSpeech omits them and warns. Cross-language generation produces the *target* language's accent rather than the reference voice's (deliberate v4 behavior — docs). nSpeech listening check (2026-09-30): v4 and v4_turbo sound the same by ear — turbo's purpose is latency, not sound. |
+| `eleven_v3` | **5,000** | ~5 min | Previous flagship. Rejects `previous_text`, `next_text`, `optimize_streaming_latency` (HTTP 400 `unsupported_model`). |
 | `eleven_multilingual_v2` | **10,000** | ~10 min | Most stable on long-form. Supports `previous_text`/`next_text`. |
 | `eleven_flash_v2_5` | **40,000** | ~40 min | Highest limit. Ultra-low latency (~75ms). Supports `previous_text`/`next_text`. |
 | `eleven_flash_v2` | **30,000** | ~30 min | English-only. Supports `previous_text`/`next_text`. |
 
-**Deprecated:** `eleven_turbo_v2_5` → `eleven_flash_v2_5`, `eleven_turbo_v2` → `eleven_flash_v2`. Use Flash models instead.
-
 ### `speed`
 
 Speed is sent as `voice_settings.speed`. The range is **0.7–1.2** — verified 2026-09-10: `eleven_flash_v2_5` accepts 0.7 and 1.2 and rejects 1.21 with `invalid_voice_settings`. `eleven_v3` happens to accept wider values (0.5–2.0 all returned audio) but is clamped to the same 0.7–1.2 so every model behaves identically.
+
+**`eleven_v4` / `eleven_v4_turbo` have no speed or style control** (official [v4 page](https://elevenlabs.io/docs/overview/capabilities/text-to-speech/eleven-v4): "Style and Speed sliders are not available in Eleven v4"; only Stability and Similarity exist). The API still accepts the fields silently — probed 2026-09-30, speed 0.5–2.0 all returned 200 — so nSpeech omits them for v4 models and logs a warning when a caller explicitly set one.
 
 > nSpeech clamps to that range at the boundary and logs a warning carrying the requested value. Before 2026-09-10 the adapter destructured `speed` and never sent it — the API advertised a speed control that silently did nothing on this provider.
 
