@@ -129,7 +129,8 @@ export async function relaySpeech(request, reply, body) {
   //
   // Text cleaning: extra_body.clean (was extra_body.markdown, kept as alias)
   //   true  — regex strip (fast, deterministic)
-  //   'llm' — LLM rewrite via local gateway (better emphasis/metadata handling)
+  //   'llm' — regex clean + LLM date pass via local gateway: dates become
+  //           fully spoken words with correct grammar (de/en)
   // Clients that need the cleaned text back (alignment) call /v1/text/clean
   // first and send the result with clean unset.
   const cleanFlag = extraBody.clean ?? extraBody.markdown;

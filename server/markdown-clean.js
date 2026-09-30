@@ -5,54 +5,64 @@
  * and is re-exported here. Server-side cleaning runs when the request passes
  * extra_body.clean (legacy alias: extra_body.markdown):
  *   extra_body.clean: true   — regex-based, fast, deterministic
- *   extra_body.clean: 'llm'  — regex clean, then LLM prosody pass via local
- *                              gateway. PARKED 2026-08-18 (consistently worse
- *                              than regex in ear tests). Kept, fails loud.
+ *   extra_body.clean: 'llm'  — regex clean, then LLM date pass via local
+ *                              gateway: every date is rewritten as fully
+ *                              spoken words with correct grammar (de/en).
+ *                              Replaced the prosody-mark pass 2026-09-24
+ *                              (prosody was parked — worse than regex in
+ *                              ear tests; dates need sentence context,
+ *                              which is exactly what the model provides).
  * The standalone service endpoint lives in api/text.js (POST /v1/text/clean).
  */
 
 import { config } from './config.js';
 import { logger } from './logger.js';
+import { cleanMarkdown as regexClean } from '../lib/nspeech-client/nspeech-client.js';
 
 export { cleanMarkdown, expandAcronyms } from '../lib/nspeech-client/nspeech-client.js';
 
 const log = logger.child('markdown-clean');
 
-const PROSODY_PROMPT = `You are a prosody marker for text-to-speech. Your ONLY job is to insert two marks into the input text: ÔÇö (em-dash) before vocally stressed words, and ÔÇª (ellipsis) at effect pauses. You change nothing else.
+const SPELL_DATES_PROMPT = `You prepare text for text-to-speech. Your ONLY job: rewrite every date into fully spoken words, in the language of the text, using the grammatical form the sentence requires. Never use written abbreviations — "12ten", "12th", "3." are forbidden; write "zwölften", "twelfth", "dritten".
 
-Examples:
+German examples:
 
-INPUT: The optimizer didn't fail because it was weak. It failed because the loss function rewarded the wrong thing.
-OUTPUT: The optimizer didn't fail because it was ÔÇö weak. It failed because the loss function rewarded the ÔÇö wrong thing.
+INPUT: Wir treffen uns am 12. September.
+OUTPUT: Wir treffen uns am zwölften September.
 
-INPUT: What did the researchers find? Nothing. The effect had vanished entirely.
-OUTPUT: What did the researchers find? ÔÇª Nothing. The effect had vanished ÔÇö entirely.
+INPUT: Der 3. Oktober ist ein Feiertag. Am 24.12.2026 endet das Jahr.
+OUTPUT: Der dritte Oktober ist ein Feiertag. Am vierundzwanzigsten Dezember zweitausendsechsundzwanzig endet das Jahr.
 
-INPUT: Safety lies in the middle of the herd.
-OUTPUT: Safety lies in the ÔÇö middle of the herd.
+English examples:
+
+INPUT: On September 12, 2026, the deal closes.
+OUTPUT: On September twelfth, twenty twenty-six, the deal closes.
+
+INPUT: We meet on 12 September.
+OUTPUT: We meet on the twelfth of September.
 
 Rules:
-- Output ONLY the marked text. No commentary.
-- Every input word must appear in the output, in order, verbatim. You insert marks; you never add, drop, or reword anything.
-- Stressed word = the pivotal word of a claim, a contrast, a correction, an irony: what a narrator would lean on.
-- Pause (ÔÇª) = before a punchline, after a rhetorical question, at a dramatic turn.
-- A few marks per paragraph. Not every sentence needs one. Clutter destroys the effect.
-- Do not mark headings.
+- Dates only. Every other word must appear in the output, in order, verbatim.
+- Match the sentence's grammar: "der zwölfte September" (nominative) vs "am zwölften September" (dative).
+- Never add commentary. Output ONLY the rewritten text.
 
 Input:`;
 
 /**
  * Length-coverage invariant: LLM must not lose content.
- * Verbatim rewriting is the contract; if more than half the input words
- * vanish, this is a summary/truncation ÔÇö refuse it rather than speak it.
+ * Word-frequency comparison, punctuation-insensitive. Rewritten words
+ * ("12." → "zwölften") count as one lost token per date — tolerated;
+ * dropped SENTENCES are not (coverage < 50% refuses the output).
+ *
+ * GOTCHA fixed 2026-09-24: this regex had been mojibake-corrupted and
+ * lacked the /u flag, so \\p meant literal "p" — the check only ever
+ * counted the letter p. Neutered guard, discovered by the first real use.
  */
 function assertCoverage(expect, actual) {
-  // Word-frequency vector, punctuation-insensitive. Tolerant of the
-  // inserted ÔÇö / ÔÇª marks but not of dropped sentences.
   const count = (s) => {
     const freq = new Map();
     for (const w of s.toLowerCase().split(/\s+/)) {
-      const k = w.replace(/[ÔÇöÔÇª]*$/g, '').replace(/[^\p{L}\p{N}']/g, '');
+      const k = w.replace(/[^\p{L}\p{N}']/gu, '');
       if (!k) continue;
       freq.set(k, (freq.get(k) ?? 0) + 1);
     }
@@ -66,12 +76,12 @@ function assertCoverage(expect, actual) {
     total += n;
     matched += Math.min(n, have.get(word) ?? 0);
   }
-  if (total === 0) throw new Error('prosody pass: empty input to coverage check');
+  if (total === 0) throw new Error('date pass: input has no words — coverage check impossible');
   const ratio = matched / total;
   if (ratio < 0.5) {
     throw new Error(
-      `prosody pass FAILED coverage: only ${(ratio * 100).toFixed(1)}% of input words ` +
-      `present in LLM output ÔÇö gateway model summarized instead of marking. ` +
+      `date pass FAILED coverage: only ${(ratio * 100).toFixed(1)}% of input words ` +
+      `present in LLM output — gateway model summarized instead of rewriting. ` +
       `Refusing lossy text.`
     );
   }
@@ -103,10 +113,10 @@ function buildSegments(paragraphs) {
 }
 
 /**
- * One gateway call: mark one text segment. Returns marked text.
- * @throws on HTTP error, empty response, or coverage failure ÔÇö fail loud.
+ * One gateway call: spell the dates of one text segment. Returns the text.
+ * @throws on HTTP error, empty response, or coverage failure — fail loud.
  */
-async function markSegment(segment) {
+async function spellSegment(segment) {
   const url = `${config.gatewayUrl}/v1/chat/completions`;
   const resp = await fetch(url, {
     method: 'POST',
@@ -117,7 +127,7 @@ async function markSegment(segment) {
     body: JSON.stringify({
       model: config.gatewayModel,
       messages: [
-        { role: 'user', content: PROSODY_PROMPT + '\n\n' + segment },
+        { role: 'user', content: SPELL_DATES_PROMPT + '\n\n' + segment },
       ],
       temperature: 0.2,
       max_tokens: Math.max(2048, Math.ceil(segment.length * 1.5)),
@@ -130,65 +140,55 @@ async function markSegment(segment) {
   }
 
   const data = await resp.json();
-  const marked = data.choices?.[0]?.message?.content?.trim();
-  if (!marked) {
-    throw new Error('Gateway returned empty response for prosody pass');
+  const spelled = data.choices?.[0]?.message?.content?.trim();
+  if (!spelled) {
+    throw new Error('Gateway returned empty response for date pass');
   }
-  return marked;
+  return spelled;
 }
 
 /**
- * LLM-based prosody marking via the local LLM Gateway.
- * Input is regex-cleaned first, split into ~1.5K segments, each marked
+ * LLM-based date spelling via the local LLM Gateway.
+ * Input is regex-cleaned first, split into ~1.5K segments, each passed
  * separately (compliance degrades on long inputs), then reassembled.
- * @param {string} text ÔÇö raw markdown
- * @returns {Promise<string>} plain text with prosody marks, suitable for TTS
- * @throws if gateway is unreachable, returns an error, loses content,
- *         or adds zero marks across the whole document (pass is dead weight)
+ * A segment without dates legitimately comes back unchanged — the
+ * coverage check is the only refusal guard (a prosody-style "zero changes
+ * = dead pass" check would be wrong here: most text has no dates).
+ * @param {string} text — raw markdown
+ * @returns {Promise<string>} plain text with dates fully spoken, suitable for TTS
+ * @throws if gateway is unreachable, returns an error, or loses content
  */
 export async function cleanMarkdownLLM(text) {
   if (!config.gatewayApiKey) {
-    throw new Error('GATEWAY_API_KEY not configured ÔÇö cannot use LLM markdown cleaning');
+    throw new Error('GATEWAY_API_KEY not configured — cannot use LLM markdown cleaning');
   }
 
-  const base = cleanMarkdown(text);
+  // Re-exported binding is not a local binding — call the real import.
+  const base = regexClean(text);
   const paragraphs = base.split(/\n\n/).map(p => p.trim()).filter(Boolean);
   const segments = buildSegments(paragraphs);
   const start = performance.now();
 
-  log.info('llm prosody pass start', {
+  log.info('llm date pass start', {
     chars: base.length,
     segments: segments.length,
     model: config.gatewayModel,
   });
 
-  const baselineEm = (base.match(/ÔÇö/g) ?? []).length;
-  const baselineEl = (base.match(/ÔÇª/g) ?? []).length;
-
-  const markedSegments = [];
+  const spelledSegments = [];
   for (const [i, seg] of segments.entries()) {
-    const marked = await markSegment(seg);
-    const coverage = assertCoverage(seg, marked);
-    log.debug('prosody segment done', { segment: i + 1, of: segments.length, coverage: `${(coverage * 100).toFixed(1)}%` });
-    markedSegments.push(marked);
+    const spelled = await spellSegment(seg);
+    const coverage = assertCoverage(seg, spelled);
+    log.debug('date segment done', { segment: i + 1, of: segments.length, changed: spelled !== seg, coverage: `${(coverage * 100).toFixed(1)}%` });
+    spelledSegments.push(spelled);
   }
 
-  const out = markedSegments.join('\n\n');
+  const out = spelledSegments.join('\n\n');
 
-  const emAdded = (out.match(/ÔÇö/g) ?? []).length - baselineEm;
-  const elAdded = (out.match(/ÔÇª/g) ?? []).length - baselineEl;
-  if (emAdded + elAdded === 0) {
-    throw new Error(
-      `prosody pass FAILED: model returned text with zero added marks across ` +
-      `${segments.length} segments ÔÇö non-compliant, refusing pointless pass. ` +
-      `(model: ${config.gatewayModel})`
-    );
-  }
-
-  log.info('llm prosody pass done', {
+  log.info('llm date pass done', {
     before: base.length,
     after: out.length,
-    marksAdded: { emDash: emAdded, ellipsis: elAdded },
+    segmentsChanged: spelledSegments.filter((s, i) => s !== segments[i]).length,
     ms: Math.round(performance.now() - start),
   });
 
