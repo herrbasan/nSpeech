@@ -77,6 +77,18 @@ A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU,
         </nui-input-group>
 
         <nui-input-group>
+            <label for="f5-language">Language</label>
+            <nui-select id="f5-language-select">
+                <select id="f5-language">
+                    <option value="auto" selected>Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="de">German</option>
+                </select>
+            </nui-select>
+            <span style="color: var(--color-shade6); font-size: 0.85em;">Picks the checkpoint: base (EN) vs German fine-tune. Detection can be overridden here.</span>
+        </nui-input-group>
+
+        <nui-input-group>
             <nui-input>
                 <input type="checkbox" id="f5-batch">
                 <label for="f5-batch">Batch mode (full render before playback — no streaming)</label>
@@ -87,11 +99,11 @@ A Rule: never read ~~retracted~~ mistakes aloud. Meeting at 12:30 sharp — GPU,
             <label for="f5-clean">Text cleaning</label>
             <nui-checkbox>
                 <input type="checkbox" id="f5-regex-clean" checked>
-                <span>Regex clean (in browser) — strip markdown before sending; preview below. Default; best results in tests.</span>
+                <span>Regex clean (in browser) — strip markdown before sending. Default; best results in tests.</span>
             </nui-checkbox>
             <nui-checkbox>
                 <input type="checkbox" id="f5-clean">
-                <span>LLM prosody pass (server) — stress marks &amp; pauses via local gateway. Experimental: adds odd pauses.</span>
+                <span>LLM date pass (server) — regex clean + dates as spoken words with correct grammar ("am zwölften September"). Needs the local gateway.</span>
             </nui-checkbox>
         </nui-input-group>
 
@@ -122,6 +134,7 @@ function init(element, params, nui) {
     const swayEl = element.querySelector('#f5-sway');
     const swayVal = element.querySelector('#f5-sway-val');
     const seedEl = element.querySelector('#f5-seed');
+    const languageEl = element.querySelector('#f5-language');
     const batchEl = element.querySelector('#f5-batch');
     const llmCleanEl = element.querySelector('#f5-clean');
     const regexCleanEl = element.querySelector('#f5-regex-clean');
@@ -190,15 +203,16 @@ function init(element, params, nui) {
                 cfg_strength: parseFloat(cfgEl.value),
                 sway_sampling_coef: parseFloat(swayEl.value),
             };
+            if (languageEl.value && languageEl.value !== 'auto') eb.language = languageEl.value;
             if (batchEl.checked) eb.batch = true;
             if (seedEl.value !== '') eb.seed = parseInt(seedEl.value, 10);
 
             // Cleaning responsibility:
             //  - regex: CLIENT-side — send the cleaned text directly
-            //  - llm:   SERVER-side (needs gateway) — raw text + markdown:'llm'
+            //  - llm:   SERVER-side (needs gateway) — raw text + clean:'llm'
             let inputText = text;
             if (llmCleanEl.checked) {
-                eb.markdown = 'llm';
+                eb.clean = 'llm';
             } else if (regexCleanEl.checked) {
                 inputText = cleanFn(text);
             }

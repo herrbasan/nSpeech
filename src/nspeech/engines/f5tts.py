@@ -67,6 +67,36 @@ def detect_language(text: str) -> str:
     return "de" if de > en else "en"
 
 
+def resolve_language(kwargs: dict, text: str) -> str:
+    """Route a request to a checkpoint: explicit language wins, else detect.
+
+    Reads the language the worker actually delivers — worker_routes.py merges
+    extra_body into the generate kwargs (top-level 'language'), so the old
+    kwargs['extra_body'] read never saw an explicit language through the
+    server and silently fell back to detection. The extra_body dict form is
+    kept for in-process callers (smoke scripts call the adapter directly).
+
+    Contract (API_REFERENCE.md): 'de'/'en' pin the checkpoint, 'auto'/None
+    detect from the text. Anything else raises — an unknown code used to
+    silently load a second base checkpoint (~1.4GB VRAM per unknown code)
+    and render English phonetics for a language the model doesn't speak.
+    """
+    lang = kwargs.get("language")
+    if lang is None:
+        lang = (kwargs.get("extra_body") or {}).get("language")
+    if lang is None or (isinstance(lang, str) and lang.strip().lower() in ("", "auto")):
+        return detect_language(text)
+    if not isinstance(lang, str):
+        raise ValueError(f"language must be 'de', 'en' or 'auto', got {type(lang).__name__}")
+    norm = lang.strip().lower()
+    if norm not in ("en", "de"):
+        raise ValueError(
+            f"F5-TTS speaks English and German only — language '{lang}' is not "
+            "supported (use 'en', 'de' or 'auto')"
+        )
+    return norm
+
+
 
 def _ensure_bigvgan_config(model_name: str) -> None:
     """Create configs/<model>.yaml for bigvgan variants when the installed
@@ -219,8 +249,9 @@ class F5TtsAdapter:
         target_rms = kwargs.get("target_rms", 0.1)
 
         wav_path, ref_text = str(self._voice_wav_path(voice_name)), self._read_ref_text(voice_name)
-        # Language routing: explicit extra_body.language wins; else detect.
-        lang = (kwargs.get("extra_body") or {}).get("language") or detect_language(text)
+        # Language routing: explicit language wins ('de'/'en'); 'auto'/unset
+        # detects from the text. Unknown codes raise (see resolve_language).
+        lang = resolve_language(kwargs, text)
         # cfg defaults differ per model family (user-tuned by ear):
         #  - EN v1 base: 2.5 (tightens 'scattered' timbre vs 1.5, 2026-08-18)
         #  - DE fine-tune (older F5TTS_Base arch): 1.5 — 2.5 over-guides and

@@ -14,6 +14,7 @@ import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
 import { upstreamError } from './errors.js';
 import { clampNumber } from './params.js';
+import { toLanguageBoost } from './language.js';
 import { WorkerError } from '../engine/worker.js';
 
 const log = logger.child('cloud.minimax');
@@ -85,8 +86,15 @@ function mapExtraBody(eb) {
   // inference_steps, guidance_scale — not applicable to MiniMax (cloud)
 
   // Text processing
-  if (eb.language) mapped.language_boost = eb.language === 'auto' ? 'auto' : eb.language;
+  // language_boost is NOT an arbitrary code — MiniMax expects one of its
+  // capitalized language names or "auto" (official T2A HTTP reference).
+  // toLanguageBoost maps ISO-639-1 ("de") to the official name ("German")
+  // and throws on unsupported codes instead of letting base_resp 2013
+  // surface a bare 400 after the round-trip.
+  const boost = toLanguageBoost(eb.language);
+  if (boost) mapped.language_boost = boost;
   if (eb.pronunciation) mapped.pronunciation_dict = eb.pronunciation;
+  if (eb.subtitles) mapped.subtitles = eb.subtitles;
 
   // Voice blending — per-request timbre_weights
   if (eb.blend && Array.isArray(eb.blend) && eb.blend.length > 0) {
@@ -197,13 +205,27 @@ export class MiniMaxAdapter {
     if (eb.language_boost) body.language_boost = eb.language_boost;
     if (eb.pronunciation_dict) body.pronunciation_dict = eb.pronunciation_dict;
     if (eb.timbre_weights) body.timbre_weights = eb.timbre_weights;
-    if (eb.sound_effects) {
-      body.voice_modify = { sound_effects: eb.sound_effects };
+    // MiniMax's own digit/date normalization (voice_setting.text_normalization)
+    if (eb.text_normalization !== undefined) body.voice_setting.text_normalization = eb.text_normalization === true;
+    // LaTeX reading — Chinese only per official docs; forward as-is
+    if (eb.latex_read !== undefined) body.voice_setting.latex_read = eb.latex_read === true;
+    // Timestamped subtitles: sentence | word | word_streaming
+    if (eb.subtitles) {
+      body.subtitle_enable = true;
+      body.subtitle_type = eb.subtitles;
     }
+    // voice_modify: intensity/timbre/sound_effects (pitch already sits in
+    // voice_setting — do not duplicate it here)
+    const voiceModify = {};
+    if (eb.intensity !== undefined) voiceModify.intensity = Number(eb.intensity);
+    if (eb.timbre !== undefined) voiceModify.timbre = Number(eb.timbre);
+    if (eb.sound_effects) voiceModify.sound_effects = eb.sound_effects;
+    if (Object.keys(voiceModify).length > 0) body.voice_modify = voiceModify;
 
     log.info('MiniMax generate', {
       model: body.model, batch: isBatch,
       voice: body.voice_setting.voice_id, textLen: text.length,
+      emotion: body.voice_setting.emotion ?? '(auto)',
       textPreview: (text || '').slice(0, 200) + ((text || '').length > 200 ? '...' : ''),
     });
 
@@ -232,6 +254,7 @@ export class MiniMaxAdapter {
         traceId: data?.trace_id,
         hasAudio: !!data?.data?.audio,
         audioLen: data?.data?.audio?.length,
+        extraDataKeys: Object.keys(data?.data ?? {}),
       });
       const audio = data?.data?.audio;
       if (!audio) {

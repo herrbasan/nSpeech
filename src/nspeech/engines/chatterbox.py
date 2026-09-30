@@ -126,12 +126,39 @@ class ChatterboxAdapter:
             "cache_file": str(cache_path), "clone_time_ms": clone_time_ms,
         }
 
+    def _resolve_language_id(self, kwargs):
+        """language_id for the mtl model; None for turbo/eng (English-only —
+        language is documented as ignored for them).
+
+        Reads the language the worker actually delivers (worker_routes merges
+        extra_body into kwargs) with the extra_body dict kept for in-process
+        callers. Unset on mtl → the documented default 'en'. Unknown codes
+        RAISE: the old LANGUAGE_MAP.get(lang, "en") silently rendered English
+        delivery for a language the caller explicitly asked for.
+        """
+        if self.model_type != "mtl":
+            return None
+        language = kwargs.get("language")
+        if language is None:
+            language = (kwargs.get("extra_body") or {}).get("language")
+        if language is None or (isinstance(language, str) and not language.strip()):
+            return "en"
+        if not isinstance(language, str):
+            raise ValueError(f"language must be an ISO-639-1 code, got {type(language).__name__}")
+        norm = language.strip().lower()
+        if norm not in LANGUAGE_MAP:
+            supported = ", ".join(sorted(k for k in LANGUAGE_MAP if len(k) == 2))
+            raise ValueError(
+                f"chatterbox-mtl does not support language '{language}' "
+                f"(supported: {supported})"
+            )
+        return LANGUAGE_MAP[norm]
+
     def generate(self, text, **kwargs):
         model = self._get_model()
         # Accept both 'expressiveness' (API standard) and 'exaggeration' (legacy)
         expressiveness = kwargs.get("expressiveness", kwargs.get("exaggeration", 0.5))
-        language = kwargs.get("language")
-        language_id = LANGUAGE_MAP.get(language, "en") if language else "en"
+        language_id = self._resolve_language_id(kwargs)
 
         sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
         if not sentences:

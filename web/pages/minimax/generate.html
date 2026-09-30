@@ -39,6 +39,14 @@
         </nui-input-group>
 
         <nui-input-group>
+            <label for="mm-vol">Volume</label>
+            <nui-input type="range" min="0" max="10" step="0.5" value="1">
+                <input type="range" id="mm-vol" min="0" max="10" step="0.5" value="1">
+            </nui-input>
+            <span id="mm-vol-val" style="margin-left: var(--nui-space-half)">1.0</span>
+        </nui-input-group>
+
+        <nui-input-group>
             <label for="mm-emotion">Emotion</label>
             <nui-select id="mm-emotion-select">
                 <select id="mm-emotion">
@@ -50,9 +58,83 @@
                     <option value="disgusted">Disgusted</option>
                     <option value="surprised">Surprised</option>
                     <option value="calm">Calm</option>
-                    <option value="whisper">Whisper</option>
+                    <option value="fluent">Fluent</option>
                 </select>
             </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-language">Language boost</label>
+            <nui-select id="mm-language-select">
+                <select id="mm-language">
+                    <option value="auto" selected>Auto-detect</option>
+                    <option value="en">English</option>
+                    <option value="de">German</option>
+                    <option value="zh">Chinese</option>
+                    <option value="yue">Chinese (Cantonese)</option>
+                    <option value="ja">Japanese</option>
+                    <option value="ko">Korean</option>
+                    <option value="fr">French</option>
+                    <option value="es">Spanish</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="ru">Russian</option>
+                    <option value="ar">Arabic</option>
+                    <option value="tr">Turkish</option>
+                    <option value="nl">Dutch</option>
+                    <option value="pl">Polish</option>
+                    <option value="sv">Swedish</option>
+                    <option value="da">Danish</option>
+                    <option value="no">Norwegian</option>
+                    <option value="nn">Nynorsk</option>
+                    <option value="fi">Finnish</option>
+                    <option value="el">Greek</option>
+                    <option value="cs">Czech</option>
+                    <option value="sk">Slovak</option>
+                    <option value="hu">Hungarian</option>
+                    <option value="ro">Romanian</option>
+                    <option value="bg">Bulgarian</option>
+                    <option value="hr">Croatian</option>
+                    <option value="sl">Slovenian</option>
+                    <option value="ca">Catalan</option>
+                    <option value="uk">Ukrainian</option>
+                    <option value="he">Hebrew</option>
+                    <option value="hi">Hindi</option>
+                    <option value="vi">Vietnamese</option>
+                    <option value="th">Thai</option>
+                    <option value="id">Indonesian</option>
+                    <option value="ms">Malay</option>
+                    <option value="fa">Persian</option>
+                    <option value="fil">Filipino</option>
+                    <option value="ta">Tamil</option>
+                    <option value="af">Afrikaans</option>
+                </select>
+            </nui-select>
+            <span style="color: var(--color-shade6); font-size: 0.85em;">Pins pronunciation (numbers, dates) to the language — fixes English number reading on German text</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <nui-input>
+                <input type="checkbox" id="mm-textnorm">
+                <label for="mm-textnorm">Text normalization (MiniMax's own digit/date reading — slight latency cost)</label>
+            </nui-input>
+            <nui-input>
+                <input type="checkbox" id="mm-latex">
+                <label for="mm-latex">LaTeX formula reading (Chinese only — wrap formulas in $$)</label>
+            </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-subtitles">Subtitles (timestamps)</label>
+            <nui-select id="mm-subtitles-select">
+                <select id="mm-subtitles">
+                    <option value="" selected>Off</option>
+                    <option value="sentence">Sentence-level</option>
+                    <option value="word">Word-level</option>
+                    <option value="word_streaming">Word-level (streaming)</option>
+                </select>
+            </nui-select>
+            <span style="color: var(--color-shade6); font-size: 0.85em;">Data is requested from MiniMax and logged server-side — not yet surfaced in the UI</span>
         </nui-input-group>
 
         <nui-input-group>
@@ -60,6 +142,22 @@
                 <input type="checkbox" id="mm-batch">
                 <label for="mm-batch">Batch mode (full render — best quality, no streaming)</label>
             </nui-input>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-clean">Text cleaning</label>
+            <nui-checkbox>
+                <input type="checkbox" id="mm-regex-clean" checked>
+                <span>Regex clean (in browser) — strip markdown before sending. Default; best results in tests.</span>
+            </nui-checkbox>
+            <nui-checkbox>
+                <input type="checkbox" id="mm-clean">
+                <span>LLM date pass (server) — regex clean + dates as spoken words with correct grammar ("am zwölften September"). Needs the local gateway.</span>
+            </nui-checkbox>
+            <div style="margin-top: var(--nui-space);">
+                <label style="color: var(--color-shade6); font-size: 0.85em;">Text that will be spoken</label>
+                <pre id="mm-clean-preview" style="white-space: pre-wrap; font-size: 0.85em; padding: var(--nui-space-half); margin: var(--nui-space-quarter) 0 0 0; background: var(--color-shade1, rgba(128,128,128,0.1)); border-radius: 4px; max-height: 10em; overflow-y: auto;"></pre>
+            </div>
         </nui-input-group>
 
         <nui-button-container gap="medium" data-generate-anchor>
@@ -73,6 +171,7 @@
 
 <script type="nui/page">
 const mountGenerate = window.nspeechMountGenerate;
+const cleanMarkdown = window.nspeech.cleanMarkdown;
 
 function init(element, params, nui) {
     const modelEl = element.querySelector('#mm-model');
@@ -81,13 +180,51 @@ function init(element, params, nui) {
     const textArea = element.querySelector('#mm-text');
     const speedEl = element.querySelector('#mm-speed');
     const speedValEl = element.querySelector('#mm-speed-val');
+    const volEl = element.querySelector('#mm-vol');
+    const volValEl = element.querySelector('#mm-vol-val');
     const emotionEl = element.querySelector('#mm-emotion');
+    const languageEl = element.querySelector('#mm-language');
+    const textNormEl = element.querySelector('#mm-textnorm');
+    const latexEl = element.querySelector('#mm-latex');
+    const subtitleEl = element.querySelector('#mm-subtitles');
     const batchEl = element.querySelector('#mm-batch');
+    const llmCleanEl = element.querySelector('#mm-clean');
+    const regexCleanEl = element.querySelector('#mm-regex-clean');
     const generateBtn = element.querySelector('#btn-generate');
 
     speedEl.addEventListener('input', () => {
         speedValEl.textContent = speedEl.value;
     });
+    volEl.addEventListener('input', () => {
+        volValEl.textContent = volEl.value;
+    });
+
+    llmCleanEl.addEventListener('change', () => {
+        if (llmCleanEl.checked) regexCleanEl.checked = false;
+        updateCleanPreview();
+    });
+    regexCleanEl.addEventListener('change', () => {
+        if (regexCleanEl.checked) llmCleanEl.checked = false;
+        updateCleanPreview();
+    });
+
+    // Live preview of the exact text buildParams will send (regex mode is
+    // client-side so it's shown verbatim; LLM mode runs server-side and can
+    // only be described, not previewed here).
+    const cleanPreviewEl = element.querySelector('#mm-clean-preview');
+    function updateCleanPreview() {
+        const text = textArea.value.trim();
+        if (!text) { cleanPreviewEl.textContent = '(empty)'; return; }
+        if (llmCleanEl.checked) {
+            cleanPreviewEl.textContent = text + '\n\n[+ server-side LLM prosody pass — result visible only in the render]';
+        } else if (regexCleanEl.checked) {
+            cleanPreviewEl.textContent = cleanMarkdown(text);
+        } else {
+            cleanPreviewEl.textContent = text;
+        }
+    }
+    textArea.addEventListener('input', updateCleanPreview);
+    updateCleanPreview();
 
     function loadVoices() {
         window.nspeech.client.listVoices('minimax')
@@ -127,12 +264,30 @@ function init(element, params, nui) {
         buildParams: () => {
             const text = textArea.value.trim();
             if (!text) return null;
-            const eb = { language: 'en' };
+            // language: 'auto'/unset → provider auto-detect; a code pins the
+            // language_boost (server maps ISO-639-1 → MiniMax's native names).
+            const eb = {};
+            if (languageEl.value && languageEl.value !== 'auto') eb.language = languageEl.value;
             if (emotionEl.value) eb.emotion = emotionEl.value;
+            if (volEl.value !== '1') eb.vol = parseFloat(volEl.value);
+            if (textNormEl.checked) eb.text_normalization = true;
+            if (latexEl.checked) eb.latex_read = true;
+            if (subtitleEl.value) eb.subtitles = subtitleEl.value;
             if (batchEl.checked) eb.batch = true;
+
+            // Cleaning responsibility:
+            //  - regex: CLIENT-side — send the cleaned text directly
+            //  - llm:   SERVER-side (needs gateway) — raw text + clean:'llm'
+            let inputText = text;
+            if (llmCleanEl.checked) {
+                eb.clean = 'llm';
+            } else if (regexCleanEl.checked) {
+                inputText = cleanMarkdown(text);
+            }
+
             return {
                 model: modelEl.value || 'minimax',
-                input: text,
+                input: inputText,
                 voice: selectEl.value || 'default',
                 speed: parseFloat(speedEl.value),
                 extraBody: eb,

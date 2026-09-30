@@ -107,11 +107,11 @@ function buildPrompt(text, instructions, emotion) {
 function mapExtraBody(eb) {
   if (!eb || typeof eb !== 'object') return {};
 
-  const mapped = {};
-
-  if (eb.language) mapped.language = eb.language;
-
-  return mapped;
+  // No language mapping: Gemini TTS has NO language field — the model
+  // auto-detects (docs/providers/gemini.md §4). The former
+  // generation_config.speech_config[0].language was a fabricated field that
+  // exists nowhere in Google's API; requests are a documented no-op.
+  return {};
 }
 
 /**
@@ -224,8 +224,12 @@ export class GeminiAdapter {
       },
     };
 
-    if (eb.language) {
-      body.generation_config.speech_config[0].language = eb.language;
+    // Language: Gemini has no language field — extra_body.language is a
+    // documented no-op. Surface it once instead of absorbing it silently.
+    if (extra_body?.language) {
+      log.warn('Gemini ignores extra_body.language (model auto-detects; no API field)', {
+        requested: extra_body.language,
+      });
     }
 
     const isBatch = extra_body?.batch === true;

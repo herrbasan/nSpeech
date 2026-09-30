@@ -23,7 +23,7 @@ nSpeech runs **two F5 checkpoints side by side, one per language**, and routes e
 
 ### How routing works
 
-1. **`extra_body.language: "de" | "en"`** — explicit, always wins.
+1. **`extra_body.language: "de" | "en"`** — explicit, always wins (`"auto"` or unset routes to detection). Any other code raises — an unknown value used to silently load a second base checkpoint and render English phonetics.
 2. Otherwise **`detect_language(text)`** — a zero-dependency weighted heuristic:
    - each `ä`/`ö`/`ü`/`ß` occurrence → **+2** (weighted, never decisive: one loanword such as *Übermensch* in English prose must not flip the render)
    - each unambiguous German function word (`der`, `die`, `das`, `und`, `nicht`, `ist`, …) → **+1**

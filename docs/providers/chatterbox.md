@@ -85,7 +85,7 @@ model.conds = Conditionals.load(cache_path, map_location=device)
 | Parameter | Type | Range | Default | Description |
 |-----------|------|-------|---------|-------------|
 | `exaggeration` | float | 0.0–1.0 | 0.5 | Delivery intensity. Higher = more dramatic/stylized. Maps to `exaggeration` in the adapter. |
-| `language` | string | ISO-639-1 | `en` | Language code for `chatterbox-mtl`. Ignored by turbo/eng. |
+| `language` | string | ISO-639-1 | `en` | Language code for `chatterbox-mtl` (defaults to `en` when unset). Ignored by turbo/eng. Unsupported codes fail with an error — never silently mapped to English. |
 
 ### chatterbox-turbo
 

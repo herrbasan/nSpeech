@@ -20,6 +20,7 @@ import { Readable } from 'node:stream';
 import { logger } from '../logger.js';
 import { upstreamError } from './errors.js';
 import { clampNumber } from './params.js';
+import { normalizeLanguage } from './language.js';
 
 const log = logger.child('cloud.xai');
 
@@ -46,7 +47,9 @@ function mapExtraBody(eb) {
   // delivery is driven by inline speech tags in the text (see docs/providers/xai.md).
 
   // Text processing
-  if (eb.language) mapped.language = eb.language;
+  // xAI takes BCP-47 ("de", "pt-BR") or "auto" — shape-validated, case kept.
+  const lang = normalizeLanguage(eb.language);
+  if (lang) mapped.language = lang;
   if (eb.text_normalization) mapped.text_normalization = true;
 
   // Audio output

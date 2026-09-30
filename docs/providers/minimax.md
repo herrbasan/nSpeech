@@ -135,14 +135,14 @@ Primary integration path for nSpeech. Synchronous, up to 10,000 chars per reques
 | `voice_setting.speed` | | 0.5–2.0, default 1.0 |
 | `voice_setting.vol` | | (0, 10], default 1.0 |
 | `voice_setting.pitch` | | -12 to 12, default 0 |
-| `voice_setting.emotion` | | `happy`, `sad`, `angry`, `fearful`, `disgusted`, `surprised`, `calm`, `fluent`, `whisper`. Auto-detected if omitted. |
+| `voice_setting.emotion` | | `happy`, `sad`, `angry`, `fearful`, `disgusted`, `surprised`, `calm`, `fluent`, `whisper`. Auto-detected if omitted. **Live 2026-09-24:** the `speech-2.8` series rejects `whisper` (base_resp 2013 "speech 2.8 don't support whisper") despite the docs listing it — treat as 2.6-and-older only. |
 | `voice_setting.text_normalization` | | Boolean. Improves digit reading, slight latency cost. |
 | `voice_setting.latex_read` | | Boolean. LaTeX formula reading (Chinese only). Wrap in `$$`. |
 | `audio_setting.sample_rate` | | 8000, 16000, 22050, 24000, 32000, 44100 |
 | `audio_setting.bitrate` | | 32000, 64000, 128000, 256000 (mp3 only) |
 | `audio_setting.format` | | `mp3`, `pcm`, `flac`, `wav`, `pcmu_raw`, `pcmu_wav`, `opus` |
 | `audio_setting.channel` | | 1 (mono) or 2 (stereo) |
-| `language_boost` | | Language code or `auto`. Enhances minority language/dialect recognition. |
+| `language_boost` | | One of MiniMax's supported language **names** (capitalized, e.g. `German`) or `auto`. Default `null` (auto-detect). See [Language boost](#language-boost) below. |
 | `pronunciation_dict.tone` | | Array of `"original/replacement"` rules. Supports IPA, pinyin, jyutping, kana. |
 | `voice_modify.sound_effects` | | `spacious_echo`, `auditorium_echo`, `lofi_telephone`, `robotic` (one at a time) |
 | `timbre_weights` | | Array of `{voice_id, weight:1-100}`. Up to 4 voices mixed. Leave `voice_id` empty when using. |
@@ -152,6 +152,16 @@ Primary integration path for nSpeech. Synchronous, up to 10,000 chars per reques
 ### Text Features
 
 **Pause control:** `<#0.5#>`, `<#2.0#>` — between speakable segments, not consecutive.
+
+### Language boost
+
+`language_boost` improves recognition and pronunciation for the given language — pinning it fixes e.g. numbers/dates being read with the wrong language's rules on mixed or minority-language text. Under normal circumstances it does not change the accent of the voice.
+
+The value is **not** an arbitrary ISO code — the official T2A HTTP reference ([platform.minimax.io/docs/api-reference/speech-t2a-http](https://platform.minimax.io/docs/api-reference/speech-t2a-http)) enumerates exactly these values, default `null`:
+
+`Chinese`, `Chinese,Yue`, `English`, `Arabic`, `Russian`, `Spanish`, `French`, `Portuguese`, `German`, `Turkish`, `Dutch`, `Ukrainian`, `Vietnamese`, `Indonesian`, `Japanese`, `Italian`, `Korean`, `Thai`, `Polish`, `Romanian`, `Greek`, `Czech`, `Finnish`, `Hindi`, `Bulgarian`, `Danish`, `Hebrew`, `Malay`, `Persian`, `Slovak`, `Swedish`, `Croatian`, `Filipino`, `Hungarian`, `Norwegian`, `Slovenian`, `Catalan`, `Nynorsk`, `Tamil`, `Afrikaans`, `auto`
+
+**nSpeech mapping:** nSpeech's normalized `extra_body.language` accepts ISO-639-1 (`"de"`, `"en"`, ...) or `"auto"`; the adapter maps it to the official name above (`server/cloud/language.js`) and rejects unsupported codes with 400. Note: `speech-01`/`speech-02` series models do not support Persian, Filipino, or Tamil (official caveat).
 
 **Interjections (speech-2.8-hd/turbo only):** `(laughs)`, `(chuckle)`, `(coughs)`, `(clear-throat)`, `(groans)`, `(breath)`, `(pant)`, `(inhale)`, `(exhale)`, `(gasps)`, `(sniffs)`, `(sighs)`, `(snorts)`, `(burps)`, `(lip-smacking)`, `(humming)`, `(hissing)`, `(emm)`, `(sneezes)`.
 
