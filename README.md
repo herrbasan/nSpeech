@@ -166,7 +166,7 @@ const { text } = await nspeech.cleanText(articleMarkdown);
 nspeech.speech({ model: 'nspeech', input: text, voice: 'af_heart' });
 ```
 
-The regex cleaner is also exported for offline/preview use (`import { cleanMarkdown } from ...`). Rules settled by ear tests on F5-TTS: emphasis strips silently (engines emphasize better unmarked), label colons merge with em-dash, clause colons split into full sentence breaks, headers get terminal periods, strikethrough drops, acronyms spell out. The LLM prosody variant (`extra_body.clean: 'llm'` or `cleanText(text, 'llm')`) is parked.
+The regex cleaner is also exported for offline/preview use (`import { cleanMarkdown } from ...`). Rules settled by ear tests on F5-TTS: emphasis strips silently (engines emphasize better unmarked), label colons merge into a pause, clause colons split into full sentence breaks, headers get terminal periods, strikethrough drops, acronyms spell out. Spaced dashes — em-dash `—`, en-dash `–`, hyphen `-` — all become ` ... `, the most reliable TTS pause. Hashless headings followed directly by a longer line get terminal periods so they aren't spoken as part of the next paragraph. The LLM prosody variant (`extra_body.clean: 'llm'` or `cleanText(text, 'llm')`) is parked.
 
 ### Long Texts (Seamless Stitching)
 
