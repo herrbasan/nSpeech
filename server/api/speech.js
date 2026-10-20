@@ -10,12 +10,14 @@
  */
 import { manager, engineNameFor } from '../engine/manager.js';
 import { WorkerError } from '../engine/worker.js';
+import { Readable } from 'node:stream';
 import { getContentType, normalizeFormat } from './formats.js';
 import { logger } from '../logger.js';
 import { pipePcmToClient } from '../transcode.js';
 import { cleanMarkdown, cleanMarkdownLLM } from '../markdown-clean.js';
 import * as presets from '../presets.js';
 import * as chunking from '../chunking.js';
+import * as renderCache from '../render-cache.js';
 import * as defaults from '../defaults.js';
 import { assertVoiceValid } from '../voice-validation.js';
 
@@ -170,19 +172,53 @@ export async function relaySpeech(request, reply, body) {
       ?? 'stream';
     if (mode !== 'off' && chunking.shouldChunk(inputText, engine, subModel)) {
       if (mode === 'stitch') {
-        pcmStream = await chunking.generateChunkedBatch({
-          text: inputText,
-          engine,
-          voiceName,
-          speed,
-          instructions,
-          extraBody,
-          subModel,
-          signal: clientAbort.signal,
-          // Progress flows to the admin SSE bus (/v1/admin/events) via emit()
-          // inside chunking. The callback hook exists for future job APIs.
-          onProgress: undefined,
-        });
+        // Stitch is fully buffered, so the finished render can be persisted
+        // BEFORE the client sees a byte (issue #4): a client that dies mid-
+        // response no longer costs the quota spent on that render, and an
+        // identical request inside the TTL is served from disk. The cache is
+        // keyed on the CLEANED text, so the LLM date pass ran before this.
+        const cacheable = extraBody.cache !== false;
+        const key = cacheable ? renderCache.keyFor({
+          engineName, subModel, voiceName, speed, instructions, extraBody, text: inputText,
+        }) : null;
+
+        const hit = cacheable ? await renderCache.lookup(key) : null;
+        if (hit) {
+          log.info('render cache hit', {
+            key,
+            engine: engineName,
+            voice: voiceName,
+            bytes: hit.pcm.length,
+            ageHours: Math.round((Date.now() - hit.meta.created) / 3600000),
+          });
+          reply.header('X-Render-Cache', 'hit');
+          pcmStream = Readable.from([hit.pcm]);
+        } else {
+          const stitched = await chunking.generateChunkedBatch({
+            text: inputText,
+            engine,
+            voiceName,
+            speed,
+            instructions,
+            extraBody,
+            subModel,
+            signal: clientAbort.signal,
+            // Progress flows to the admin SSE bus (/v1/admin/events) via emit()
+            // inside chunking. The callback hook exists for future job APIs.
+            onProgress: undefined,
+          });
+          const pcm = await renderCache.collect(stitched);
+          if (cacheable) {
+            await renderCache.store(key, pcm, {
+              engine: engineName,
+              model: subModel ?? null,
+              voice: voiceName,
+              chars: inputText.length,
+            });
+          }
+          reply.header('X-Render-Cache', cacheable ? 'miss' : 'off');
+          pcmStream = Readable.from([pcm]);
+        }
       } else {
         // 'stream' mode: sequential chunks, native engine streaming, PCM
         // forwarded per chunk (tail fade + silence pad, no overlap/align).

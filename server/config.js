@@ -113,6 +113,25 @@ export const config = {
   transcode: {
     normalizationPeak: (configJson.transcode && configJson.transcode.normalization_peak) ?? 0.95,
   },
+
+  // Completed stitch renders (issue #4). Buffered output is persisted so a
+  // client that dies mid-response does not burn the cloud quota spent on it,
+  // and a repeated identical request is served from disk.
+  renderCache: {
+    dir: resolve(PROJECT_ROOT,
+      pick('NSPEECH_RENDER_CACHE_DIR', process.env, envFile)
+      ?? configJson.render_cache?.dir
+      ?? '.cache/renders'),
+    ttlMs: 1000 * 60 * 60 * 24 * (
+      parseFloat(pick('NSPEECH_RENDER_CACHE_TTL_DAYS', process.env, envFile)
+        ?? configJson.render_cache?.ttl_days
+        ?? 7)
+    ),
+    maxBytes: parseInt(
+      pick('NSPEECH_RENDER_CACHE_MAX_BYTES', process.env, envFile)
+      ?? configJson.render_cache?.max_bytes
+      ?? String(2 * 1024 * 1024 * 1024), 10),
+  },
 };
 
 // ── Validate required paths ─────────────────────────────────────────────────

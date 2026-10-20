@@ -37,6 +37,7 @@ import { resolveCloud } from '../cloud/registry.js';
 import { subscribe, getHistory } from '../events.js';
 import { logger } from '../logger.js';
 import * as voiceCache from '../voice-cache.js';
+import * as renderCache from '../render-cache.js';
 
 const log = logger.child('admin');
 
@@ -327,13 +328,17 @@ export function registerAdminRoutes(app) {
     };
   });
 
-  // ── GET /v1/admin/cache — voice-cache state ──────────────────────────────
+  // ── GET /v1/admin/cache — voice-cache and render-cache state ─────────────
   //
   // Engines and models are deliberately absent: both are built from the local
   // registry and the cloud registry with no network and no worker, so there is
-  // nothing to cache. Only voices needed a snapshot.
+  // nothing to cache. Only voices needed a snapshot, and only stitch renders
+  // need persistence.
 
-  app.get('/v1/admin/cache', async () => voiceCache.status());
+  app.get('/v1/admin/cache', async () => ({
+    ...(await voiceCache.status()),
+    renders: await renderCache.status(),
+  }));
 
   // ── POST /v1/admin/cache/refresh — rebuild the cache now ─────────────────
   //

@@ -52,6 +52,28 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-20 — Stitch renders persisted before the client is answered (#4)
+
+**Reported (2026-09-24):** two ElevenLabs stitch renders (~14K chars, 4 chunks, ~4m45s each) reached `done 100%` server-side while the client connection was already dead (undici `headersTimeout`). The audio was piped into a dead socket and discarded — ~8k credits, nothing recoverable. Stitch output existed only as `Buffer.concat` inside `generateChunkedBatch`; nothing ever touched disk.
+
+**Shape chosen:** persist **and** auto-serve. Persist-only would have needed a second client call to recover a render — the case is a client that just died, so it cannot make one. Both behaviours come from the same artifact, so the extra is only a lookup.
+
+**`server/render-cache.js`:**
+- **Key** — sha256 over canonicalised `{engine, model, voice, speed, instructions, tuning extra_body, cleaned text}`. Transport flags (`mode`, `clean`, `markdown`, `cache`, deprecated aliases) are excluded: `clean` is already applied to the keyed text, so a pre-cleaned request and a `clean:true` request share an entry. Object keys are sorted, so parameter order cannot split the cache.
+- **Order of operations:** in `relaySpeech`'s stitch branch the render is collected into one Buffer and persisted **before** `reply` hands any byte to the client — persistence is not contingent on the client surviving. `generateChunkedBatch` was already fully buffered, so this costs no latency; `stitch` is the only mode cached for exactly that reason.
+- **Atomic write** — `.pcm` to a temp file then rename, sidecar last (it is what makes an entry discoverable). A concurrent lookup can never read a partial file.
+- **Retention** — TTL (7 days) plus a byte cap (2 GiB), evicted least-recently-**used**: a hit touches mtime, so a render reused daily is not the one dropped. A single render larger than the cap is not stored. Config in `config.json` (`render_cache`) with `NSPEECH_RENDER_CACHE_*` overrides.
+- **Corruption is treated as corruption** — a PCM whose length disagrees with its sidecar is dropped, not served.
+- **`extra_body.cache: false`** opts a request out of both lookup and store; the response says which path it took: `X-Render-Cache: hit | miss | off`.
+
+**Deliberate non-goal — in-flight dedupe:** two identical concurrent requests still render twice. Sharing one promise would couple two clients' lifetimes, and the abort signal belongs to the request that started the render.
+
+**Admin:** `GET /v1/admin/cache` now returns `renders` alongside the voice cache.
+
+**Verified:** `node scripts/probe-render-cache.js` — 26 checks, all pass: key stability under reordering, sensitivity to text/voice/speed/instructions/model/engine/tuning, transport flags excluded; byte-identical roundtrip; miss, TTL expiry (entry removed), truncation (entry dropped); cap holds with LRU eviction (touched entry survives, untouched one does not); oversized render refused; `collect()` lossless; status shape. Module import smoke confirms `relaySpeech` loads with `render_cache` read from `config.json` (2 GiB / 168 h).
+
+**Open:** live confirmation needs a restart and one stitch render — repeat the identical request inside the TTL and expect `X-Render-Cache: hit` with no provider call. The original scenario (kill the client mid-response, then re-request) is the one worth reproducing.
+
 ### 2026-10-20 — Voice validated at the request, not at synthesis (#5)
 
 **Reported (2026-09-30):** `voice: 'Kimi'` with `model: 'nspeech'` resolved to ElevenLabs and came back as the provider's own `404 "A voice with voice_id 'Kimi' was not found."` — after the caller had committed a text and a render slot. The consumer keeps a per-participant `voiceMapping` in nDB; projects created under one engine are re-rendered under another, so a stale name is invisible in stored data and materialises mid-batch.

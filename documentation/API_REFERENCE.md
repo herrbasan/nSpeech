@@ -28,7 +28,7 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
 | GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
-| GET | `/v1/admin/cache` | Voice-cache state — per-engine voice/built-in counts and age |
+| GET | `/v1/admin/cache` | Voice-cache state (per-engine counts/age) plus `renders` — persisted stitch renders (`entries`, `bytes`, `maxBytes`, `ttlHours`, `dir`) |
 | POST | `/v1/admin/cache/refresh` | Rebuild the voice cache now (disk re-scan, cloud re-fetch, resident re-warm) |
 | POST | `/v1/audio/transcriptions` | Speech-to-text (local faster-whisper, CPU) |
 | POST | `/v1/audio/align` | Forced alignment, text-constrained (local MMS CTC, CPU) |
@@ -194,6 +194,7 @@ When `input` exceeds the engine's per-request char limit, nSpeech transparently 
 | `chunk_fade_ms` | int | `15` | Fade-in at the trim boundary to smooth the cut. |
 | `chunk_tail_fade_ms` | int | `75` | Fade-out at every chunk tail. Engines may cut the final phoneme with zero decay; without this fade the cliff into the inter-chunk silence is audible as a pop. |
 | `chunk_overlap` | int | `1` | Number of trailing paragraphs prepended as overlap in batch mode. |
+| `cache` | boolean | `true` | Stitch only. Persist the completed render and serve an identical repeat from disk instead of re-spending quota. `false` bypasses both lookup and store for that request. |
 
 Engine char limits (model-aware): eleven_v4_turbo 9600, eleven_v3 4800, eleven_v4 9600, eleven_multilingual_v2 9600, eleven_flash_v2_5 38400, MiniMax ~9800, Gemini ~4800, xAI ~14800, local engines unlimited. The chunk gate uses the same model-aware limit the planner splits against, so a text over the selected model's limit is always chunked rather than sent as one over-limit request. ElevenLabs v4 models have no speed/style control (values are ignored with a warning); the ElevenLabs default is `eleven_v4_turbo`.
 
@@ -201,9 +202,20 @@ Engine char limits (model-aware): eleven_v4_turbo 9600, eleven_v3 4800, eleven_v
 
 **Progress events:** stitch runs emit `tts` events on the admin SSE bus (`/v1/admin/events`) with a single overall progress model: `percent` 0–100 (each chunk owns an equal share; during generation, streamed bytes advance the share, self-calibrating bytes/char after the first chunk) plus a stage label — `plan`, `generating N/M`, `aligning N/M`, `trimmed N/M`, `done`, `failed`.
 
+#### Stitch render cache
+
+A stitch render is buffered by definition, so the finished PCM exists before the first byte is sent. nSpeech persists it to `.cache/renders/` (24 kHz mono s16le `.pcm` plus a `.json` sidecar) **before** responding, which means a client that dies mid-response — timeout, crash, disconnect — no longer costs the quota spent on that render: re-issuing the same request is free.
+
+- **Key:** engine, model, voice, speed, instructions, tuning `extra_body` and the **cleaned** text. Anything that changes the audio changes the entry; transport flags (`mode`, `clean`, `markdown`, `cache`, deprecated aliases) do not.
+- **Serve:** an identical request inside the TTL returns the stored bytes instead of rendering. The response carries `X-Render-Cache: hit | miss | off`.
+- **Retention:** TTL plus a byte cap, evicted least-recently-used first. Defaults: 7 days, 2 GiB, `.cache/renders`. Configure via `render_cache` in `config.json` (`dir`, `ttl_days`, `max_bytes`) or `NSPEECH_RENDER_CACHE_DIR` / `NSPEECH_RENDER_CACHE_TTL_DAYS` / `NSPEECH_RENDER_CACHE_MAX_BYTES`.
+- **Opt out:** `extra_body.cache: false`. A request opted out neither reads nor writes the cache.
+- **Only stitch is cached** — `stream` mode never holds the finished render. `GET /v1/admin/cache` reports `renders` (`entries`, `bytes`, `maxBytes`, `ttlHours`, `dir`).
+- Disk failures never fail a request: the render is still served, the miss is logged.
+
 ### Response
 
-Raw audio bytes with `Content-Type` per format. Every streaming response carries `X-Stream-Mode: native` (real incremental) or `X-Stream-Mode: chunked` (complete file sliced — batch mode or non-streaming cloud providers).
+Raw audio bytes with `Content-Type` per format. Every streaming response carries `X-Stream-Mode: native` (real incremental) or `X-Stream-Mode: chunked` (complete file sliced — batch mode or non-streaming cloud providers). A stitch response also carries `X-Render-Cache: hit` (served from `.cache/renders/`), `miss` (rendered and persisted) or `off` (`extra_body.cache: false`).
 
 ## Engine Capabilities
 

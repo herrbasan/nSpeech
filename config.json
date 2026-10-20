@@ -7,5 +7,10 @@
   "log_level": "INFO",
   "transcode": {
     "normalization_peak": 0.8
+  },
+  "render_cache": {
+    "dir": ".cache/renders",
+    "ttl_days": 7,
+    "max_bytes": 2147483648
   }
 }
