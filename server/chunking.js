@@ -29,14 +29,36 @@ const DEFAULT_TAIL_FADE_MS = 75; // fade-out at chunk tail — engines may cut m
 const DEFAULT_OVERLAP_PARAGRAPHS = 1; // prepend N paragraphs from prev chunk
 
 /**
+ * The per-request char limit for THIS request.
+ *
+ * Single definition of the limit: the chunk gate and both chunkers call it, so
+ * the decision to chunk can never disagree with the budget the planner splits
+ * against. They did disagree — the gate read the fixed `maxChars`, which is the
+ * DEFAULT model's limit (ElevenLabs: 9600 for eleven_v4_turbo), while the
+ * planner used the model-aware `getMaxChars(subModel)` (eleven_v3: 4800). Texts
+ * in between bypassed chunking entirely and were rejected by the provider after
+ * the fact (issue #6: 8616 chars on eleven_v3 -> HTTP 400, no render).
+ *
+ * @param {object} engine — adapter or WorkerProcess; `getMaxChars(model)` when model-aware
+ * @param {string|undefined} subModel — provider sub-model for this request
+ * @returns {number} — char budget, Infinity when the engine has no limit
+ */
+export function maxCharsFor(engine, subModel) {
+  const max = typeof engine.getMaxChars === 'function'
+    ? engine.getMaxChars(subModel)
+    : engine.maxChars;
+  return max ?? Infinity;
+}
+
+/**
  * Whether the text exceeds the engine's per-request limit and needs chunking.
  * @param {string} text
- * @param {object} engine — adapter or WorkerProcess with maxChars
+ * @param {object} engine — adapter or WorkerProcess
+ * @param {string|undefined} subModel — provider sub-model (model-aware limits)
  * @returns {boolean}
  */
-export function shouldChunk(text, engine) {
-  const max = engine.maxChars ?? Infinity;
-  return typeof text === 'string' && text.length > max;
+export function shouldChunk(text, engine, subModel) {
+  return typeof text === 'string' && text.length > maxCharsFor(engine, subModel);
 }
 
 /** Separator between segments and between overlap prefix and chunk body. */
@@ -516,10 +538,7 @@ export async function generateChunkedBatch({ text, engine, voiceName, speed, ins
     throw new Error('generateChunkedBatch: engine with generatePcmStream required');
   }
 
-  // Use model-aware limit if the engine supports it
-  const maxChars = typeof engine.getMaxChars === 'function'
-    ? engine.getMaxChars(subModel)
-    : engine.maxChars;
+  const maxChars = maxCharsFor(engine, subModel);
   const silenceMs = extraBody?.chunk_silence_ms ?? DEFAULT_SILENCE_MS;
   const fadeMs = extraBody?.chunk_fade_ms ?? DEFAULT_FADE_MS;
   const tailFadeMs = extraBody?.chunk_tail_fade_ms ?? DEFAULT_TAIL_FADE_MS;
@@ -707,9 +726,7 @@ export async function generateChunkedStream({ text, engine, voiceName, speed, in
     throw new Error('generateChunkedStream: engine with generatePcmStream required');
   }
 
-  const maxChars = typeof engine.getMaxChars === 'function'
-    ? engine.getMaxChars(subModel)
-    : engine.maxChars;
+  const maxChars = maxCharsFor(engine, subModel);
   const silenceMs = extraBody?.chunk_silence_ms ?? DEFAULT_SILENCE_MS;
   const tailFadeMs = extraBody?.chunk_tail_fade_ms ?? DEFAULT_TAIL_FADE_MS;
 

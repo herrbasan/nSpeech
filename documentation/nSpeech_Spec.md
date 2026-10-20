@@ -182,16 +182,16 @@ Provider-native model names are explicit (no underscore→hyphen normalization):
 
 ### 4.5 server/chunking.js — Auto-Chunking for Long-Form TTS
 
-Cloud engines have per-request text limits (ElevenLabs ~5000, MiniMax 10000, xAI 15000). When client text exceeds the engine's `maxChars`, `speech.js` routes through the chunking module instead of calling `generatePcmStream()` directly.
+Cloud engines have per-request text limits (ElevenLabs ~5000, MiniMax 10000, xAI 15000). When client text exceeds the engine's limit, `speech.js` routes through the chunking module instead of calling `generatePcmStream()` directly.
 
 **Flow:**
 
-1. `shouldChunk(text, engine)` — `text.length > engine.maxChars`?
-2. `splitIntoChunks(text, maxChars)` — split on natural boundaries: paragraph (`\n\n`) → sentence (`. ! ? …`) → clause (`, ;`) → hard cut. Accumulate into chunks under the limit.
-3. `generateChunked()` — for each chunk: inject `previous_text`/`next_text` continuity context into `extra_body`, call `engine.generatePcmStream()` in batch mode, collect PCM, append inter-chunk silence (default 1000ms, `extra_body.chunk_silence_ms`).
-4. Concatenate all PCM buffers → single `Readable` → normal transcode path.
+1. `shouldChunk(text, engine, subModel)` — `text.length > maxCharsFor(engine, subModel)`? `maxCharsFor` is the single definition of the per-request limit: `engine.getMaxChars(subModel)` when the engine is model-aware, else `engine.maxChars`. The gate and the planner call the same function, so the decision to chunk can never disagree with the budget the plan is built against.
+2. `splitIntoChunks(text, maxChars, {overlapParagraphs})` — split on natural boundaries: paragraph (`\n\n`) → sentence (`. ! ? …`) → clause (`, ;`) → hard cut. Accumulate into chunks under the limit, reserving the exact length of the overlap prefix first.
+3. `generateChunkedBatch()` (mode `stitch`) or `generateChunkedStream()` (mode `stream`) — for each chunk: inject `previous_text`/`next_text` continuity context into `extra_body` where the adapter supports it, call `engine.generatePcmStream()` in batch mode, collect PCM, append inter-chunk silence (default 1000ms, `extra_body.chunk_silence_ms`). `generateChunkedBatch` additionally aligns and trims the overlap and stitches seamlessly.
+4. Concatenate all PCM buffers → single `Readable` → normal transcode path (`stream` mode pushes each chunk's PCM as it completes).
 
-**Engine `maxChars` property:** every adapter and `WorkerProcess` exposes `maxChars` (cloud: API limit minus safety margin; local: `Infinity`). ElevenLabs is the only provider with native continuity fields — its adapter passes `previous_text`/`next_text` through to the API. Other providers ignore them (simple concatenation).
+**Engine char limits:** every adapter and `WorkerProcess` exposes `maxChars` (cloud: API limit minus safety margin; local: `Infinity`). Model-aware adapters also expose `getMaxChars(model)`, which is the limit the gate and the planner use — the fixed `maxChars` is only the default model's limit (ElevenLabs: `eleven_v4_turbo` 9600). ElevenLabs is the only provider with native continuity fields — its adapter passes `previous_text`/`next_text` through to the API. Other providers ignore them (simple concatenation).
 
 **Client control:** `extra_body.auto_chunk` (default `true`) disables chunking; `extra_body.chunk_silence_ms` (default `1000`) tunes silence padding; `extra_body.chunk_tail_fade_ms` (default `75`) fades every chunk tail to zero so a mid-phoneme engine cutoff can't pop into the silence; batch-mode trim offsets snap to the nearest zero crossing (≤25ms) for click-free cuts.
 

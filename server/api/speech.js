@@ -156,7 +156,7 @@ export async function relaySpeech(request, reply, body) {
       ?? (extraBody.batch === true ? 'stitch' : null)
       ?? (extraBody.auto_chunk === false ? 'off' : null)
       ?? 'stream';
-    if (mode !== 'off' && chunking.shouldChunk(inputText, engine)) {
+    if (mode !== 'off' && chunking.shouldChunk(inputText, engine, subModel)) {
       if (mode === 'stitch') {
         pcmStream = await chunking.generateChunkedBatch({
           text: inputText,

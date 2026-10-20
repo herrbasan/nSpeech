@@ -52,6 +52,20 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-20 — Chunk gate made model-aware (#6)
+
+**Reported (same day):** `model: eleven_v3`, `extra_body.mode: 'stitch'`, 8616 chars → sent to ElevenLabs as **one unchunked request** → `HTTP 400 text_too_long (8616 > 5000)`. The stitch planner would have split it; it was never engaged.
+
+**Root cause:** `relaySpeech` gated with `chunking.shouldChunk(text, engine)`, and `shouldChunk` read the fixed `engine.maxChars` — on ElevenLabs that is **9600, the limit of the default model** (`eleven_v4_turbo`). The model-aware `getMaxChars(subModel)` (v3 → 4800) was consulted only *inside* the chunkers. Any text in `(getMaxChars(model), maxChars]` — v3: 4801–9600 — bypassed chunking and died at the provider after the fact. The #3 invariant ("an over-limit request must die in the planner") was undermined one step earlier: over-limit requests never reached the planner.
+
+**Fixed — `maxCharsFor(engine, subModel)` in `server/chunking.js`:** one definition of the per-request limit, now called by the gate (`shouldChunk(text, engine, subModel)`) and by both chunkers. The decision to chunk can no longer disagree with the budget the plan is built against; `speech.js` passes `subModel` (the resolved provider model, or `extra_body.model`). Two-argument calls still resolve to the default model's limit, so non-model-aware engines and old call sites are unchanged.
+
+**Verified:** `node scripts/probe-chunk-gate.js` — 17 checks, all pass: v3 limits 4800 / v4_turbo 9600; 8616 chars chunks on v3 and not on v4_turbo; 4800 not chunked, 4801 chunked; the 8616-char case plans 2 chunks (4657 + 4118), every request within the gate limit; MiniMax 9800/9801 unchanged; unlimited engine never chunks; legacy two-arg call still uses 9600. `scripts/probe-chunk-overflow.js` still ALL PASS.
+
+**Docs:** `API_REFERENCE.md` chunking section states the gate and planner share the model-aware limit; `nSpeech_Spec.md` §4.5 flow corrected to the real functions (`maxCharsFor`/`shouldChunk`/`generateChunkedBatch`/`generateChunkedStream` — it still named the long-gone `generateChunked()` and called streaming chunking a "future extension").
+
+**Open:** live confirmation needs a server restart plus one `eleven_v3` stitch request between 5000 and 9600 chars. §4.5 still describes chunking as batch-only and `auto_chunk` as the client control — stale from 2026-08-15, left for the next documentation pass.
+
 ### 2026-09-30 — ElevenLabs v4 generation added (`eleven_v4`, `eleven_v4_turbo`)
 
 **Verified from the provider, not the docs page alone:** `GET /v1/models` lists `eleven_v4` and `eleven_v4_turbo` (85 languages, 10K char limit each) plus `eleven_v3_conversational`. A synthesis probe (`scripts/probe-elevenlabs-v4.js`, statuses only) established the actual parameter surface — which differs from v3 in ways that would have broken requests:
@@ -532,4 +546,4 @@ Three submodules. Each is a separate repo this project only *consumes*:
 
 ---
 
-*Last updated: 2026-09-30*
+*Last updated: 2026-10-20*
