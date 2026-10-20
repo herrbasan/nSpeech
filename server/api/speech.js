@@ -165,6 +165,8 @@ export async function relaySpeech(request, reply, body) {
   const clientAbort = new AbortController();
 
   let pcmStream;
+  // 'hit' | 'miss' | 'off' for stitch; null otherwise. Emitted as X-Render-Cache.
+  let renderCacheStatus = null;
   try {
     const mode = extraBody.mode
       ?? (extraBody.batch === true ? 'stitch' : null)
@@ -192,6 +194,7 @@ export async function relaySpeech(request, reply, body) {
             ageHours: Math.round((Date.now() - hit.meta.created) / 3600000),
           });
           reply.header('X-Render-Cache', 'hit');
+          renderCacheStatus = 'hit';
           pcmStream = Readable.from([hit.pcm]);
         } else {
           const stitched = await chunking.generateChunkedBatch({
@@ -217,6 +220,7 @@ export async function relaySpeech(request, reply, body) {
             });
           }
           reply.header('X-Render-Cache', cacheable ? 'miss' : 'off');
+          renderCacheStatus = cacheable ? 'miss' : 'off';
           pcmStream = Readable.from([pcm]);
         }
       } else {
@@ -319,6 +323,9 @@ export async function relaySpeech(request, reply, body) {
   pipePcmToClient(pcmStream, rawResponse, clientFormat, {
     streamMode: isBatch ? 'chunked' : 'native',
     normalizePeak,
+    // reply.header() is discarded by the hijack (pipePcmToClient builds the head
+    // itself), so the cache status has to travel as an explicit header.
+    extraHeaders: renderCacheStatus ? { 'X-Render-Cache': renderCacheStatus } : {},
   });
 }
 
