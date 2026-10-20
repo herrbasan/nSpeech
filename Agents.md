@@ -52,6 +52,16 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-20 — Live verification pass: #1, #2, #3 closed
+
+The 2026-09-21 fixes (`d21ce3f`) had never been confirmed against a running server. After a restart:
+
+- **#1** — `{"model":"minimax","voice":"nonsense_id_value"}` → `404 voice_not_found` "voice id not exist (MiniMax status 2054)". A bad voice is a typed 404, not a 200 with an empty body; the `502 empty_audio` peek stays as the general backstop.
+- **#2** — `voice:"default"` on Kokoro → 200 with 18,144 bytes of MP3. The sentinel resolves to `af_heart`; an unknown Kokoro voice is a typed 404 listing the valid ids (same run as #5).
+- **#3** — a real 2-chunk Gemini stitch (4900 chars, plan `[4768, 167]`) generated, aligned and trimmed with the overlap reserve in play, no `text too long`. The *failing* shape (a chunk filled within `overlap − 200` of the limit) was not reproduced against a live provider; the mechanism rests on `probe-chunk-overflow.js` (deterministic repro + the Ghost fixture whose chunk 2 was recorded at 5074 against a 4800 budget) and the planner assertion added with the fix.
+
+All three closed with the evidence recorded on the issues. Free checks except one 4900-char Gemini render, spent deliberately to exercise the real path.
+
 ### 2026-10-20 — Stitch renders persisted before the client is answered (#4)
 
 **Reported (2026-09-24):** two ElevenLabs stitch renders (~14K chars, 4 chunks, ~4m45s each) reached `done 100%` server-side while the client connection was already dead (undici `headersTimeout`). The audio was piped into a dead socket and discarded — ~8k credits, nothing recoverable. Stitch output existed only as `Buffer.concat` inside `generateChunkedBatch`; nothing ever touched disk.
@@ -72,7 +82,11 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 **Verified:** `node scripts/probe-render-cache.js` — 26 checks, all pass: key stability under reordering, sensitivity to text/voice/speed/instructions/model/engine/tuning, transport flags excluded; byte-identical roundtrip; miss, TTL expiry (entry removed), truncation (entry dropped); cap holds with LRU eviction (touched entry survives, untouched one does not); oversized render refused; `collect()` lossless; status shape. Module import smoke confirms `relaySpeech` loads with `render_cache` read from `config.json` (2 GiB / 168 h).
 
-**Open:** live confirmation needs a restart and one stitch render — repeat the identical request inside the TTL and expect `X-Render-Cache: hit` with no provider call. The original scenario (kill the client mid-response, then re-request) is the one worth reproducing.
+**Verified live (2026-10-20, after restart):** a 4900-char Gemini stitch request persisted 10,636,752 bytes (`render persisted`, key `e0c1b6…`); the identical request 4.5s later logged `render cache hit` and returned in **0.78s instead of 89.9s**, MP3 byte-identical (SHA-256 match), no provider call. Section #3's overlap path was exercised on the same render (chunk plan `[4768, 167]`).
+
+**Defect the live check found — `X-Render-Cache` never reached the client** (fixed in `3aaec81`). `pipePcmToClient` hijacks the reply and calls `rawResponse.writeHead(200, {...})` with its own header set, which discards anything set via `reply.header()`. The value now travels as `extraHeaders` — the same channel `X-Stream-Mode` uses — with `reply.header()` kept for the raw (wav/pcm) path that goes through `reply.send()`. General lesson: on the hijacked transcode path, `reply.header()` is decoration, not a header.
+
+**Open:** confirming the header itself needs one more restart (the persistence behaviour is verified). ElevenLabs' premade voices still absent from the catalogue; in-flight dedupe deliberately not done.
 
 ### 2026-10-20 — Voice validated at the request, not at synthesis (#5)
 
@@ -93,7 +107,9 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 **Found while grounding it — ElevenLabs catalogue is incomplete (not fixed):** `listVoices()` requests `voice_type=personal`, which returns 26 voices (generated 17 + cloned 9) while the unfiltered `/v2/voices` returns 49 (adds 21 premade + 2 professional). So the dashboard and `GET /v1/voices` hide all premade voices today, and a client using one must know the id from elsewhere. Deliberately left alone: whether premade voices should appear in the list is a dashboard decision (noise vs completeness), and validation does not depend on it.
 
-**Open:** live confirmation needs a server restart plus one bad-voice request per checked engine. If ElevenLabs' premade voices are wanted in the catalogue, that is a one-line listing change plus a `voice-cache` refresh — and it would make membership validation possible for ElevenLabs too.
+**Verified live (2026-10-20, after restart):** `voice:"Kimi"` on ElevenLabs → `404 voice_not_found` "expected a 20-character alphanumeric voice_id" (no provider call); `voice:"definitely_not_a_voice"` on Kokoro → 404 listing 60 ids; `voice:"Nope"` on Gemini → 404 listing 30; `voice:"nonsense_id_value"` on MiniMax → 404 from upstream 2054 as designed. #5 closed.
+
+**Open:** if ElevenLabs' premade voices are wanted in the catalogue, that is a one-line listing change plus a `voice-cache` refresh — and it would make membership validation possible for ElevenLabs too.
 
 ### 2026-10-20 — Chunk gate made model-aware (#6)
 
@@ -107,7 +123,9 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 **Docs:** `API_REFERENCE.md` chunking section states the gate and planner share the model-aware limit; `nSpeech_Spec.md` §4.5 flow corrected to the real functions (`maxCharsFor`/`shouldChunk`/`generateChunkedBatch`/`generateChunkedStream` — it still named the long-gone `generateChunked()` and called streaming chunking a "future extension").
 
-**Open:** live confirmation needs a server restart plus one `eleven_v3` stitch request between 5000 and 9600 chars. §4.5 still describes chunking as batch-only and `auto_chunk` as the client control — stale from 2026-08-15, left for the next documentation pass.
+**Verified live (2026-10-20, after restart):** 5200-char German text on `eleven_v3` + `mode:'stitch'` logged `{"totalChars":5200,"maxChars":4800,"chunkCount":2,"chunkSizes":[4723,531]}` — the gate used the model-aware 4800 (not the 9600 default), and both planned requests are under the provider's 5000 limit, so the `text_too_long` failure mode is structurally gone. The request used a deliberately non-existent voice so no audio was billed; reaching the provider as chunk 1 is the proof the chunk was dispatched. #6 closed.
+
+**Open:** `nSpeech_Spec.md` §4.5 still describes chunking as batch-only and `auto_chunk` as the client control — stale from 2026-08-15, left for the next documentation pass.
 
 ### 2026-09-30 — ElevenLabs v4 generation added (`eleven_v4`, `eleven_v4_turbo`)
 
