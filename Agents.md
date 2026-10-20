@@ -52,6 +52,27 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-20 — Voice validated at the request, not at synthesis (#5)
+
+**Reported (2026-09-30):** `voice: 'Kimi'` with `model: 'nspeech'` resolved to ElevenLabs and came back as the provider's own `404 "A voice with voice_id 'Kimi' was not found."` — after the caller had committed a text and a render slot. The consumer keeps a per-participant `voiceMapping` in nDB; projects created under one engine are re-rendered under another, so a stale name is invisible in stored data and materialises mid-batch.
+
+**Two checks in `server/voice-validation.js`, deliberately unequal in strength** — a wrong check is a false rejection of a voice that works, so each one is only as strict as the evidence:
+
+- **Structural (ElevenLabs):** ids are exactly 20 alphanumeric chars. Verified, not assumed — `scripts/probe-elevenlabs-voice-ids.js`: 70 ids across premade/professional/cloned/generated, 0 deviations. `'Kimi'` → 404 naming the shape. This is the reported case, caught with zero false positives.
+- **Catalogue membership (Gemini + local engines):** only where nSpeech's own list *is* the authoritative set — Gemini's static 30, and local engines whose listing is a disk scan mirroring the worker's rules. Miss → one authoritative re-read (`voiceCache.invalidate`, never spawns a worker) → 404 naming the valid ids.
+- **Deliberately NOT membership on ElevenLabs:** its adapter lists `voice_type=personal` only — 26 of the 49 ids the API returns. All 21 premade voices are absent, so membership would reject ids that synthesise fine. MiniMax/xAI/Fish stay on the adapter's existing 404 → `voice_not_found` mapping, because their id rules are unverified and their lists are account-scoped.
+- **Bounded fail-open with a trace:** an empty catalogue proves nothing, so the request proceeds to the engine and logs a warning. `'default'`/omitted/empty stay the engine-default sentinel — #5 proposed *rejecting* omission, which would break the 2026-09-10 contract (a client that specifies nothing gets the admin's saved default).
+
+**Status is 404 `voice_not_found`, not the 400 #5 proposed** — that is the documented contract since #1 ("a bad voice is always a 404, never a 500 or an empty 200") and the code the SDK's `VoiceNotFoundError` keys on.
+
+**Ordering:** validation runs on the final voice (after defaults fill and preset resolution) and *before* text cleaning, so a bad voice also costs no LLM clean pass.
+
+**Verified:** `node scripts/probe-voice-validation.js` — 15 checks, all pass: `'Kimi'`→404, `eleven_v3`-as-voice→404, real premade and cloned ids pass, Gemini `Puck` passes / `Nope` and `af_heart` 404 with the valid list, Kokoro `af_heart` passes / unknown 404, sentinel and omitted voices untouched, MiniMax and ElevenLabs membership skipped.
+
+**Found while grounding it — ElevenLabs catalogue is incomplete (not fixed):** `listVoices()` requests `voice_type=personal`, which returns 26 voices (generated 17 + cloned 9) while the unfiltered `/v2/voices` returns 49 (adds 21 premade + 2 professional). So the dashboard and `GET /v1/voices` hide all premade voices today, and a client using one must know the id from elsewhere. Deliberately left alone: whether premade voices should appear in the list is a dashboard decision (noise vs completeness), and validation does not depend on it.
+
+**Open:** live confirmation needs a server restart plus one bad-voice request per checked engine. If ElevenLabs' premade voices are wanted in the catalogue, that is a one-line listing change plus a `voice-cache` refresh — and it would make membership validation possible for ElevenLabs too.
+
 ### 2026-10-20 — Chunk gate made model-aware (#6)
 
 **Reported (same day):** `model: eleven_v3`, `extra_body.mode: 'stitch'`, 8616 chars → sent to ElevenLabs as **one unchunked request** → `HTTP 400 text_too_long (8616 > 5000)`. The stitch planner would have split it; it was never engaged.

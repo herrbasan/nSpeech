@@ -17,6 +17,7 @@ import { cleanMarkdown, cleanMarkdownLLM } from '../markdown-clean.js';
 import * as presets from '../presets.js';
 import * as chunking from '../chunking.js';
 import * as defaults from '../defaults.js';
+import { assertVoiceValid } from '../voice-validation.js';
 
 const log = logger.child('speech');
 
@@ -110,6 +111,17 @@ export async function relaySpeech(request, reply, body) {
       if (resolved.speed != null) speed = resolved.speed;
       if (resolved.extra_body) Object.assign(extraBody, resolved.extra_body);
     }
+  }
+
+  // ── Voice validation ────────────────────────────────────────────────────
+  // Runs on the FINAL voice (after defaults fill and preset resolution), before
+  // any engine work: a voice the resolved provider cannot serve is a typed 404
+  // here instead of a provider round-trip — or, for a local engine, instead of
+  // a worker request that may render nothing.
+  try {
+    await assertVoiceValid({ engineName, voiceName });
+  } catch (err) {
+    return sendError(reply, err);
   }
 
   // ── Generate PCM stream ─────────────────────────────────────────────────

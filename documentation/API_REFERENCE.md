@@ -514,6 +514,23 @@ A voice the engine cannot resolve is always `404 voice_not_found` — never a 50
 never a `200` with an empty body. The check runs before any audio is produced, so a
 bad voice costs no render quota.
 
+**Validated at the request, not at synthesis.** `voice` is checked against the
+resolved engine before dispatch, on the final value (after server defaults and preset
+resolution), so a stale name is rejected immediately instead of surfacing mid-batch:
+
+- **Shape check** — where the provider's own id format is verified: ElevenLabs voice
+  ids are exactly 20 alphanumeric characters, so `"Kimi"` (a Kokoro-style name) is a
+  404 naming the expected shape rather than an ElevenLabs round-trip.
+- **Catalogue check** — where nSpeech owns the list: Gemini (30 prebuilt voices) and
+  the local engines (`kokoro`, `f5tts`, `f5tts-german`, `chatterbox-turbo`,
+  `vibevoice`). The error names the valid voice ids.
+- **Not checked** — ElevenLabs membership (its adapter lists personal voices only,
+  so the 20 premade voices that synthesise fine are not in it), MiniMax, xAI and Fish
+  (account-scoped lists whose id rules are unverified). Their own 404 is mapped to
+  the same `voice_not_found`.
+- An empty catalogue proves nothing and never rejects: the request proceeds to the
+  engine and a warning is logged.
+
 ---
 
 ## 8. Examples
