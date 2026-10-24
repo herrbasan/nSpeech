@@ -189,16 +189,43 @@ await checkAsync('promoting a cloud default unloads the resident GPU engine', as
 await checkAsync('promoting a local default delegates to the real switch', async () => {
   const seen = [];
   const original = manager.switchEngine;
-  manager.switchEngine = async (name) => { seen.push(name); return { engine: name, status: 'switched' }; };
+  const originalDo = manager._doSwitch;
+  manager._doSwitch = async (name) => { seen.push(name); return { engine: name, status: 'switched' }; };
   try {
     manager.promoteDefaultEngine('kokoro');
     await waitFor(() => seen.length === 1);
-    eq(seen, ['kokoro'], 'switchEngine called with the promoted engine');
+    eq(seen, ['kokoro'], '_doSwitch called with the promoted engine');
     eq(manager.defaultEngine, 'kokoro', 'default moved');
   } finally {
+    manager._doSwitch = originalDo;
     manager.switchEngine = original;
   }
   manager.defaultEngine = 'f5tts';
+});
+
+await checkAsync('a promotion waits for an in-flight GPU start before stopping it', async () => {
+  // The 2026-10-24 live failure: a cloud promotion deleted a spawning F5
+  // worker, the switch behind it then spun to its 180s health timeout.
+  const events = [];
+  const fakeWorker = {
+    inFlight: 0,
+    state: 'spawning',
+    entry: { gpu: true },
+    getStatus() { return { state: 'spawning' }; },
+    whenReady() {
+      return new Promise((resolve) => setTimeout(() => { events.push('ready'); this.state = 'ready'; resolve(); }, 30));
+    },
+    async stop() { events.push('stop'); },
+  };
+  manager.workers.set('f5tts', fakeWorker);
+  manager.currentEngine = 'f5tts';
+  manager.defaultEngine = 'f5tts';
+
+  manager.promoteDefaultEngine('minimax');
+  eq(await waitFor(() => events.includes('stop'), 2000), true, 'worker eventually stopped');
+  eq(events[0], 'ready', `start was awaited before the stop (order: ${events.join(',')})`);
+  eq(manager.workers.has('f5tts'), false, 'worker dropped after the stop');
+  eq(manager.defaultEngine, 'minimax', 'default moved');
 });
 
 await checkAsync('POST /v1/admin/default-engine rejects unknown and missing engines', async () => {

@@ -397,13 +397,16 @@ export class EngineManager {
    */
   promoteDefaultEngine(engineName) {
     const pointer = this.setDefaultEngine(engineName); // validates
-    const local = getEntry(engineName);
 
-    const converge = local
-      ? this.switchEngine(engineName)
-      : this._unloadOtherGpuEngines(null).then(() => this.setCurrentEngine(engineName));
+    // Serialised on the switch lock, like any other residency change. Without
+    // this a promotion can run *inside* an in-flight switch and delete the
+    // worker that switch is still waiting on — observed live 2026-10-24: a
+    // cold F5 start was killed 12s in, its health poll then spun to the 180s
+    // timeout, and the switch behind it failed with engine_start_failed.
+    const run = this._switchLock.then(() => this._convergeResidency(engineName));
+    this._switchLock = run.catch(() => {}); // the chain must never stay rejected
 
-    converge.catch((err) => {
+    run.catch((err) => {
       // The pointer stands; the engine simply is not warm. Say so loudly —
       // the dashboard shows this on the event stream.
       log.error('default engine residency convergence failed', {
@@ -415,6 +418,32 @@ export class EngineManager {
     });
 
     return { ...pointer, converging: true };
+  }
+
+  /**
+   * Move the resident set to match the new default.
+   *
+   *   local engine  → the real switch (unload the previous GPU engine, spawn this)
+   *   cloud engine  → nothing to load; free the GPU engine that is no longer needed
+   *
+   * A GPU worker that is still `spawning` is awaited before anything stops it:
+   * it holds the GPU slot and a pending start, and killing it mid-start leaves
+   * a health check that can never succeed.
+   * gpu:false residents (Kokoro) are never unloaded — they cost no VRAM.
+   */
+  async _convergeResidency(engineName) {
+    if (getEntry(engineName)) {
+      await this._doSwitch(engineName, {});
+      return;
+    }
+
+    for (const [, worker] of this.workers) {
+      if (worker.entry?.gpu && worker.state === 'spawning') {
+        await worker.whenReady().catch(() => {}); // settled either way
+      }
+    }
+    await this._unloadOtherGpuEngines(null);
+    this.setCurrentEngine(engineName);
   }
 
   /**

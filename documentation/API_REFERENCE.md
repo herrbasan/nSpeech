@@ -498,6 +498,11 @@ Setting it is an explicit act, so it also **converges residency**:
 The pointer moves immediately (`202 {engine, previous, status:"default_set", converging:true}`)
 and the worker work continues in the background, so a ~30s cold start does not
 hang the caller. Progress and failures arrive on `/v1/admin/events`.
+
+Convergence is **serialised with engine switches** and waits for an in-flight
+start before stopping anything: a promotion that raced a cold F5 start used to
+delete the worker the switch was waiting on, and the switch then failed after
+its full 180 s health timeout (found live 2026-10-24).
 Unknown engine → `404 engine_not_found` listing the valid names.
 `GET /v1/admin/default-engine` returns
 `{"engine":"<default>","dashboard":"<browsed>"}`.
