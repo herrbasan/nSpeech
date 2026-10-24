@@ -6,6 +6,11 @@
 
     <section style="margin-bottom: var(--nui-space-double)">
         <h2 style="margin-top: 0">Engine Status</h2>
+        <p style="margin-top: 0; font-size: 0.85em; color: var(--text-color-dim);">
+            <strong>★ client default</strong> — what <code>model: "nspeech"</code> (or no model) resolves to.
+            <strong>● active</strong> — what the dashboard is working with; for a local GPU engine that is also the resident one.
+            They are separate settings: browsing a cloud engine does not change the client default.
+        </p>
         <nui-card>
             <div id="engine-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--nui-space);">
             </div>
@@ -44,13 +49,14 @@ function init(element, params, nui) {
 
     let eventSource = null;
 
-    function renderEngineGrid(engines, current) {
+    function renderEngineGrid(engines, current, defaultEngine) {
         gridEl.innerHTML = '';
         engines.forEach(eng => {
             const card = document.createElement('div');
             card.style.cssText = 'padding: var(--nui-space-half); border-radius: var(--border-radius1); border: 1px solid var(--border-shade1);';
 
             const isCurrent = eng.name === current;
+            const isDefault = eng.is_default ?? (eng.name === defaultEngine);
             const stateColor = eng.is_loaded ? 'var(--color-success)' :
                                (eng.venv_exists === false && !eng.type) ? 'var(--color-danger)' :
                                'var(--text-color-dim)';
@@ -61,12 +67,13 @@ function init(element, params, nui) {
                    (eng.venv_exists === false ? 'not installed' : 'idle'));
 
             card.innerHTML = `
-                <div style="font-weight: ${isCurrent ? 'bold' : 'normal'}; color: ${isCurrent ? 'var(--color-highlight)' : 'var(--text-color)'};">
+                <div style="font-weight: ${isCurrent || isDefault ? 'bold' : 'normal'}; color: ${isCurrent ? 'var(--color-highlight)' : isDefault ? 'var(--color-success)' : 'var(--text-color)'};">
                     ${eng.name}${eng.gpu ? ' 🎮' : ''}${eng.type === 'cloud' ? ' ☁' : ''}
                 </div>
                 <div style="font-size: 0.8em; color: ${stateColor};">
                     ${isCurrent ? '● active · ' : ''}${stateLabel}
                 </div>
+                ${isDefault ? '<div style="font-size: 0.8em; color: var(--color-success);">★ client default</div>' : ''}
             `;
             gridEl.appendChild(card);
         });
@@ -76,7 +83,7 @@ function init(element, params, nui) {
         fetch('/v1/admin/engines')
             .then(r => r.json())
             .then(d => {
-                renderEngineGrid(d.engines, d.current);
+                renderEngineGrid(d.engines, d.current, d.default);
             })
             .catch(() => {
                 gridEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load engine status.</p>';
