@@ -59,8 +59,53 @@
                     <option value="surprised">Surprised</option>
                     <option value="calm">Calm</option>
                     <option value="fluent">Fluent</option>
+                    <option value="whisper">Whisper</option>
                 </select>
             </nui-select>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label for="mm-pitch">Pitch shift (semitones)</label>
+            <nui-input type="range" min="-12" max="12" step="1" value="0">
+                <input type="range" id="mm-pitch" min="-12" max="12" step="1" value="0">
+            </nui-input>
+            <span id="mm-pitch-val" style="margin-left: var(--nui-space-half)">0</span>
+            <span style="color: var(--color-shade6); font-size: 0.85em;">voice_setting.pitch — the provider accepts out-of-range values silently, nSpeech clamps to ±12</span>
+        </nui-input-group>
+
+        <nui-input-group>
+            <label>Voice character (voice_modify)</label>
+            <div>
+                <label for="mm-vm-pitch" style="color: var(--color-shade6); font-size: 0.85em;">Deepen (−) / brighten (+)</label>
+                <nui-input type="range" min="-100" max="100" step="5" value="0">
+                    <input type="range" id="mm-vm-pitch" min="-100" max="100" step="5" value="0">
+                </nui-input>
+                <span id="mm-vm-pitch-val" style="margin-left: var(--nui-space-half)">0</span>
+            </div>
+            <div>
+                <label for="mm-intensity" style="color: var(--color-shade6); font-size: 0.85em;">Stronger (−) / softer (+)</label>
+                <nui-input type="range" min="-100" max="100" step="5" value="0">
+                    <input type="range" id="mm-intensity" min="-100" max="100" step="5" value="0">
+                </nui-input>
+                <span id="mm-intensity-val" style="margin-left: var(--nui-space-half)">0</span>
+            </div>
+            <div>
+                <label for="mm-timbre" style="color: var(--color-shade6); font-size: 0.85em;">Fuller (−) / crisper (+)</label>
+                <nui-input type="range" min="-100" max="100" step="5" value="0">
+                    <input type="range" id="mm-timbre" min="-100" max="100" step="5" value="0">
+                </nui-input>
+                <span id="mm-timbre-val" style="margin-left: var(--nui-space-half)">0</span>
+            </div>
+            <nui-select id="mm-sound-effect-select">
+                <select id="mm-sound-effect">
+                    <option value="" selected>No sound effect</option>
+                    <option value="spacious_echo">Spacious echo</option>
+                    <option value="auditorium_echo">Auditorium echo</option>
+                    <option value="lofi_telephone">Lo-fi telephone</option>
+                    <option value="robotic">Robotic</option>
+                </select>
+            </nui-select>
+            <span style="color: var(--color-shade6); font-size: 0.85em;">MiniMax refuses voice_modify on raw PCM, so any non-zero value here makes nSpeech request WAV and strip the header — the audio you get is still the same s16le 24 kHz stream</span>
         </nui-input-group>
 
         <nui-input-group>
@@ -114,10 +159,14 @@
         </nui-input-group>
 
         <nui-input-group>
-            <nui-input>
-                <input type="checkbox" id="mm-textnorm">
-                <label for="mm-textnorm">Text normalization (MiniMax's own digit/date reading — slight latency cost)</label>
-            </nui-input>
+            <label for="mm-textnorm-mode">Text normalization</label>
+            <nui-select id="mm-textnorm-select">
+                <select id="mm-textnorm-mode">
+                    <option value="" selected>Off</option>
+                    <option value="basic">Basic (fast, rule-based)</option>
+                    <option value="quality">Quality (hybrid LLM + rules — slower)</option>
+                </select>
+            </nui-select>
             <nui-input>
                 <input type="checkbox" id="mm-latex">
                 <label for="mm-latex">LaTeX formula reading (Chinese only — wrap formulas in $$)</label>
@@ -184,7 +233,16 @@ function init(element, params, nui) {
     const volValEl = element.querySelector('#mm-vol-val');
     const emotionEl = element.querySelector('#mm-emotion');
     const languageEl = element.querySelector('#mm-language');
-    const textNormEl = element.querySelector('#mm-textnorm');
+    const pitchEl = element.querySelector('#mm-pitch');
+    const pitchValEl = element.querySelector('#mm-pitch-val');
+    const vmPitchEl = element.querySelector('#mm-vm-pitch');
+    const vmPitchValEl = element.querySelector('#mm-vm-pitch-val');
+    const intensityEl = element.querySelector('#mm-intensity');
+    const intensityValEl = element.querySelector('#mm-intensity-val');
+    const timbreEl = element.querySelector('#mm-timbre');
+    const timbreValEl = element.querySelector('#mm-timbre-val');
+    const soundEffectEl = element.querySelector('#mm-sound-effect');
+    const textNormEl = element.querySelector('#mm-textnorm-mode');
     const latexEl = element.querySelector('#mm-latex');
     const subtitleEl = element.querySelector('#mm-subtitles');
     const batchEl = element.querySelector('#mm-batch');
@@ -197,6 +255,18 @@ function init(element, params, nui) {
     });
     volEl.addEventListener('input', () => {
         volValEl.textContent = volEl.value;
+    });
+    pitchEl.addEventListener('input', () => {
+        pitchValEl.textContent = pitchEl.value;
+    });
+    vmPitchEl.addEventListener('input', () => {
+        vmPitchValEl.textContent = vmPitchEl.value;
+    });
+    intensityEl.addEventListener('input', () => {
+        intensityValEl.textContent = intensityEl.value;
+    });
+    timbreEl.addEventListener('input', () => {
+        timbreValEl.textContent = timbreEl.value;
     });
 
     llmCleanEl.addEventListener('change', () => {
@@ -259,41 +329,61 @@ function init(element, params, nui) {
     }
 
     // ── Generate via the shared widget (player + progress) ─────────────
+    // `engine` is the canonical key Save-as-Default writes to; `model` is only
+    // the provider selector.
+    function buildParams() {
+        const text = textArea.value.trim();
+        if (!text) return null;
+        // language: 'auto'/unset → provider auto-detect; a code pins the
+        // language_boost (server maps ISO-639-1 → MiniMax's native names).
+        const eb = {};
+        if (languageEl.value && languageEl.value !== 'auto') eb.language = languageEl.value;
+        if (emotionEl.value) eb.emotion = emotionEl.value;
+        if (volEl.value !== '1') eb.vol = parseFloat(volEl.value);
+        if (Number(pitchEl.value) !== 0) eb.pitch = Number(pitchEl.value);
+        if (textNormEl.value) eb.text_normalization_mode = textNormEl.value;
+        if (latexEl.checked) eb.latex_read = true;
+        if (subtitleEl.value) eb.subtitles = subtitleEl.value;
+        if (batchEl.checked) eb.batch = true;
+
+        // voice_modify: sent nested so it matches the provider's shape. Any
+        // non-zero value here makes the adapter switch the wire format to WAV
+        // (MiniMax refuses voice_modify on PCM) and strip the header.
+        const modify = {};
+        if (Number(vmPitchEl.value) !== 0) modify.pitch = Number(vmPitchEl.value);
+        if (Number(intensityEl.value) !== 0) modify.intensity = Number(intensityEl.value);
+        if (Number(timbreEl.value) !== 0) modify.timbre = Number(timbreEl.value);
+        if (soundEffectEl.value) modify.sound_effects = soundEffectEl.value;
+        if (Object.keys(modify).length) eb.voice_modify = modify;
+
+        // Cleaning responsibility:
+        //  - regex: CLIENT-side — send the cleaned text directly
+        //  - llm:   SERVER-side (needs gateway) — raw text + clean:'llm'
+        let inputText = text;
+        if (llmCleanEl.checked) {
+            eb.clean = 'llm';
+        } else if (regexCleanEl.checked) {
+            inputText = cleanMarkdown(text);
+        }
+
+        return {
+            model: modelEl.value || 'minimax',
+            input: inputText,
+            voice: selectEl.value || 'default',
+            speed: parseFloat(speedEl.value),
+            extraBody: eb,
+        };
+    }
+
     const widget = mountGenerate(element, {
         filename: 'minimax-speech.mp3',
-        buildParams: () => {
-            const text = textArea.value.trim();
-            if (!text) return null;
-            // language: 'auto'/unset → provider auto-detect; a code pins the
-            // language_boost (server maps ISO-639-1 → MiniMax's native names).
-            const eb = {};
-            if (languageEl.value && languageEl.value !== 'auto') eb.language = languageEl.value;
-            if (emotionEl.value) eb.emotion = emotionEl.value;
-            if (volEl.value !== '1') eb.vol = parseFloat(volEl.value);
-            if (textNormEl.checked) eb.text_normalization = true;
-            if (latexEl.checked) eb.latex_read = true;
-            if (subtitleEl.value) eb.subtitles = subtitleEl.value;
-            if (batchEl.checked) eb.batch = true;
-
-            // Cleaning responsibility:
-            //  - regex: CLIENT-side — send the cleaned text directly
-            //  - llm:   SERVER-side (needs gateway) — raw text + clean:'llm'
-            let inputText = text;
-            if (llmCleanEl.checked) {
-                eb.clean = 'llm';
-            } else if (regexCleanEl.checked) {
-                inputText = cleanMarkdown(text);
-            }
-
-            return {
-                model: modelEl.value || 'minimax',
-                input: inputText,
-                voice: selectEl.value || 'default',
-                speed: parseFloat(speedEl.value),
-                extraBody: eb,
-            };
-        },
+        engine: 'minimax',
+        buildParams,
     });
+
+    // Test seam: the page's own view of the request, so a probe can assert what
+    // the controls produce without spending a credit.
+    element.buildParams = buildParams;
 
     generateBtn.querySelector('button').addEventListener('click', () => widget.generate());
     window.nspeechSettings.init(element, "minimax");

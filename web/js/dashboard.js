@@ -161,6 +161,10 @@ window.nspeechSettings = (() => {
 
     function init(element, engineKey) {
         const storeKey = `nspeech.settings.${engineKey}`;
+        // generate-widget's save hook PUTs /v1/defaults/<engine>; the page-wide
+        // engine key is the canonical name, the per-page `model` is not (cloud
+        // pages send a model slug there).
+        element.dataset.nsEngine = engineKey;
         // Capture the page's HTML defaults BEFORE restoring, so Reset works.
         const defaults = snapshot(element);
 

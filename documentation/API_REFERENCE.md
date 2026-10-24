@@ -137,8 +137,11 @@ All fields optional. Engines ignore unsupported fields silently — "if you supp
 
 | Field | Type | Range | Description |
 |-------|------|-------|-------------|
-| `pitch` | number | -12..12 | Semitone pitch shift. |
+| `pitch` | number | -12..12 | Semitone pitch shift (`voice_setting.pitch`). |
+| `vol` | number | (0, 10] | Output volume (`voice_setting.vol`). |
 | `emotion` | string | enum | `happy`, `sad`, `angry`, `fearful`, `disgusted`, `surprised`, `calm`, `whisper`, `fluent`. |
+| `voice_modify` | object | — | `{pitch, intensity, timbre, sound_effects}` — deepen/brighten, stronger/softer, fuller/crisper (−100..100 each) plus one sound effect. MiniMax only; forces a buffered WAV render internally (see the provider matrix). |
+| `text_normalization_mode` | string | `basic` \| `quality` | MiniMax's own digit/date reading. `quality` is a hybrid LLM + rule pass (slower). |
 | `expressiveness` | number | 0..1 | Delivery intensity. 0 = flat, 1 = dramatic. |
 | `stability` | number | 0..1 | Voice consistency. 0 = variable, 1 = steady. (ElevenLabs native.) |
 
@@ -361,19 +364,24 @@ The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/en
 
 | Field | nspeech (local) | MiniMax | ElevenLabs | Gemini | xAI |
 |-------|-----------------|---------|------------|--------|-----|
-| `pitch` | — | ✅ | — | — | — |
-| `emotion` | engine-dependent | ✅ | — | — | — |
+| `pitch` | — | ✅ `voice_setting.pitch`, −12..12 (provider accepts out-of-range silently; nSpeech clamps) | — | — | — |
+| `vol` | — | ✅ `voice_setting.vol`, (0, 10] | — | — | — |
+| `emotion` | engine-dependent | ✅ `voice_setting.emotion` (9 values incl. `whisper`) | — | — | — |
+| `voice_modify` | — | ✅ `{pitch, intensity, timbre, sound_effects}` — see the PCM note below | — | — | — |
+| `text_normalization_mode` | — | ✅ `basic` \| `quality` | — | — | — |
 | `expressiveness` | engine-dependent | emotion map | `style` | — | — |
 | `stability` | — | — | ✅ native | — | — |
 | `batch` | engine-dependent | ✅ | ✅ | ✅ | ✅ |
 | `nfe_step` | ✅ f5tts (ODE steps; 16 fast, 64 audiobook) | — | — | — | — |
 | `cfg_strength` | ✅ f5tts (guidance; DE 1.5 / EN 2.5) | — | — | — | — |
 | `sway_sampling_coef` | ✅ f5tts (variation) | — | — | — | — |
-| `seed` | ✅ f5tts | — | ✅ | — | — |
-| `blend` | kokoro only | ✅ `timbre_weights` | — | — | — |
-| `language` | `f5tts`: `de`/`en` checkpoint routing (`auto`/unset = heuristic detect) · `chatterbox-mtl`: `language_id` (23 codes; turbo/eng ignore it) | ✅ `language_boost` (ISO mapped to MiniMax's official names; unsupported → 400) | ✅ `language_code` (ISO 639-1; `auto` = omit) | — (auto-detect, no API field) | ✅ BCP-47 (`de`, `pt-BR`) or `auto` |
+| `seed` | ✅ f5tts | — (no seed support) | ✅ | — | — |
+| `blend` | kokoro only | ✅ `timbre_weights` (legacy field, accepted by 2.8; effect unmeasured — no UI) | — | — | — |
+| `language` | `f5tts`: `de`/`en` checkpoint routing (`auto`/unset = heuristic detect) · `chatterbox-mtl`: `language_id` (23 codes; turbo/eng ignore it) | ✅ `language_boost` (ISO mapped to MiniMax's official names, `auto` forwarded; unsupported → 400) | ✅ `language_code` (ISO 639-1; `auto` = omit) | — (auto-detect, no API field) | ✅ BCP-47 (`de`, `pt-BR`) or `auto` |
 | `sample_rate` | — | ✅ | ✅ | — | — |
-| `sound_effects` | — | ✅ | — | — | — |
+| `sound_effects` | — | ✅ (inside `voice_modify`) | — | — | — |
+
+**MiniMax `voice_modify` and the PCM contract** (probed 2026-10-24): MiniMax refuses `voice_modify` for `format: pcm` outright ("voice modify does not support pcm format") and in **stream** mode only accepts mp3. A request carrying `voice_modify` is therefore rendered as a **buffered WAV** request and the RIFF header is stripped before the bytes enter nSpeech's PCM pipeline — same s16le 24 kHz mono contract, but no progressive first-byte. Unset `voice_modify` keeps the normal streaming PCM path.
 
 ### Local engine details
 

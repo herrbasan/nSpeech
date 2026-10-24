@@ -513,7 +513,7 @@ export async function generate({ text, voice, model, format, speed, ... }) {
     stream: true,           // SSE streaming
     output_format: 'hex',
     voice_setting: { voice_id: voice || 'English_expressive_narrator', speed, vol: 1, pitch: 0 },
-    audio_setting: { sample_rate: 24000, bitrate: 128000, format: 'mp3', channel: 1 }
+    audio_setting: { sample_rate: 24000, bitrate: 128000, format: 'pcm', channel: 1 }
   };
 
   const resp = await fetch('https://api.minimax.io/v1/t2a_v2', {
@@ -527,6 +527,26 @@ export async function generate({ text, voice, model, format, speed, ... }) {
 }
 ```
 
+### Options → request mapping (`server/cloud/minimax.js`)
+
+`buildRequestBody()` is the single place a request is assembled; it is pure and covered by `scripts/probe-minimax-options.js`, so every option below is asserted without spending a credit.
+
+| nSpeech `extra_body` | MiniMax field | Notes |
+|---|---|---|
+| `pitch` | `voice_setting.pitch` | Clamped to ±12 here because the provider does **not** enforce it (pitch 13 returned 200 in a 2026-10-24 probe). |
+| `vol` | `voice_setting.vol` | Clamped to (0, 10]. |
+| `emotion` | `voice_setting.emotion` | Passed through; the provider validates the enum. |
+| `voice_modify` | `voice_modify` | `{pitch, intensity, timbre, sound_effects}`; numbers clamped to ±100, an unknown effect is a local 400 listing the four valid values. |
+| `text_normalization_mode` | `text_normalization_mode` | `basic` \| `quality`; anything else is a local 400. The deprecated boolean `text_normalization` is still accepted (`true` → `basic`). |
+| `language` | `language_boost` | ISO-639-1 → the provider's capitalized name; `auto` is forwarded (MiniMax's enum has it). |
+| `blend` | `timbre_weights` | Legacy field; accepted by 2.8, no measurable effect (see §4 clone behaviour). |
+| `subtitles` | `subtitle_enable` + `subtitle_type` | Timestamp data, not surfaced in audio. |
+| `latex_read`, `pronunciation`, `sample_rate`, `channel`, `bitrate` | same names | `latex_read` is Chinese-only per the provider. |
+| `batch` | `stream: false` | Buffered render. |
+| speed (top level) | `voice_setting.speed` | Clamped 0.5–2.0. |
+
+`voice_modify` is the only option with a wire-format constraint: the provider refuses it for `format: pcm` in either mode and, in stream mode, accepts only mp3. A request carrying it is therefore sent as a **buffered WAV** render, and the RIFF header is stripped back to s16le 24 kHz mono before the bytes reach the PCM pipeline (`wavDataOffset` walks the chunk list, so `fmt `/`LIST` chunks before `data` are handled). Everything else streams PCM as usual.
+
 ### Key differences from local engines
 
 | Aspect | Local (Python) | MiniMax (Node) |
@@ -539,21 +559,20 @@ export async function generate({ text, voice, model, format, speed, ... }) {
 | Unload | `adapter.unload()` | No-op (stateless) |
 | Health | `is_loaded()` | Always ready (just check API key at startup) |
 
-### Model mapping (OpenAI → MiniMax)
+### Model mapping (nSpeech slug → MiniMax model)
 
 ```
-model: "minimax_speech_2.8_hd"  → speech-2.8-hd
-model: "minimax_speech_2.8_turbo" → speech-2.8-turbo
-model: "minimax_speech_2.6_turbo" → speech-2.6-turbo (default)
+minimax_speech_2_8_turbo → speech-2.8-turbo   (nSpeech default)
+minimax_speech_2_8_hd    → speech-2.8-hd
+minimax_speech_2_6_hd    → speech-2.6-hd
+minimax_speech_2_6_turbo → speech-2.6-turbo
 ```
 
-### Audio format mapping
+Legacy `speech-02-*` / `speech-01-*` models still resolve at the provider but are no longer advertised.
 
-MiniMax supports mp3, pcm, flac, wav, opus. PCM is **s16le** (verified) at the requested sample rate. Since Node's `pipePcmToClient` expects raw PCM s16le from the worker, nSpeech can:
-- **Option A (preferred):** Request `format: pcm, sample_rate: 24000` from MiniMax, decode hex → Buffer, pipe to ffmpeg (identical to local engine code path)
-- **Option B:** Request `format: mp3` from MiniMax, decode hex → Buffer, relay directly to browser (simpler but diverges from local path)
+### Audio format
 
-**Recommendation: Option A** — keeps one unified audio pipeline. MiniMax PCM s16le → hex decode → same ffmpeg transcoding as local engines.
+MiniMax supports mp3, pcm, flac, wav, opus; PCM is s16le at the requested sample rate (24000 in nSpeech). nSpeech requests **`format: 'pcm'`**, hex-decodes the SSE chunks, and hands the bytes to the same ffmpeg path the local engines use — one audio pipeline, no provider-specific transcoding. The single exception is `voice_modify`, which the provider refuses on PCM: that request becomes a buffered WAV render whose header is stripped (see §8).
 
 ### Voice directory
 

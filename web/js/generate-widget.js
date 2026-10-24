@@ -48,7 +48,7 @@ function fmtBytes(n) {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function mountGenerate(element, { filename = 'speech.mp3', buildParams }) {
+export function mountGenerate(element, { filename = 'speech.mp3', engine, buildParams }) {
     if (typeof buildParams !== 'function') throw new Error('mountGenerate: buildParams required');
     injectStyles();
 
@@ -56,10 +56,17 @@ export function mountGenerate(element, { filename = 'speech.mp3', buildParams })
     // Derives the current dial-in from buildParams (minus the text content)
     // and PUTs it to /v1/defaults/<engine>. The relay applies saved defaults
     // to API calls that omit the field.
+    //
+    // The key is the CANONICAL ENGINE NAME, never params.model: cloud pages
+    // send a model slug there (`minimax_speech_2_8_turbo`), and the relay looks
+    // defaults up by engine name — a slug-keyed entry is unreachable. The
+    // server normalises too, but sending the right thing means the response
+    // echoes the key that will actually be used.
     element.addEventListener('nspeech-save-defaults', (e) => {
         let params = null;
         try { params = buildParams(); } catch { params = null; }
-        if (!params || !params.model) {
+        const engineKey = engine || element.dataset.nsEngine || params?.model;
+        if (!params || !engineKey) {
             if (e.detail?.button) {
                 const b = e.detail.button.querySelector('button');
                 b.textContent = 'Enter text first';
@@ -71,10 +78,12 @@ export function mountGenerate(element, { filename = 'speech.mp3', buildParams })
         if (params.voice && params.voice !== 'default') payload.voice = params.voice;
         if (params.speed != null) payload.speed = params.speed;
         if (params.extraBody && Object.keys(params.extraBody).length) payload.extra_body = params.extraBody;
-        fetch('/v1/defaults/' + encodeURIComponent(params.model), {
+        fetch('/v1/defaults/' + encodeURIComponent(engineKey), {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
+        }).then((resp) => {
+            if (!resp.ok) console.warn('server defaults save failed:', resp.status);
         }).catch((err) => console.warn('server defaults save failed:', err.message));
     });
 

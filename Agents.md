@@ -52,6 +52,31 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-24 — MiniMax options on the dashboard, saveable as engine defaults
+
+**Asked:** expose every MiniMax option in the dashboard like F5 does, and let them be saved as engine defaults that apply when a request leaves the field unset.
+
+**The blocker was not the options — it was the key.** `web/js/generate-widget.js` PUT `…/v1/defaults/<params.model>`, and on cloud pages `params.model` is a **model slug** (`minimax_speech_2_8_turbo`). The relay resolves defaults with `engineNameFor` (`minimax`), so every cloud dial-in ever saved was unreachable — the 2026-09-10 bug, still live on the cloud side and invisible because "saved" only wrote a file. Fixed at both ends:
+
+- `server/api/defaults.js` normalises `:engine` through `engineNameFor` on GET/PUT/DELETE, so a slug, a legacy alias, a bare engine name or `nspeech` all land on the canonical key.
+- `web/js/dashboard.js` stamps `element.dataset.nsEngine = engineKey`; `generate-widget.js` prefers an explicit `engine` option, then that dataset, then `params.model` — pages stop sending slugs.
+
+**Existing slug-keyed entries are deliberately NOT migrated.** `defaults.json` still holds `minimax_speech_2_8_turbo`/`_hd` and `eleven_v3`/`eleven_flash_v2_5`. Migrating them would silently activate `emotion: surprised` + `clean: 'llm'` on every MiniMax request — a surprise, not a fix. They stay inert until deleted.
+
+**Options now wired** (`server/cloud/minimax.js` `buildRequestBody`, pure and probe-covered): `pitch` (±12, clamped), `vol`, `emotion` (+ `whisper`), `voice_modify` {pitch, intensity, timbre, sound_effects}, `text_normalization_mode` (basic/quality, replacing the deprecated boolean), `language`, `blend`→`timbre_weights`, `subtitles`, `latex_read`, `pronunciation`, `sample_rate`/`channel`/`bitrate`, `batch`. Dashboard gained sliders for semitone pitch, deepen/brighten, stronger/softer, fuller/crisper, a sound-effect select and the normalization-mode select (the old checkbox mapped to the provider's deprecated field).
+
+**Two provider constraints found by probing, not reading:**
+1. `voice_modify` is refused for `format: pcm` in either mode ("voice modify does not support pcm format"), and **in stream mode only mp3 is accepted**. So a request carrying it is sent as a buffered **WAV** render and the RIFF header is stripped (`wavDataOffset` walks the chunk list) back to s16le 24 kHz mono. Everything else keeps streaming PCM. Progressive first-byte is the price of those four dials.
+2. `voice_setting.pitch` is **not** range-checked by the provider — pitch 13 returned 200. The clamp is ours or the value passes through undocumented.
+
+Also unprovable: `timbre_weights` is accepted on 2.8 but makes no measurable difference, and MiniMax has no seed, so byte-length comparison cannot settle it. No UI shipped for it.
+
+**Verified:** `scripts/probe-minimax-options.js` — 21 checks (wire format, every mapped option, clamps, enum rejections, RIFF parsing incl. a `LIST` chunk before `data`, and the defaults-key normalisation agreeing with the relay). The page was driven live in the integrated browser: all controls render, `buildParams()` emits the expected payload with nested `voice_modify`, and `dataset.nsEngine` is `minimax`. Live smoke of the WAV path: three renders (baseline PCM, `voice_modify` pitch/intensity, `sound_effects`) all returned clean PCM with no `RIFF` leak.
+
+**Restart required:** the adapter and the defaults route are server-side; the dashboard files are static and already live.
+
+**Docs:** `documentation/API_REFERENCE.md` `extra_body` tables + provider matrix; `docs/providers/minimax.md` §8 gained the option→field map and the WAV constraint, and its §4 gained the clone-tempo findings.
+
 ### 2026-10-24 — Cloned-voice tempo measured; production cast goes to ElevenLabs
 
 **The question:** the MiniMax clone `Herrbasan_EN` read the drill noticeably slower than its dialogue partner. Hypothesis from David: the clone absorbed long pauses from its reference audio, i.e. confused cloning rather than slow speech. If the pauses were the whole story, a clone with a tighter reference would fix it and no ElevenLabs credits would be needed.

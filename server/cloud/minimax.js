@@ -25,6 +25,16 @@ const VOICES_CACHE_TTL_MS = 300_000; // 5 minutes
 // MiniMax accepts 0.5–2.0; nSpeech's API allows 0.25–4.0. An out-of-range value
 // comes back as base_resp 2013 "invalid input parameters". See cloud/params.js.
 const SPEED_RANGE = { name: 'speed', min: 0.5, max: 2, provider: 'MiniMax', fallback: 1.0 };
+// Documented ranges from the T2A OpenAPI. MiniMax does NOT enforce pitch —
+// probed 2026-10-24: pitch 13 returned 200 — so the clamp has to happen here or
+// an out-of-range value silently reaches the model.
+const PITCH_RANGE = { name: 'voice_setting.pitch', min: -12, max: 12, provider: 'MiniMax', fallback: 0 };
+const VOL_RANGE = { name: 'vol', min: 0.001, max: 10, provider: 'MiniMax', fallback: 1 };
+const MODIFY_RANGE = (name) => ({ name: `voice_modify.${name}`, min: -100, max: 100, provider: 'MiniMax', fallback: 0 });
+
+/** The four accepted values — MiniMax rejects anything else with 2013. */
+const SOUND_EFFECTS = new Set(['spacious_echo', 'auditorium_echo', 'lofi_telephone', 'robotic']);
+const NORMALIZATION_MODES = new Set(['basic', 'quality']);
 
 /**
  * MiniMax reports request failures inside an **HTTP 200** body as
@@ -75,6 +85,7 @@ function mapExtraBody(eb) {
 
   // Voice character
   if (eb.pitch !== undefined) mapped.pitch = eb.pitch;
+  if (eb.vol !== undefined) mapped.vol = eb.vol;
   if (eb.emotion) mapped.emotion = eb.emotion;
   // expressiveness — no direct MiniMax equivalent; could map to emotion or
   // voice_modify intensity
@@ -95,6 +106,7 @@ function mapExtraBody(eb) {
   if (boost) mapped.language_boost = boost;
   if (eb.pronunciation) mapped.pronunciation_dict = eb.pronunciation;
   if (eb.subtitles) mapped.subtitles = eb.subtitles;
+  if (eb.latex_read !== undefined) mapped.latex_read = eb.latex_read;
 
   // Voice blending — per-request timbre_weights
   if (eb.blend && Array.isArray(eb.blend) && eb.blend.length > 0) {
@@ -109,10 +121,136 @@ function mapExtraBody(eb) {
   if (eb.channel) mapped.channel = eb.channel;
   if (eb.bitrate) mapped.bitrate = eb.bitrate;
 
-  // Effects
-  if (eb.sound_effects) mapped.sound_effects = eb.sound_effects;
+  // Voice character, second dial set: deepen/brighten + stronger/softer +
+  // nasal/crisp + one sound effect. PROBED 2026-10-24: MiniMax rejects this
+  // whole block for `format: pcm` ("voice modify does not support pcm
+  // format") and accepts it for wav/mp3 — so requesting it switches the wire
+  // format to wav and buildRequestBody strips the RIFF header again.
+  const modify = {};
+  const nested = eb.voice_modify && typeof eb.voice_modify === 'object' ? eb.voice_modify : {};
+  for (const key of ['pitch', 'intensity', 'timbre']) {
+    const value = nested[key] !== undefined ? nested[key] : eb[key];
+    if (value !== undefined && value !== null && value !== '') {
+      modify[key] = clampNumber(Number(value), MODIFY_RANGE(key));
+    }
+  }
+  const effect = nested.sound_effects ?? eb.sound_effects;
+  if (effect) {
+    if (!SOUND_EFFECTS.has(effect)) {
+      throw new WorkerError(400, 'invalid_request_error',
+        `MiniMax voice_modify.sound_effects: ${JSON.stringify(effect)} — supported: ${[...SOUND_EFFECTS].join(', ')}`);
+    }
+    modify.sound_effects = effect;
+  }
+  if (Object.keys(modify).length > 0) mapped.voice_modify = modify;
+
+  // Text normalisation: `basic` (rule-based) or `quality` (hybrid LLM). The old
+  // boolean `text_normalization` is deprecated by the provider and kept as an
+  // alias — `true` means basic.
+  const normMode = eb.text_normalization_mode
+    ?? (eb.text_normalization === true ? 'basic' : undefined);
+  if (normMode !== undefined) {
+    if (!NORMALIZATION_MODES.has(normMode)) {
+      throw new WorkerError(400, 'invalid_request_error',
+        `MiniMax text_normalization_mode: ${JSON.stringify(normMode)} — supported: basic, quality`);
+    }
+    mapped.text_normalization_mode = normMode;
+  }
 
   return mapped;
+}
+
+/**
+ * Build the T2A request body. Pure and exported so the offline probe can assert
+ * every option without spending a credit.
+ *
+ * @returns {{ body: object, format: 'pcm'|'wav' }}
+ */
+export function buildRequestBody({ text, voice_name, speed, extra_body, model, batch }) {
+  const eb = mapExtraBody(extra_body);
+  const isBatch = batch ?? extra_body?.batch ?? false;
+  // voice_modify is the one option family with wire-format constraints:
+  //   PROBED 2026-10-24 — refused for `format: pcm` in either mode
+  //   ("voice modify does not support pcm format"), and in STREAM mode only
+  //   mp3 is accepted ("voice modify in stream mode only supports mp3 format").
+  // So a request that uses it switches to a buffered WAV render, which we strip
+  // back to the PCM contract. Progressive delivery is the price.
+  const voiceModify = eb.voice_modify;
+  const streaming = voiceModify ? false : !isBatch;
+  const format = voiceModify ? 'wav' : 'pcm';
+
+  const body = {
+    model: model || 'speech-2.8-turbo',
+    text,
+    stream: streaming,
+    output_format: 'hex',
+    voice_setting: {
+      // 'default' is nSpeech's "engine default" sentinel, not a MiniMax voice
+      // id — sending it verbatim is rejected with 2042. Fall back to a real
+      // system voice, exactly as Fish omits reference_id for the same input.
+      voice_id: (voice_name && voice_name !== 'default') ? voice_name : 'English_expressive_narrator',
+      speed: clampNumber(speed, SPEED_RANGE),
+      vol: clampNumber(eb.vol, VOL_RANGE),
+      pitch: clampNumber(eb.pitch, PITCH_RANGE),
+    },
+    audio_setting: {
+      sample_rate: eb.sample_rate ?? 24000,
+      bitrate: eb.bitrate ?? 128000,
+      format,
+      channel: eb.channel ?? 1,
+    },
+  };
+
+  if (streaming) body.stream_options = { exclude_aggregated_audio: true };
+
+  if (eb.emotion) body.voice_setting.emotion = eb.emotion;
+  if (eb.language_boost) body.language_boost = eb.language_boost;
+  if (eb.pronunciation_dict) body.pronunciation_dict = eb.pronunciation_dict;
+  // Legacy per-request voice blending. Accepted by 2.8 (probed 2026-10-24) but
+  // no audible difference was measurable — MiniMax has no seed, so lengths
+  // vary run to run and cannot be used as evidence either way. Left wired for
+  // callers who know their model supports it; nSpeech exposes no UI for it.
+  if (eb.timbre_weights) body.timbre_weights = eb.timbre_weights;
+  if (eb.text_normalization_mode) body.text_normalization_mode = eb.text_normalization_mode;
+  if (eb.latex_read !== undefined) body.voice_setting.latex_read = eb.latex_read === true;
+  if (eb.subtitles) {
+    body.subtitle_enable = true;
+    body.subtitle_type = eb.subtitles;
+  }
+  if (eb.voice_modify) body.voice_modify = eb.voice_modify;
+
+  return { body, format };
+}
+
+/**
+ * Offset of the PCM payload inside a RIFF/WAVE buffer.
+ * @returns {number} byte offset of the `data` payload, or -1 when the header has
+ *          not arrived in full yet (the streaming path keeps buffering)
+ * @throws when the buffer is not RIFF/WAVE at all
+ */
+export function wavDataOffset(buf) {
+  if (buf.length >= 4 && buf.toString('ascii', 0, 4) !== 'RIFF') {
+    throw new Error(`MiniMax wav: expected RIFF, got ${JSON.stringify(buf.toString('ascii', 0, 4))}`);
+  }
+  if (buf.length < 12) return -1;
+  if (buf.toString('ascii', 8, 12) !== 'WAVE') {
+    throw new Error(`MiniMax wav: expected WAVE, got ${JSON.stringify(buf.toString('ascii', 8, 12))}`);
+  }
+  let off = 12;
+  while (off + 8 <= buf.length) {
+    const id = buf.toString('ascii', off, off + 4);
+    const size = buf.readUInt32LE(off + 4);
+    if (id === 'data') return off + 8;
+    off += 8 + size + (size % 2);
+  }
+  return -1;
+}
+
+/** Whole-buffer variant for the non-streaming path. */
+export function stripWav(buf) {
+  const off = wavDataOffset(buf);
+  if (off < 0) throw new Error(`MiniMax wav: no data chunk in ${buf.length} bytes`);
+  return buf.subarray(off);
 }
 
 export class MiniMaxAdapter {
@@ -171,61 +309,23 @@ export class MiniMaxAdapter {
    */
   async generatePcmStream({ text, voice_name, speed, instruct_text, extra_body, model }) {
     const apiKey = this._getApiKey();
-    const eb = mapExtraBody(extra_body);
-    const isBatch = (extra_body?.batch) ?? false;
 
-    const body = {
-      model: model || 'speech-2.8-turbo',
-      text,
-      stream: !isBatch,
-      output_format: 'hex',
-      voice_setting: {
-        // 'default' is nSpeech's "engine default" sentinel, not a MiniMax voice
-        // id — sending it verbatim is rejected with 2042. Fall back to a real
-        // system voice, exactly as Fish omits reference_id for the same input.
-        voice_id: (voice_name && voice_name !== 'default') ? voice_name : 'English_expressive_narrator',
-        speed: clampNumber(speed, SPEED_RANGE),
-        vol: eb.vol ?? 1,
-        pitch: eb.pitch ?? 0,
-      },
-      audio_setting: {
-        sample_rate: eb.sample_rate ?? 24000,
-        bitrate: eb.bitrate ?? 128000,
-        format: 'pcm',
-        channel: eb.channel ?? 1,
-      },
-    };
+    // Request construction lives in buildRequestBody (pure, probe-covered).
+    const { body, format } = buildRequestBody({ text, voice_name, speed, extra_body, model });
+    const isBatch = !body.stream;
+    const wav = format === 'wav';
 
-    // Streaming: skip the aggregated final chunk
-    if (!isBatch) {
-      body.stream_options = { exclude_aggregated_audio: true };
+    if (wav) {
+      log.info('MiniMax buffered WAV request — voice_modify cannot stream', {
+        voiceModify: Object.keys(body.voice_modify).join('+'),
+      });
     }
-
-    if (eb.emotion) body.voice_setting.emotion = eb.emotion;
-    if (eb.language_boost) body.language_boost = eb.language_boost;
-    if (eb.pronunciation_dict) body.pronunciation_dict = eb.pronunciation_dict;
-    if (eb.timbre_weights) body.timbre_weights = eb.timbre_weights;
-    // MiniMax's own digit/date normalization (voice_setting.text_normalization)
-    if (eb.text_normalization !== undefined) body.voice_setting.text_normalization = eb.text_normalization === true;
-    // LaTeX reading — Chinese only per official docs; forward as-is
-    if (eb.latex_read !== undefined) body.voice_setting.latex_read = eb.latex_read === true;
-    // Timestamped subtitles: sentence | word | word_streaming
-    if (eb.subtitles) {
-      body.subtitle_enable = true;
-      body.subtitle_type = eb.subtitles;
-    }
-    // voice_modify: intensity/timbre/sound_effects (pitch already sits in
-    // voice_setting — do not duplicate it here)
-    const voiceModify = {};
-    if (eb.intensity !== undefined) voiceModify.intensity = Number(eb.intensity);
-    if (eb.timbre !== undefined) voiceModify.timbre = Number(eb.timbre);
-    if (eb.sound_effects) voiceModify.sound_effects = eb.sound_effects;
-    if (Object.keys(voiceModify).length > 0) body.voice_modify = voiceModify;
 
     log.info('MiniMax generate', {
-      model: body.model, batch: isBatch,
+      model: body.model, batch: isBatch, format,
       voice: body.voice_setting.voice_id, textLen: text.length,
       emotion: body.voice_setting.emotion ?? '(auto)',
+      voiceModify: body.voice_modify ? Object.keys(body.voice_modify).join('+') : null,
       textPreview: (text || '').slice(0, 200) + ((text || '').length > 200 ? '...' : ''),
     });
 
@@ -267,7 +367,7 @@ export class MiniMaxAdapter {
           `trace=${data?.trace_id})`
         );
       }
-      const pcmBuf = Buffer.from(audio, 'hex');
+      const pcmBuf = wav ? stripWav(Buffer.from(audio, 'hex')) : Buffer.from(audio, 'hex');
       return Readable.from([pcmBuf]);
     }
 
@@ -295,6 +395,8 @@ export class MiniMaxAdapter {
     let totalBytes = 0;
     let lineCount = 0;
     let emptyAudioCount = 0;
+    /** WAV mode: header bytes held until the `data` chunk is located. */
+    let wavPending = wav ? Buffer.alloc(0) : null;
 
     return new Readable({
       async read() {
@@ -307,7 +409,9 @@ export class MiniMaxAdapter {
                   lines: lineCount,
                   emptyAudioLines: emptyAudioCount,
                 });
-                this.destroy(new Error('MiniMax streaming produced no audio'));
+                this.destroy(new Error(wav
+                  ? 'MiniMax streaming produced no audio (wav header never completed)'
+                  : 'MiniMax streaming produced no audio'));
                 return;
               }
               this.push(null); // EOF
@@ -355,7 +459,21 @@ export class MiniMaxAdapter {
               }
 
               if (audio && audio.length > 0) {
-                const pcm = Buffer.from(audio, 'hex');
+                let pcm = Buffer.from(audio, 'hex');
+                if (wavPending) {
+                  wavPending = Buffer.concat([wavPending, pcm]);
+                  const off = wavDataOffset(wavPending);
+                  if (off < 0) {
+                    if (wavPending.length > 1_000_000) {
+                      this.destroy(new Error('MiniMax wav: no data chunk in the first 1 MB'));
+                      return;
+                    }
+                    continue; // header still incomplete
+                  }
+                  pcm = wavPending.subarray(off);
+                  wavPending = null;
+                  if (pcm.length === 0) continue;
+                }
                 totalBytes += pcm.length;
                 this.push(pcm);
               } else {
