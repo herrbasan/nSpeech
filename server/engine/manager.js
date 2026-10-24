@@ -20,6 +20,12 @@ import { emit } from '../events.js';
 
 const log = logger.child('manager');
 
+/** Every engine name a client could legitimately ask for, for error messages. */
+function availableEngineNames() {
+  // listEngines() already returns names.
+  return [...listEngines(), 'minimax', 'elevenlabs', 'gemini', 'xai', 'fish'];
+}
+
 const SRC_DIR = resolve(PROJECT_ROOT, 'src');
 const ENGINE_STATE_FILE = resolve(PROJECT_ROOT, '.engine_state.json');
 
@@ -44,45 +50,84 @@ export class EngineManager {
    * then sweep stale state. Does NOT spawn any workers — lazy loading only.
    */
   init(defaultEngine) {
-    this.currentEngine = this._loadPersistedEngine(defaultEngine);
+    const state = this._loadState();
+    this.currentEngine = state.engine ?? defaultEngine;
+    // Two different questions, deliberately two fields:
+    //   currentEngine — what the dashboard is working with (which local engine
+    //                   is resident, which pages the sidebar offers).
+    //   defaultEngine — what a client gets when it sends `model: "nspeech"`
+    //                   (or nothing). Reported by /health.
+    // They used to be one value, so selecting a cloud engine in the dashboard
+    // silently became the default for every client. An older state file has
+    // only `engine`; that engine is what clients WERE getting, so it seeds the
+    // default rather than resetting to the config value.
+    this.defaultEngine = state.defaultEngine ?? this.currentEngine;
     WorkerProcess.sweepStalePortFiles();
-    log.info('engine manager initialized', { defaultEngine, currentEngine: this.currentEngine });
-    emit('system', `Engine manager initialized — default: ${defaultEngine}`, { defaultEngine, currentEngine: this.currentEngine });
+    log.info('engine manager initialized', {
+      configDefault: defaultEngine,
+      currentEngine: this.currentEngine,
+      defaultEngine: this.defaultEngine,
+    });
+    emit('system', `Engine manager initialized — dashboard: ${this.currentEngine}, client default: ${this.defaultEngine}`, {
+      defaultEngine: this.defaultEngine, currentEngine: this.currentEngine,
+    });
   }
 
   /**
-   * Load the last-selected engine from disk, falling back to the configured
-   * default if the persisted value is missing or invalid.
+   * Read `.engine_state.json`. Missing/corrupt state falls back to the config
+   * default (both fields) — that is a boot-time boundary, logged, never silent.
    */
-  _loadPersistedEngine(fallback) {
+  _loadState() {
     try {
       if (existsSync(ENGINE_STATE_FILE)) {
-        const raw = readFileSync(ENGINE_STATE_FILE, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed?.engine && this._isValidEngine(parsed.engine)) {
-          return parsed.engine;
-        }
+        const parsed = JSON.parse(readFileSync(ENGINE_STATE_FILE, 'utf8'));
+        const state = {};
+        if (parsed?.engine && this._isValidEngine(parsed.engine)) state.engine = parsed.engine;
+        if (parsed?.defaultEngine && this._isValidEngine(parsed.defaultEngine)) state.defaultEngine = parsed.defaultEngine;
+        return state;
       }
     } catch (err) {
       log.warn('failed to load persisted engine state', { error: err.message });
     }
-    return fallback;
+    return {};
   }
 
   /**
-   * Update the current engine and persist it to disk.
+   * Update the engine the DASHBOARD is working with (and, for a local engine,
+   * the resident one) and persist it. Does not touch the client default.
    */
   setCurrentEngine(engineName) {
     this.currentEngine = engineName;
-    this._persistCurrentEngine();
+    this._persistState();
   }
 
   /**
-   * Persist the currently selected engine to disk so it survives restarts.
+   * Set the engine clients get for `model: "nspeech"` / omitted. Explicit on
+   * purpose: no request path changes it, so a cloud test cannot steal it.
+   *
+   * @param {string} engineName — local engine name or cloud provider name
+   * @returns {{engine: string, previous: string|null}}
    */
-  _persistCurrentEngine() {
+  setDefaultEngine(engineName) {
+    if (!this._isValidEngine(engineName)) {
+      throw new WorkerError(404, 'engine_not_found',
+        `Unknown engine: ${engineName}. Available: ${availableEngineNames().join(', ')}`);
+    }
+    const previous = this.defaultEngine;
+    this.defaultEngine = engineName;
+    this._persistState();
+    log.info('client default engine set', { engine: engineName, previous });
+    emit('engine', `Client default engine: ${engineName}`, { engine: engineName, previous });
+    return { engine: engineName, previous };
+  }
+
+  /** Persist both pointers so a restart restores the same split. */
+  _persistState() {
     try {
-      writeFileSync(ENGINE_STATE_FILE, JSON.stringify({ engine: this.currentEngine }, null, 2));
+      writeFileSync(ENGINE_STATE_FILE, JSON.stringify({
+        engine: this.currentEngine,
+        defaultEngine: this.defaultEngine,
+      }, null, 2));
     } catch (err) {
       log.warn('failed to persist engine state', { error: err.message });
     }
@@ -118,8 +163,10 @@ export class EngineManager {
    * @returns {Promise<{engine: WorkerProcess|CloudAdapter, model: string|null}>}
    */
   async getEngine(model) {
-    // ── Normalize: null/undefined/empty/"nspeech" → current local engine ──
-    const resolved = (!model || model === 'nspeech') ? this.currentEngine : model;
+    // ── Normalize: null/undefined/empty/"nspeech" → the CLIENT DEFAULT ─────
+    // Not the dashboard selection: a cloud test in the UI must never change
+    // what an API client gets. See defaultEngine in init().
+    const resolved = (!model || model === 'nspeech') ? this.defaultEngine : model;
 
     // ── Cloud providers — check model prefix ─────────────────────────────
     const cloud = resolveCloud(resolved);
@@ -224,7 +271,10 @@ export class EngineManager {
    */
   async switchEngine(engineName, callbacks = {}) {
     const entry = getEntry(engineName);
-    if (!entry) {
+    // A cloud provider is a valid selection: it has no worker, so "switching"
+    // to it only moves the dashboard's context (see _doSwitch). Treating it as
+    // unknown here is what made a cloud engine unreachable from the switcher.
+    if (!entry && !resolveCloud(engineName)) {
       throw new WorkerError(404, 'engine_not_found', `Unknown engine: ${engineName}`);
     }
 
@@ -236,6 +286,17 @@ export class EngineManager {
 
   async _doSwitch(engineName, callbacks) {
     const { onStatus } = callbacks;
+
+    // ── Cloud selection is a CONTEXT change, not a residency change ──────
+    // A cloud provider has no worker: there is nothing to unload and nothing
+    // to spawn. (The API route handles this before reaching here; this is the
+    // boundary that keeps an SDK calling switchEngine('minimax') from trying
+    // to start a local worker named "minimax".)
+    if (!getEntry(engineName) && resolveCloud(engineName)) {
+      this.setCurrentEngine(engineName);
+      emit('engine', `Selected cloud engine ${engineName}`, { engine: engineName });
+      return { engine: engineName, status: 'cloud_selected' };
+    }
 
     // Already active?
     if (this.currentEngine === engineName) {
@@ -354,6 +415,7 @@ export class EngineManager {
     }
     return {
       currentEngine: this.currentEngine,
+      defaultEngine: this.defaultEngine,
       workers,
     };
   }
@@ -397,6 +459,6 @@ export const manager = new EngineManager();
  * @returns {string|null}
  */
 export function engineNameFor(model) {
-  if (!model || model === 'nspeech') return manager.currentEngine;
+  if (!model || model === 'nspeech') return manager.defaultEngine;
   return cloudEngineName(model) || model;
 }

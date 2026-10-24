@@ -28,7 +28,7 @@ export function registerVoiceRoutes(app) {
 
   const getVoicesHandler = async (request, reply) => {
     const model = request.query.engine || request.query.model;
-    const engineName = voiceCache.engineKey(model, manager.currentEngine);
+    const engineName = voiceCache.engineKey(model, manager.defaultEngine);
 
     // Cached path: serve from the server-side snapshot. It reads the engine's
     // voice directory directly and never spawns a worker, so a voice listing
@@ -36,7 +36,7 @@ export function registerVoiceRoutes(app) {
     // through to getEngine() so unknown names still fail with a 404.
     let engineData;
     try {
-      if (voiceCache.isCacheable(model, manager.currentEngine)) {
+      if (voiceCache.isCacheable(model, manager.defaultEngine)) {
         engineData = await voiceCache.get(engineName);
       } else {
         // Voice listing may target dashboard-only (api_hidden) engines — the
@@ -117,7 +117,7 @@ export function registerVoiceRoutes(app) {
         model: data.model,
       });
 
-      await voiceCache.invalidate(voiceCache.engineKey(model, manager.currentEngine));
+      await voiceCache.invalidate(voiceCache.engineKey(model, manager.defaultEngine));
       reply.send(result);
     } catch (err) {
       sendError(reply, err);
@@ -185,7 +185,7 @@ export function registerVoiceRoutes(app) {
   // ── POST /v1/voices/mix ───────────────────────────────────────────────────
 
   const mixVoicesHandler = async (request, reply) => {
-    const model = request.query.engine || request.query.model || manager.currentEngine;
+    const model = request.query.engine || request.query.model || manager.defaultEngine;
 
     let engine;
     try {
@@ -202,7 +202,7 @@ export function registerVoiceRoutes(app) {
         voice_b: request.body.voice_b,
         ratio: request.body.ratio ?? 0.5,
       });
-      await voiceCache.invalidate(voiceCache.engineKey(model, manager.currentEngine));
+      await voiceCache.invalidate(voiceCache.engineKey(model, manager.defaultEngine));
       reply.send(result);
     } catch (err) {
       sendError(reply, err);
@@ -250,12 +250,12 @@ export function registerVoiceRoutes(app) {
   // ── DELETE /v1/voices/:voiceId ────────────────────────────────────────────
 
   const deleteVoiceHandler = async (request, reply) => {
-    const model = request.query.engine || manager.currentEngine;
+    const model = request.query.engine || manager.defaultEngine;
     const { voiceId } = request.params;
 
     // Check Node-managed presets first — if the ID matches a preset,
     // delete it locally without involving the engine.
-    const engineName = model && typeof model === 'string' ? model : manager.currentEngine;
+    const engineName = model && typeof model === 'string' ? model : manager.defaultEngine;
     if (presets.remove(engineName, voiceId)) {
       await voiceCache.invalidate(engineName);
       return reply.send({ deleted: true });
@@ -271,7 +271,7 @@ export function registerVoiceRoutes(app) {
 
     try {
       const result = await engine.deleteVoice(voiceId);
-      await voiceCache.invalidate(voiceCache.engineKey(model, manager.currentEngine));
+      await voiceCache.invalidate(voiceCache.engineKey(model, manager.defaultEngine));
       reply.send(result);
     } catch (err) {
       sendError(reply, err);

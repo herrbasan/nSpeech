@@ -26,7 +26,9 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | POST | `/v1/voices/mix` | Blend two voices (JSON) |
 | POST | `/v1/voices/preset` | Create/update a voice preset (JSON) |
 | DELETE | `/v1/voices/:voice_id` | Delete a voice or preset |
-| POST | `/v1/admin/engine` | Switch active engine (SSE progress) |
+| POST | `/v1/admin/engine` | Select the engine the dashboard works with (SSE progress) |
+| POST | `/v1/admin/default-engine` | Set the **client default** — what `model: "nspeech"` resolves to |
+| GET | `/v1/admin/default-engine` | `{"engine":"<client default>","dashboard":"<browsed>"}` |
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
 | GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
@@ -39,8 +41,8 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | GET | `/v1/defaults/:engine` | One engine's defaults (404 if none) |
 | PUT | `/v1/defaults/:engine` | Save `{voice?, speed?, extra_body?}` as engine defaults |
 | DELETE | `/v1/defaults/:engine` | Clear engine defaults |
-| GET | `/health` | `{"status":"ok","version":"3.0.0","engine":"<active>"}` |
-| GET | `/engine` | `{"engine":"<active>"}` |
+| GET | `/health` | `{"status":"ok","version":"3.0.0","engine":"<client default>","dashboard":"<browsed>"}` |
+| GET | `/engine` | `{"engine":"<client default>","dashboard":"<browsed>"}` |
 
 ### Server-side defaults
 
@@ -122,7 +124,7 @@ OpenAI-compatible text-to-speech. Streams audio progressively or buffers fully (
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `model` | string | `"nspeech"` | Engine selector. Accepts any registered engine: `"nspeech"` (the dashboard-selected local engine), a local engine name (`"kokoro"` — always resident), a cloud prefix (`"minimax"`), a cloud model slug (`"minimax_speech_2_8_hd"`, `"eleven_v3"`), or a legacy alias (`"elevenlabs_turbo_v2_5"`). `GET /v1/models` is the authoritative list of what is usable **without an engine switch**, with display labels and defaults. |
+| `model` | string | `"nspeech"` | Engine selector. Accepts any registered engine: `"nspeech"` (the **client default** engine — see below), a local engine name (`"kokoro"` — always resident), a cloud prefix (`"minimax"`), a cloud model slug (`"minimax_speech_2_8_hd"`, `"eleven_v3"`), or a legacy alias (`"elevenlabs_turbo_v2_5"`). `GET /v1/models` is the authoritative list of what is usable **without an engine switch**, with display labels and defaults. |
 | `input` | string | **required** | Text to synthesize. |
 | `voice` | string | `"default"` | Voice ID. Engine-scoped: `af_heart` exists in Kokoro, not in Chatterbox. |
 | `response_format` | string | `"mp3"` | `mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`, `pcm_f32`. |
@@ -358,7 +360,7 @@ The `model` field selects a provider. Each provider has different strengths, pri
 | `"gemini"` | Cloud | 80+ languages, auto-detect | ~1s | — | 5K chars |
 | `"xai"` | Cloud | Grok integration | ~1s | ✅ | 5K chars |
 
-The local engine behind `"nspeech"` is set via the dashboard (`POST /v1/admin/engine`). Local engines are also addressable by name: `"kokoro"` is always available (CPU, `gpu:false`, survives engine switches). Naming a GPU engine other than the current one also works, but forces an engine switch (unload + reload). `GET /v1/models` advertises only the models usable **without** a switch — cloud slugs, resident CPU engines, and `"nspeech"` itself — so GPU engines are reached through `"nspeech"` after selecting them in the dashboard.
+The local engine behind `"nspeech"` is the **client default**, set independently of what the dashboard is browsing (`POST /v1/admin/default-engine`, or the `Default:` badge in the dashboard header). The dashboard's engine switcher changes the engine the dashboard works with — and, for a local GPU engine, which one is resident — but **not** the client default: browsing or testing a cloud engine leaves `"nspeech"` pointing where it was. Selecting a cloud engine unloads nothing. Local engines are also addressable by name: `"kokoro"` is always available (CPU, `gpu:false`, survives engine switches). Naming a GPU engine other than the client default also works, but forces an engine switch (unload + reload). `GET /v1/models` advertises only the models usable **without** a switch — cloud slugs, resident CPU engines, the client default, and `"nspeech"` itself.
 
 ### `extra_body` support by provider
 
@@ -458,6 +460,11 @@ Removes the voice. Cloud adapters call the provider's delete endpoint.
 {"engine": "f5tts"}
 ```
 
+Selects the engine the **dashboard** works with. For a local GPU engine this is
+a real switch (unload the resident one, load the new one). For a **cloud**
+engine it is a context change only: nothing is unloaded, nothing is loaded, and
+the client default does not move.
+
 Returns SSE stream of status events:
 
 ```
@@ -468,17 +475,34 @@ event: status   data: {"stage":"load_done","engine":"f5tts"}
 event: result   data: {"engine":"f5tts","status":"switched"}
 ```
 
-Cloud engines (MiniMax, ElevenLabs) emit a single `switch_done` status event since they have no worker lifecycle.
+Cloud engines emit a single `switch_done` status event and a result with
+`"status":"cloud_selected"` — they have no worker lifecycle, and the resident
+local engine keeps its VRAM.
+
+### Client default — `POST /v1/admin/default-engine`
+
+```json
+{"engine": "f5tts"}
+```
+
+Sets what `model: "nspeech"` (or an omitted model) resolves to, and what
+`GET /health` reports. Separate from the switch above on purpose: a cloud test
+in the dashboard must not silently become the default for every API client.
+Changing it loads nothing — the default is a pointer, and a local engine starts
+on the first request that needs it. Unknown engine → `404 engine_not_found`
+listing the valid names. `GET /v1/admin/default-engine` returns
+`{"engine":"<default>","dashboard":"<browsed>"}`.
 
 ### `GET /v1/models`
 
 OpenAI-style model list. Everything usable **without switching engines**:
 
-- `nspeech` — current local engine
+- `nspeech` — the **client default** engine
 - Resident local engines (`gpu:false`, e.g. `kokoro`) — always available
 - All cloud provider model slugs
 
-GPU engines other than the current one are excluded (they require a switch).
+GPU engines other than the client default are excluded (they require a switch),
+and the default engine is flagged `default: true`.
 
 Cloud model entries carry the engine's model catalog. Each entry:
 
@@ -513,7 +537,7 @@ Cloud model entries carry the engine's model catalog. Each entry:
 
 | Value | Result |
 |-------|--------|
-| `"nspeech"` | The dashboard-selected local engine |
+| `"nspeech"` | The **client default** engine (`POST /v1/admin/default-engine`) |
 | Local engine name (`"kokoro"`) | That resident local engine |
 | Cloud bare prefix (`"minimax"`) | The provider's default model |
 | Cloud model slug (`"minimax_speech_2_8_hd"`) | That specific model |
@@ -528,12 +552,17 @@ Cloud model entries carry the engine's model catalog. Each entry:
 ```json
 {
   "current": "kokoro",
+  "default": "f5tts",
   "engines": [
-    {"name": "kokoro", "type": "local", "gpu": false, "venv_exists": true, "is_current": false, "is_loaded": false},
-    {"name": "minimax", "type": "cloud", "models": [{"id": "minimax_speech_2_8_turbo", "provider": "speech-2.8-turbo", "label": "MiniMax Speech 2.8 Turbo", "default": true}], "defaultModel": "minimax_speech_2_8_turbo", "health": "ready", "is_current": false, "is_loaded": true}
+    {"name": "f5tts", "type": "local", "gpu": true, "venv_exists": true, "is_current": false, "is_default": true, "is_loaded": true},
+    {"name": "kokoro", "type": "local", "gpu": false, "venv_exists": true, "is_current": false, "is_default": false, "is_loaded": false},
+    {"name": "minimax", "type": "cloud", "models": [{"id": "minimax_speech_2_8_turbo", "provider": "speech-2.8-turbo", "label": "MiniMax Speech 2.8 Turbo", "default": true}], "defaultModel": "minimax_speech_2_8_turbo", "health": "ready", "is_current": true, "is_default": false, "is_loaded": true}
   ]
 }
 ```
+
+`current` is the engine the dashboard is working with; `default` is the client
+default. `is_current` / `is_default` flag the same split per entry.
 
 ---
 

@@ -52,6 +52,25 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-24 — Dashboard selection split from the client default engine
+
+**Reported:** "whatever we select in the dashboard for the engine is the default engine reported to the clients… if I make tests or settings for a cloud model, it 'replaces' the loaded F5 engine as the default."
+
+**Two bugs behind one symptom, both in the same line of thinking ("the current engine")**:
+
+1. `POST /v1/admin/engine` **unloaded the resident local engine** when the target was cloud — with the comment "so we don't waste VRAM". A cloud engine uses no VRAM; the only effects were a cold F5 for the next client request and a 409 refusal whenever a local request was in flight.
+2. `currentEngine` was simultaneously the dashboard's context **and** what `model: "nspeech"` resolved to. So the selection *was* the default, by construction.
+
+**Shape:** `defaultEngine` is now its own persisted field (`.engine_state.json` holds `{engine, defaultEngine}`). `currentEngine` keeps its old meaning — dashboard context, and residency for local GPU engines. `nspeech`/omitted model resolve to `defaultEngine`; `engineNameFor` agrees, so defaults and presets stay keyed to the engine a client actually reached. A pre-split state file seeds the default from its `engine` value, because that engine is what clients were already getting.
+
+**Cloud selection is now a context change**: no unload, no spawn, no busy check, `status: "cloud_selected"`. Selecting another local GPU engine is still a real switch (one GPU slot); if that evicts the client default, the next `nspeech` request cold-starts it — unavoidable with one GPU, and now the only way the default can go cold.
+
+**Surfaces:** `POST/GET /v1/admin/default-engine`; `/engine` and `/health` report `{engine: <default>, dashboard: <browsed>}`; `/v1/admin/engines` gained `default` and per-entry `is_default`; `/v1/models` and `/v1/voices` (no `?engine=`) follow the client default rather than the browsed engine. Dashboard header gained a `Default: <engine>` badge — click promotes the browsed engine to client default — and navigation keeps following the browsed engine (`getEngineState().dashboard`).
+
+**Verified:** `scripts/probe-engine-split.js` — 10 checks: `nspeech`/null/empty resolve to the default (with the dashboard pointing elsewhere), `setCurrentEngine` leaves the default alone, `setDefaultEngine` validates and reports the previous value, **a fake resident F5 worker is not stopped when MiniMax is selected** while `currentEngine` moves and `defaultEngine` does not, the two new routes (including 404/400 bodies), `/v1/models` naming and flagging the default, and `/v1/admin/engines` flagging both pointers. Page verified live: header badge reads `Default: F5-TTS`, and the UI degrades correctly against the not-yet-restarted server (no `dashboard` field → falls back to `engine`).
+
+**Restart required:** manager, admin routes, `/engine`, `/health`, voices. Dashboard files are static and already live.
+
 ### 2026-10-24 — MiniMax options on the dashboard, saveable as engine defaults
 
 **Asked:** expose every MiniMax option in the dashboard like F5 does, and let them be saved as engine defaults that apply when a request leaves the field unset.

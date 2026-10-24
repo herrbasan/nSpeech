@@ -132,18 +132,27 @@ app.get('/', async (_request, reply) => {
 });
 
 /**
- * Engine info — returns the current engine name.
+ * Engine info — what a client gets.
+ *
+ * `engine` is the CLIENT DEFAULT: the engine `model: "nspeech"` (or an omitted
+ * model) resolves to. `dashboard` is the engine the dashboard is currently
+ * working with, which is a separate setting — browsing or testing a cloud
+ * engine must not change what API clients receive.
  */
-app.get('/engine', async () => {
-  return { engine: manager.currentEngine };
-});
+app.get('/engine', async () => ({
+  engine: manager.defaultEngine,
+  dashboard: manager.currentEngine,
+}));
 
 /**
  * Health check for the Node server.
  */
-app.get('/health', async () => {
-  return { status: 'ok', version: '3.0.0', engine: manager.currentEngine };
-});
+app.get('/health', async () => ({
+  status: 'ok',
+  version: '3.0.0',
+  engine: manager.defaultEngine,
+  dashboard: manager.currentEngine,
+}));
 
 /**
  * Engine manager status — shows all workers and their states.

@@ -128,12 +128,28 @@ nSpeech is a multi-engine Text-to-Speech service with a unified OpenAI-compatibl
 
 `EngineManager.getEngine(model)` resolution order:
 
-1. **Normalize:** `null`/`undefined`/`"nspeech"` → `currentEngine` (dashboard-selected)
+1. **Normalize:** `null`/`undefined`/`"nspeech"` → `defaultEngine` (the **client default**)
 2. **Cloud check:** `resolveCloud(model)` — prefix match against registered adapters
 3. **Local check:** `getEntry(model)` — local engine registry lookup
 4. **Lazy start:** If local engine not running, spawn `WorkerProcess`
 
-State persistence: `.engine_state.json` stores last-selected engine across restarts.
+**Two engine pointers, deliberately separate (2026-10-24):**
+
+| Field | Question it answers | Changed by |
+|---|---|---|
+| `currentEngine` | Which engine is the **dashboard** working with (and, for a local GPU engine, which one is resident)? | `POST /v1/admin/engine` (the header switcher) |
+| `defaultEngine` | Which engine do **clients** get for `model: "nspeech"` / no model, and what does `/health` report? | `POST /v1/admin/default-engine` only |
+
+They used to be one value, so selecting a cloud engine in the dashboard both
+unloaded the resident local engine and silently became every client's default.
+Selecting a **cloud** engine is now a context change only — no unload, no
+spawn, no default change. Selecting another **local GPU** engine is still a real
+switch (one GPU slot), and if that evicts the client default, the next
+`nspeech` request cold-starts it.
+
+State persistence: `.engine_state.json` stores `{engine, defaultEngine}`. A
+pre-split file has only `engine`; that engine seeds the default, because it is
+what clients were already getting.
 
 ### 4.3 server/engine/worker.js — Python Process Wrapper
 
@@ -373,6 +389,7 @@ def unload(self) -> None
 | `/v1/audio/speech` | POST | Generate speech | None (local) |
 | `/v1/speech/dialogue` | POST | Multi-speaker MD-Blocks post → one audio file | None (local) |
 | `/v1/speech/dialogue/{id}` | GET | Manifest of a dialogue render | None |
+| `/engine` | GET | Client default + dashboard engine | None |
 | `/v1/voices` | GET | List voices | None |
 | `/v1/audio/transcriptions` | POST | Speech-to-text (local faster-whisper, CPU) | None |
 | `/health` | GET | Node server health | None |

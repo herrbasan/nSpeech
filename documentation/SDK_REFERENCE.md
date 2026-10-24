@@ -101,6 +101,9 @@ await client.deletePreset(engine, id);
 ### Engine admin & model discovery
 
 ```js
+// Select the engine the DASHBOARD works with. For a local GPU engine that is a
+// real switch (unload + load); for a cloud engine it only moves the dashboard
+// context — nothing is unloaded and the client default does not move.
 await client.switchEngine('kokoro', (e) => console.log(e.stage));
 
 // Model discovery (added 2026-09-08)
@@ -108,9 +111,11 @@ const list = await client.listModels();               // { object:'list', data:[
 const minimaxModels = await client.listEngineModels('minimax');
 //  -> [{ id, engine, provider_model, label, default }]
 
-await client.listEngines();     // { engines, current }
-await client.getEngine();       // current engine name
-await client.getStatus();       // /health
+await client.listEngines();     // { engines, current, default }
+await client.getEngine();       // CLIENT DEFAULT — what model:"nspeech" resolves to
+await client.getEngineState();  // { engine, dashboard } — both pointers at once
+await client.setDefaultEngine('f5tts');  // set the client default (admin)
+await client.getStatus();       // /health — { status, version, engine, dashboard }
 
 // Cache admin (added 2026-09-10)
 await client.getCacheStatus();  // { file, engines: [{ engine, type, voices, builtins, age_ms }] }

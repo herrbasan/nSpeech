@@ -107,17 +107,9 @@ export function registerAdminRoutes(app) {
         });
       }
 
-      // Check busy local workers (won't block cloud, but let the user know)
-      const currentWorker = manager.workers.get(manager.currentEngine);
-      if (currentWorker && currentWorker.inFlight > 0) {
-        return reply.code(409).send({
-          error: {
-            message: `Cannot switch: ${currentWorker.inFlight} request(s) active on ${manager.currentEngine}`,
-            type: 'invalid_request_error',
-            code: 'engine_busy',
-          },
-        });
-      }
+      // No busy check: selecting a cloud engine touches no worker, so an
+      // in-flight local request is not a reason to refuse it (it was, back
+      // when this path unloaded the engine).
 
       // Emit SSE with a single status event, then result
       reply.raw.writeHead(200, {
@@ -132,27 +124,15 @@ export function registerAdminRoutes(app) {
         reply.raw.write(`data: ${JSON.stringify(data)}\n\n`);
       }
 
-      // If a local engine is currently loaded, unload it before switching
-      // to a cloud engine so we don't waste VRAM / leave workers running.
-      const oldLocal = manager.currentEngine;
-      if (oldLocal) {
-        const oldWorker = manager.workers.get(oldLocal);
-        if (oldWorker) {
-          sendEvent('status', { stage: 'unload_start', engine: oldLocal });
-          try {
-            await manager.unload(oldLocal);
-            sendEvent('status', { stage: 'unload_done', engine: oldLocal });
-          } catch (err) {
-            sendEvent('error', { error: { message: err.message, type: 'engine_error', code: err.code || 'unknown' } });
-            reply.raw.end();
-            return;
-          }
-        }
-      }
-
+      // ── Cloud selection is a CONTEXT change, not a residency change ──────
+      // A cloud provider has no worker. Until 2026-10-24 this block unloaded
+      // the resident local engine "so we don't waste VRAM" — but a cloud
+      // engine uses no VRAM, so the only effects were a cold F5 for the next
+      // client request and a dashboard selection that silently became the
+      // client default. Neither is a switch.
       sendEvent('status', { stage: 'switch_done', engine: engineName });
       manager.setCurrentEngine(engineName);
-      sendEvent('result', { engine: engineName, status: 'switched' });
+      sendEvent('result', { engine: engineName, status: 'cloud_selected' });
       reply.raw.end();
       // Refresh this engine's cached voices in the background — the adapter
       // round-trip must not hold the switch SSE open.
@@ -252,24 +232,24 @@ export function registerAdminRoutes(app) {
       owned_by: 'nspeech',
       engine: 'nspeech',
       default: true,
-      description: `Current local engine (${manager.currentEngine})`,
+      description: `Client default engine (${manager.defaultEngine})`,
     });
 
     for (const name of listEngines()) {
       const entry = getEntry(name);
-      // Skip: internal workers, GPU engines (not the current one), missing venvs,
+      // Skip: internal workers, GPU engines (not the client default), missing venvs,
       // dashboard-only engines (api_hidden — switchable via dashboard, not a model)
       if (entry.stt) continue;
       if (entry.api_hidden) continue;
-      if (entry.gpu && name !== manager.currentEngine) continue;
+      if (entry.gpu && name !== manager.defaultEngine) continue;
       if (!venvExists(name)) continue;
       data.push({
         id: name,
         object: 'model',
         owned_by: 'nspeech',
         engine: name,
-        default: name === manager.currentEngine,
-        description: entry.gpu ? 'Local GPU engine (current)' : 'Local engine (always available)',
+        default: name === manager.defaultEngine,
+        description: entry.gpu ? 'Local GPU engine (client default)' : 'Local engine (always available)',
       });
     }
 
@@ -309,6 +289,7 @@ export function registerAdminRoutes(app) {
         gpu: entry.gpu,
         venv_exists: venvExists(name),
         is_current: manager.currentEngine === name,
+        is_default: manager.defaultEngine === name,
         is_loaded: manager.workers.has(name) && manager.workers.get(name).state === 'ready',
       };
     });
@@ -319,15 +300,50 @@ export function registerAdminRoutes(app) {
       models: c.models,
       defaultModel: c.defaultModel,
       health: c.health.status,
-      is_current: false,
+      is_current: manager.currentEngine === c.name,
+      is_default: manager.defaultEngine === c.name,
       is_loaded: c.health.status === 'ready',
     }));
 
     return {
       engines: [...localEngines, ...cloudEngines],
       current: manager.currentEngine,
+      default: manager.defaultEngine,
     };
   });
+
+  // ── POST /v1/admin/default-engine — the engine CLIENTS get ───────────────
+  //
+  // Separate from the switch on purpose: switching is what the dashboard is
+  // working with (and, for a local engine, what is resident), while this is
+  // what `model: "nspeech"` resolves to. Nothing in the request path changes
+  // it, so a cloud test can no longer take the default over.
+  //
+  // Deliberately does NOT load the engine: the default is a pointer, and a
+  // local engine is started by the first request that needs it.
+
+  app.post('/v1/admin/default-engine', async (request, reply) => {
+    const body = typeof request.body === 'object' && request.body !== null ? request.body : {};
+    if (!body.engine) {
+      return reply.code(400).send({
+        error: { message: "Missing required field: 'engine'", type: 'invalid_request_error', code: 'missing_engine', param: 'engine' },
+      });
+    }
+    try {
+      const result = manager.setDefaultEngine(body.engine);
+      return { engine: result.engine, previous: result.previous, status: 'default_set' };
+    } catch (err) {
+      return reply.code(err.status || 400).send({
+        error: { message: err.message, type: 'invalid_request_error', code: err.code || 'unknown' },
+      });
+    }
+  });
+
+  // Same value on the read path, for the dashboard header and diagnostics.
+  app.get('/v1/admin/default-engine', async () => ({
+    engine: manager.defaultEngine,
+    dashboard: manager.currentEngine,
+  }));
 
   // ── GET /v1/admin/cache — voice-cache and render-cache state ─────────────
   //

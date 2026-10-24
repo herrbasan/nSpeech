@@ -24,6 +24,15 @@ document.addEventListener('click', (e) => {
         case 'refresh-data':
             if (window.nspeechRefreshData) window.nspeechRefreshData();
             break;
+
+        case 'set-client-default': {
+            // Promote the engine the dashboard is browsing to the CLIENT default
+            // (what model:"nspeech" resolves to). A separate setting by design:
+            // browsing a cloud engine must not silently become the default.
+            const target = document.getElementById('client-default')?.dataset.dashboard;
+            if (target && window.nspeechSetClientDefault) window.nspeechSetClientDefault(target);
+            break;
+        }
     }
 });
 
@@ -90,18 +99,63 @@ function syncNavActive() {
 }
 
 function initNav() {
-    window.nspeech.client.getEngine()
-        .then(engine => {
-            engine = engine || 'kokoro';
-            const nav = buildNavigation(engine);
+    // Nav follows the engine the DASHBOARD is browsing, not the client default.
+    window.nspeech.client.getEngineState()
+        .then(state => {
+            const dashboard = state?.dashboard || state?.engine || 'kokoro';
+            const nav = buildNavigation(dashboard);
             renderNav(nav);
-            syncEngineSwitcher(engine);
+            syncEngineSwitcher(dashboard);
+            renderClientDefault(state);
         })
         .catch(() => {
             const nav = buildNavigation('kokoro');
             renderNav(nav);
         });
 }
+
+/**
+ * The header badge showing which engine CLIENTS get (`model: "nspeech"`).
+ * Deliberately its own control: the engine switcher changes what the dashboard
+ * is working with (and, for local engines, what is resident), while this is the
+ * pointer an API client follows.
+ */
+function renderClientDefault(state) {
+    const btn = document.getElementById('client-default');
+    if (!btn || !state) return;
+    const current = state.engine;
+    const dashboard = state.dashboard || current;
+    btn.textContent = `Default: ${getEngineLabel(current)}`;
+    btn.dataset.engine = current;
+    btn.dataset.dashboard = dashboard;
+    btn.title = current === dashboard
+        ? `Clients get ${getEngineLabel(current)} for model "nspeech" (same as the browsed engine).`
+        : `Clients get ${getEngineLabel(current)} for model "nspeech". Click to make the browsed engine (${getEngineLabel(dashboard)}) the default.`;
+}
+
+async function setClientDefault(engineName) {
+    const btn = document.getElementById('client-default');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/v1/admin/default-engine', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ engine: engineName }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+        if (btn) btn.textContent = 'Saved ✓';
+        setTimeout(initNav, 600);
+    } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('client default failed:', err);
+        alert(`Could not set the client default: ${err.message}`);
+        initNav();
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+window.nspeechSetClientDefault = setClientDefault;
 
 // Attach initNav globally so that page-switches can trigger dynamic sidebar updates
 window.initNav = initNav;
