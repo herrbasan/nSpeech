@@ -94,10 +94,15 @@ export function keyFor({ engineName, subModel, voiceName, speed, instructions, e
   return createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
-function _paths(key) {
+function _limits(opts) {
+  return opts ?? config.renderCache;
+}
+
+function _paths(key, opts) {
+  const limits = _limits(opts);
   return {
-    pcm: join(config.renderCache.dir, `${key}.pcm`),
-    meta: join(config.renderCache.dir, `${key}.json`),
+    pcm: join(limits.dir, `${key}.pcm`),
+    meta: join(limits.dir, `${key}.json`),
   };
 }
 
@@ -108,10 +113,13 @@ function _paths(key) {
  * least-recently-written — a render reused daily is not the one to drop.
  *
  * @param {string} key
+ * @param {{dir: string, ttlMs: number, maxBytes: number}} [opts] — store to use;
+ *        defaults to config.renderCache. Dialogue turns pass their own store.
  * @returns {Promise<{pcm: Buffer, meta: object}|null>}
  */
-export async function lookup(key) {
-  const paths = _paths(key);
+export async function lookup(key, opts) {
+  const limits = _limits(opts);
+  const paths = _paths(key, limits);
   try {
     let meta;
     try {
@@ -121,9 +129,9 @@ export async function lookup(key) {
     }
 
     const age = Date.now() - (meta.created ?? 0);
-    if (age > config.renderCache.ttlMs) {
+    if (age > limits.ttlMs) {
       log.info('render cache entry expired', { key, ageHours: Math.round(age / 3600000) });
-      await _remove(key);
+      await _remove(key, limits);
       return null;
     }
 
@@ -131,7 +139,7 @@ export async function lookup(key) {
     if (pcm.length !== meta.bytes) {
       // A truncated write is a corrupt entry, not a cache miss worth guessing at.
       log.warn('render cache entry size mismatch — dropped', { key, expected: meta.bytes, actual: pcm.length });
-      await _remove(key);
+      await _remove(key, limits);
       return null;
     }
 
@@ -153,27 +161,29 @@ export async function lookup(key) {
  * @param {string} key
  * @param {Buffer} pcm
  * @param {object} meta — { engine, model, voice, chars }
+ * @param {{dir: string, ttlMs: number, maxBytes: number}} [opts] — store to use
  * @returns {Promise<boolean>} — true when the entry is on disk
  */
-export async function store(key, pcm, meta) {
-  const paths = _paths(key);
+export async function store(key, pcm, meta, opts) {
+  const limits = _limits(opts);
+  const paths = _paths(key, limits);
   const tmp = `${paths.pcm}.tmp`;
   try {
-    if (pcm.length > config.renderCache.maxBytes) {
+    if (pcm.length > limits.maxBytes) {
       log.info('render cache skipped — render exceeds the cache byte cap', {
-        key, bytes: pcm.length, cap: config.renderCache.maxBytes,
+        key, bytes: pcm.length, cap: limits.maxBytes,
       });
       return false;
     }
 
-    await mkdir(config.renderCache.dir, { recursive: true });
+    await mkdir(limits.dir, { recursive: true });
     await writeFile(tmp, pcm);
     await rename(tmp, paths.pcm);
     await writeFile(paths.meta,
       JSON.stringify({ ...meta, key, bytes: pcm.length, created: Date.now() }, null, 2));
 
     log.info('render persisted', { key, bytes: pcm.length, engine: meta.engine, voice: meta.voice });
-    await _prune();
+    await _prune(limits);
     return true;
 
   } catch (err) {
@@ -184,12 +194,12 @@ export async function store(key, pcm, meta) {
 }
 
 /** Evict by TTL, then least-recently-used until the directory fits the byte cap. */
-async function _prune() {
+async function _prune(limits) {
   try {
-    const files = await readdir(config.renderCache.dir);
+    const files = await readdir(limits.dir);
     const entries = [];
     for (const f of files.filter(name => name.endsWith('.pcm'))) {
-      const path = join(config.renderCache.dir, f);
+      const path = join(limits.dir, f);
       try {
         const st = await stat(path);
         entries.push({ key: f.slice(0, -4), bytes: st.size, mtime: st.mtimeMs });
@@ -201,9 +211,9 @@ async function _prune() {
 
     let total = entries.reduce((sum, e) => sum + e.bytes, 0);
     for (const entry of entries) {
-      const expired = Date.now() - entry.mtime > config.renderCache.ttlMs;
-      if (!expired && total <= config.renderCache.maxBytes) break;
-      await _remove(entry.key);
+      const expired = Date.now() - entry.mtime > limits.ttlMs;
+      if (!expired && total <= limits.maxBytes) break;
+      await _remove(entry.key, limits);
       total -= entry.bytes;
       log.info('render evicted', { key: entry.key, bytes: entry.bytes, reason: expired ? 'ttl' : 'size cap' });
     }
@@ -212,30 +222,31 @@ async function _prune() {
   }
 }
 
-async function _remove(key) {
-  const paths = _paths(key);
+async function _remove(key, opts) {
+  const paths = _paths(key, opts);
   for (const p of [paths.pcm, paths.meta]) {
     try { await unlink(p); } catch { /* already gone */ }
   }
 }
 
 /** Diagnostic view for GET /v1/admin/cache. */
-export async function status() {
-  const limits = {
-    maxBytes: config.renderCache.maxBytes,
-    ttlHours: Math.round(config.renderCache.ttlMs / 3600000),
-    dir: config.renderCache.dir,
+export async function status(opts) {
+  const limits = _limits(opts);
+  const view = {
+    maxBytes: limits.maxBytes,
+    ttlHours: Math.round(limits.ttlMs / 3600000),
+    dir: limits.dir,
   };
   try {
-    const files = (await readdir(config.renderCache.dir)).filter(f => f.endsWith('.pcm'));
+    const files = (await readdir(limits.dir)).filter(f => f.endsWith('.pcm'));
     let bytes = 0;
     for (const f of files) {
-      try { bytes += (await stat(join(config.renderCache.dir, f))).size; } catch { /* gone */ }
+      try { bytes += (await stat(join(limits.dir, f))).size; } catch { /* gone */ }
     }
-    return { ...limits, entries: files.length, bytes };
+    return { ...view, entries: files.length, bytes };
   } catch (err) {
-    if (err.code === 'ENOENT') return { ...limits, entries: 0, bytes: 0 };
-    return { ...limits, error: err.message };
+    if (err.code === 'ENOENT') return { ...view, entries: 0, bytes: 0 };
+    return { ...view, error: err.message };
   }
 }
 

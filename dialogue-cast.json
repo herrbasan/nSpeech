@@ -1,0 +1,12 @@
+{
+  "david-a-renelt": {
+    "model": "eleven_v4",
+    "voice_id": "REPLACE-WITH-CLONE-ID",
+    "settings": {}
+  },
+  "kimi-k3": {
+    "model": "eleven_v4",
+    "voice_id": "REPLACE-WITH-CLONE-ID",
+    "settings": {}
+  }
+}

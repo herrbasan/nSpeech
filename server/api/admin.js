@@ -32,6 +32,7 @@
  * - In-flight requests to old engine are killed on switch.
  */
 import { manager } from '../engine/manager.js';
+import { config } from '../config.js';
 import { getEntry } from '../engine/registry.js';
 import { resolveCloud } from '../cloud/registry.js';
 import { subscribe, getHistory } from '../events.js';
@@ -338,6 +339,7 @@ export function registerAdminRoutes(app) {
   app.get('/v1/admin/cache', async () => ({
     ...(await voiceCache.status()),
     renders: await renderCache.status(),
+    dialogue_turns: await renderCache.status(config.dialogue.cache),
   }));
 
   // ── POST /v1/admin/cache/refresh — rebuild the cache now ─────────────────

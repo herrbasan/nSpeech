@@ -13,6 +13,7 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import { manager } from './engine/manager.js';
 import { registerSpeechRoute } from './api/speech.js';
+import { registerDialogueRoute } from './api/dialogue.js';
 import { registerSpeechCloneRoute } from './api/speech-clone.js';
 import { registerVoiceRoutes } from './api/voices.js';
 import { registerSttRoutes } from './api/transcriptions.js';
@@ -193,6 +194,7 @@ app.get('/arena-samples', async (request, reply) => {
 // ── API routes (OpenAI-compatible surface) ──────────────────────────────────
 
 registerSpeechRoute(app);
+registerDialogueRoute(app);
 registerSpeechCloneRoute(app);
 registerVoiceRoutes(app);
 registerSttRoutes(app);

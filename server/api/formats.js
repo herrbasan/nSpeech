@@ -3,6 +3,12 @@
  *
  * `pcm` is always OpenAI-compatible (24kHz 16-bit LE mono).
  * `pcm_f32` is nSpeech native (24kHz float32 mono).
+ *
+ * The two sets below are the transport contract every audio route shares:
+ * compressed formats go through ffmpeg, raw formats are passed through.
+ * NOTE: `flac` is declared above but belongs to NEITHER set — a request for it
+ * falls through to the raw passthrough and is labelled audio/flac while
+ * carrying PCM. Pre-existing; listed here so the next reader sees it.
  */
 const FORMAT_CONTENT_TYPES = {
   mp3:    'audio/mpeg',
@@ -13,6 +19,12 @@ const FORMAT_CONTENT_TYPES = {
   pcm:    'audio/pcm',
   pcm_f32:'application/octet-stream',
 };
+
+/** Formats that need ffmpeg transcoding (compressed). */
+export const TRANSCODE_FORMATS = new Set(['mp3', 'opus', 'aac']);
+
+/** Formats that pass through raw (no transcoding needed). */
+export const RAW_FORMATS = new Set(['wav', 'pcm', 'pcm_f32']);
 
 /**
  * Get the Content-Type for a response_format.

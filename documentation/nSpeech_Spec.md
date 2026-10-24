@@ -248,6 +248,23 @@ Preset resolution in `speech.js`:
 2. `presets.lookup(engineName, "smart-lady")` returns `{voice: "Kore", instructions: "..."}`
 3. `voiceName` replaced with `"Kore"`, `instructions` merged into request
 
+### 4.8 Dialogue mode — `dialogue-parse.js`, `dialogue-cast.js`, `dialogue-audio.js`, `api/dialogue.js`
+
+Turns a multi-speaker MD-Blocks post into one audio file: per-turn synthesis, edge-trimmed, concatenated with explicit gaps. The article carries identity only (`preset=narration:<speaker-id>`); engine/model/voice are generation-time bindings.
+
+| Module | Responsibility |
+|---|---|
+| `dialogue-parse.js` | MD-Blocks **v1.8** narration subset → ordered turns + `pause` beats. Faithful §3 attribute grammar and the §7/§5.2 errors that decide whether a turn list can be trusted; `var` payloads, `columns` weights, duplicate ids and media-class stamps are out of scope (they cannot change what is spoken). Spec of record: `herrbasan/md-blocks`; shared-parser extraction tracked as md-blocks#6. |
+| `dialogue-cast.js` | `dialogue-cast.json` registry, speaker → `{model\|engine, voice_id, settings}`. Resolution: request `cast` override → registry → **error naming the unbound id**. A recast drops the old engine's `settings`. |
+| `dialogue-audio.js` | s16le 24 kHz edge-silence trim (RMS 0.008 / 20 ms windows, 20 ms guard, 5 ms fades), exact `silence(ms)`, duration. |
+| `api/dialogue.js` | Route, per-turn cache, gap/pause assembly, manifest, transcode. |
+
+**Shared resolution:** `speech-params.js` holds engine → defaults → preset → voice-validation, used by both `/v1/audio/speech` and dialogue so the two paths cannot drift.
+
+**Turn cache:** one entry per turn, keyed through `renderCache.keyFor` (engine, model, voice, speed, instructions, tuning `extra_body`, cleaned text) into `.cache/dialogue`. Reply context is part of the key, so editing a turn also invalidates the turns adjacent to it — bounded by the neighbours, not the document.
+
+**Capabilities:** `previous_text`/`next_text` are sent to ElevenLabs only (its v3 family drops them itself); MiniMax, Gemini, xAI, Fish and local engines render each turn standalone. No seed is derived — ElevenLabs' seed support is model-dependent and unverified for v4; reproducibility comes from the cache.
+
 ---
 
 ## 5. Python Worker Layer
@@ -354,8 +371,10 @@ def unload(self) -> None
 | Endpoint | Method | Purpose | Auth |
 |----------|--------|---------|------|
 | `/v1/audio/speech` | POST | Generate speech | None (local) |
+| `/v1/speech/dialogue` | POST | Multi-speaker MD-Blocks post → one audio file | None (local) |
+| `/v1/speech/dialogue/{id}` | GET | Manifest of a dialogue render | None |
 | `/v1/voices` | GET | List voices | None |
-| `/v1/audio/transcriptions` | POST | Speech-to-text (via nVoice) | None |
+| `/v1/audio/transcriptions` | POST | Speech-to-text (local faster-whisper, CPU) | None |
 | `/health` | GET | Node server health | None |
 
 ### 6.2 Admin Endpoints (Dashboard)

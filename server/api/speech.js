@@ -8,26 +8,17 @@
  * The engine always emits raw s16le 24kHz mono PCM — regardless of whether
  * it's a Python worker or cloud adapter. Node owns all format transcoding.
  */
-import { manager, engineNameFor } from '../engine/manager.js';
 import { WorkerError } from '../engine/worker.js';
 import { Readable } from 'node:stream';
-import { getContentType, normalizeFormat } from './formats.js';
+import { getContentType, normalizeFormat, TRANSCODE_FORMATS, RAW_FORMATS } from './formats.js';
 import { logger } from '../logger.js';
 import { pipePcmToClient } from '../transcode.js';
 import { cleanMarkdown, cleanMarkdownLLM } from '../markdown-clean.js';
-import * as presets from '../presets.js';
 import * as chunking from '../chunking.js';
 import * as renderCache from '../render-cache.js';
-import * as defaults from '../defaults.js';
-import { assertVoiceValid } from '../voice-validation.js';
+import { resolveSpeechParams } from '../speech-params.js';
 
 const log = logger.child('speech');
-
-/** Formats that need ffmpeg transcoding (compressed). */
-const TRANSCODE_FORMATS = new Set(['mp3', 'opus', 'aac']);
-
-/** Formats that pass through raw (no transcoding needed). */
-const RAW_FORMATS = new Set(['wav', 'pcm', 'pcm_f32']);
 
 /**
  * Core TTS relay — shared by POST /v1/audio/speech.
@@ -47,7 +38,6 @@ export async function relaySpeech(request, reply, body) {
   }
 
   const clientFormat = normalizeFormat(body.response_format);
-  const extraBody = body.extra_body ?? {};
 
   log.info('speech request', {
     model: body.model,
@@ -57,74 +47,16 @@ export async function relaySpeech(request, reply, body) {
     format: clientFormat,
   });
 
-  // ── Resolve engine ───────────────────────────────────────────────────────
-  let engine, subModel;
+  // ── Resolve engine, defaults, preset and voice ─────────────────────────
+  // One shared resolution path with /v1/speech/dialogue — see
+  // server/speech-params.js for the order and the bugs that fixed it.
+  let params;
   try {
-    const resolved = await manager.getEngine(body.model);
-    engine = resolved.engine;
-    subModel = extraBody.model ?? resolved.model;
+    params = await resolveSpeechParams(body);
   } catch (err) {
     return sendError(reply, err);
   }
-
-  // ── Server-side defaults (dashboard dial-ins) ────────────────────────
-  // Fill ONLY fields the request left unset — explicit values always win.
-  // Applied before preset resolution: a preset voice request keeps its own
-  // identity; defaults still fill unset extra_body/speed for it.
-  //
-  // Keyed by the CANONICAL engine name, not the raw model string: a client
-  // sending "nspeech" or a cloud slug must still find the entry the dashboard
-  // saved under the engine name.
-  const defKey = engineNameFor(body.model);
-  const def = defKey ? defaults.get(defKey) : null;
-  if (def) {
-    // `voice: "default"` is the documented "engine default" sentinel — treat
-    // it as unset, or a saved voice default could never take effect (the
-    // dashboard always sends the sentinel when nothing is picked).
-    if ((body.voice == null || body.voice === 'default') && def.voice != null && def.voice !== 'default') {
-      body.voice = def.voice;
-    }
-    if (body.speed == null && def.speed != null) body.speed = def.speed;
-    if (def.extra_body) {
-      for (const [k, v] of Object.entries(def.extra_body)) {
-        if (!(k in extraBody)) extraBody[k] = v;
-      }
-      log.info('defaults applied', { engine: defKey, keys: Object.keys(def.extra_body) });
-    }
-  }
-
-  // ── Resolve preset (Node-managed voice configuration) ──────────────────
-  let voiceName = body.voice ?? 'default';
-  let instructions = body.instructions;
-  // Clients sometimes send speed as a string ("1") — coerce; MiniMax batch
-  // rejects float-typed fields sent as strings with a 2013 param error.
-  let speed = body.speed != null ? Number(body.speed) : undefined; // undefined = engine default (worker-side per-engine)
-  if (speed != null && Number.isNaN(speed)) {
-    return sendError(reply, Object.assign(new Error(`invalid speed: ${JSON.stringify(body.speed)}`), { status: 400, type: 'invalid_request' }));
-  }
-  // Presets are keyed by engine name too — same normalization as defaults.
-  const engineName = engineNameFor(body.model);
-  if (engineName) {
-    const resolved = presets.lookup(engineName, voiceName);
-    if (resolved) {
-      log.info('preset resolved', { engine: engineName, preset: voiceName, to: resolved.voice });
-      voiceName = resolved.voice;
-      if (resolved.instructions) instructions = resolved.instructions;
-      if (resolved.speed != null) speed = resolved.speed;
-      if (resolved.extra_body) Object.assign(extraBody, resolved.extra_body);
-    }
-  }
-
-  // ── Voice validation ────────────────────────────────────────────────────
-  // Runs on the FINAL voice (after defaults fill and preset resolution), before
-  // any engine work: a voice the resolved provider cannot serve is a typed 404
-  // here instead of a provider round-trip — or, for a local engine, instead of
-  // a worker request that may render nothing.
-  try {
-    await assertVoiceValid({ engineName, voiceName });
-  } catch (err) {
-    return sendError(reply, err);
-  }
+  const { engine, subModel, engineName, voiceName, speed, instructions, extraBody } = params;
 
   // ── Generate PCM stream ─────────────────────────────────────────────────
   // Auto-chunking: when text exceeds the engine's per-request limit, split

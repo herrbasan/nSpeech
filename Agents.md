@@ -52,6 +52,37 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-24 — Dialogue mode: multi-speaker posts as one audio file
+
+**Asked for (handover 2026-10-23, storage box `scratch/nspeech-dialogue-mode-handover.md`):** render a multi-speaker post — one voice per speaker, one audio file — with per-turn synthesis. First target `blog/drafts/the-drill.md` (2 speakers, already re-authored). Test engine MiniMax, production ElevenLabs clones.
+
+**The seam that made it workable:** the article carries **identity only** (`preset=narration:<speaker-id>`); engine/model/voice are a generation-time binding. Casting is therefore a request override, never an article edit — the MiniMax test pass and the clone render read the same document.
+
+**Parser — `server/dialogue-parse.js` (new), the MD-Blocks v1.8 narration subset.** The repo had no usable parser to import (nui_wc2's `parseBlocks` lives in an ~8,300-line browser module; `md-blocks/tools/render.js` is a standalone CJS script), and the shared extraction is now tracked as **md-blocks#6**. So the extractor is spec-scoped with guardrails: faithful §3 attribute grammar (all value forms, the closed bare-key set with the open `data:` namespace, duplicate keys, raw `<`/`>`), and the §7/§5.2 errors that decide whether a turn list can be trusted. Outside the subset — `var` payload pairing, `columns` weights arithmetic, duplicate `id`s, media-class `kind` stamps — it validates nothing, because none of it can change which text is spoken. It is loud about everything it *can* see: nested/unclosed block, marker inside a block, `mb:/main`, stray `col`, malformed `pause`, beat inside a turn, conflicting display names, bare narration, a third preset segment, and `audio=` on a turn.
+
+**`audio=` is an error, deliberately.** A recording exists for that turn; silently re-rendering it would re-bill text the author already paid for. Refusing is the honest failure.
+
+**Cast — `server/dialogue-cast.js` + `dialogue-cast.json`.** Resolution is request `cast` → registry → **400 naming the unbound id**. No fallback voice, no default engine. A recast onto another engine/model drops the registry's `settings` (they were dialled in for the old engine and would leak knobs the new provider may not even read). Overrides may be partial (voice only).
+
+**Shared resolution — `server/speech-params.js` (extracted from `speech.js`).** `/v1/audio/speech` and dialogue now resolve engine → defaults → preset → voice validation through one function, so the two paths cannot drift. Same failure codes as before.
+
+**Cache — one entry per turn**, keyed through the existing `renderCache.keyFor` (engine, model, voice, speed, instructions, tuning extra_body, cleaned text), stored in `.cache/dialogue` by a parameterised `renderCache` (the atomic-write + sidecar + TTL/LRU implementation is shared, not duplicated). Two consequences worth knowing:
+
+- **Editing one turn re-renders its neighbours.** Reply context is part of a turn's audio, so an edited middle turn invalidates three turns. That is the correct trade-off — the alternative is context-free prosody — and it bounds the cost at the neighbours rather than the document.
+- A recast re-renders everything, because the binding is in the key.
+
+**Assembly — `server/dialogue-audio.js`.** Edge silence is trimmed per turn (RMS < 0.008 over 20 ms windows — the thresholds measured in `probe-silence-detect.js`, reused rather than re-invented), keeping a 20 ms guard and a 5 ms fade so a cut never lands on a hard onset or a DC step. Gaps are explicit: `gap_ms` (default 400) between turns, a `pause` beat **replacing** it at that junction. Master loudness stays the transcode path's job (`dynaudnorm`), exactly as for single-voice speech; raw `wav`/`pcm` outputs stay untouched.
+
+**Context, and what is deliberately absent.** `previous_text` (tail ≤500) / `next_text` (head ≤250) are wired through `extra_body` for ElevenLabs only — its adapter already carries them and drops them for the v3 family, which rejects the fields. MiniMax and the rest read neither, so a capability table gates it rather than every engine receiving fields it ignores. A deterministic per-turn `seed` is **not** derived: ElevenLabs' seed support differs by model and is unverified for v4, and an unverified field on every turn is an outage waiting for the wrong model. Reproducibility comes from the turn cache; a caller who wants a pinned seed puts it in the binding's `settings`.
+
+**Verified — `scripts/probe-dialogue.js`, 48 checks, all pass, zero spend:** extraction on the committed fixture (turns, beats, names, order, fenced-code-as-content, `data:` ignored); every §3/§7/§5.2 error above; the setext-`---` trap; cast resolution incl. recast-settings-drop and the unbound id; edge trim and gap arithmetic; the route with a fake engine (24 turns of real content, gap/beat timing exact, cache miss→hit→byte-identical, edited-turn neighbour invalidation, `estimate_only` resolving no params, empty and silent engines → `502 empty_audio`, unbound speaker → 400 before any render); the persisted manifest.
+
+**Verified against the real draft** (`--file`): 24 turns, 13 × `david-a-renelt` + 11 × `kimi-k3`, 20 speaker switches, 0 beats, every block named. `estimate_only` on the real document: **11,365 chars** (David 4,675 / Kimi 6,690), one engine (`elevenlabs`/`eleven_v4`). A full offline render of the same document assembled 24 turns in 11,600 ms = 24×100 ms + 23×400 ms gaps — exact.
+
+**Incidental:** `flac` is advertised in `formats.js` but belongs to neither the transcode nor the raw set, so a `response_format: "flac"` request returns PCM labelled `audio/flac`. Pre-existing, untouched (flagged in the file); the transcode path only has mp3/opus/aac encoders.
+
+**Open:** live MiniMax cast render + ElevenLabs clone render (paid, awaiting go-ahead); no SDK helper or dashboard page for dialogue yet; `README.md` does not mention the mode; `previous_request_ids` chaining (same-speaker runs) is not wired — `previous_text` carries the same continuity signal.
+
 ### 2026-10-20 — Live verification pass: #1, #2, #3 closed
 
 The 2026-09-21 fixes (`d21ce3f`) had never been confirmed against a running server. After a restart:
@@ -607,4 +638,4 @@ Three submodules. Each is a separate repo this project only *consumes*:
 
 ---
 
-*Last updated: 2026-10-20*
+*Last updated: 2026-10-24*

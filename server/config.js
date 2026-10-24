@@ -132,7 +132,38 @@ export const config = {
       ?? configJson.render_cache?.max_bytes
       ?? String(2 * 1024 * 1024 * 1024), 10),
   },
+
+  // Dialogue mode (POST /v1/speech/dialogue) — one stitched audio file per
+  // multi-speaker MD-Blocks document. Each turn is a separate render, so each
+  // turn is its own cache entry: an edited turn re-renders alone and a failed
+  // job resumes from the turns already paid for.
+  dialogue: {
+    gapMs: parseFloat(
+      pick('NSPEECH_DIALOGUE_GAP_MS', process.env, envFile)
+      ?? configJson.dialogue?.gap_ms
+      ?? 400),
+    cache: {
+      dir: resolve(PROJECT_ROOT,
+        pick('NSPEECH_DIALOGUE_CACHE_DIR', process.env, envFile)
+        ?? configJson.dialogue?.cache?.dir
+        ?? '.cache/dialogue'),
+      ttlMs: 1000 * 60 * 60 * 24 * (
+        parseFloat(pick('NSPEECH_DIALOGUE_CACHE_TTL_DAYS', process.env, envFile)
+          ?? configJson.dialogue?.cache?.ttl_days
+          ?? 7)
+      ),
+      maxBytes: parseInt(
+        pick('NSPEECH_DIALOGUE_CACHE_MAX_BYTES', process.env, envFile)
+        ?? configJson.dialogue?.cache?.max_bytes
+        ?? String(2 * 1024 * 1024 * 1024), 10),
+    },
+  },
 };
+
+// A gap that is not a number would silently become NaN silence.
+if (!Number.isFinite(config.dialogue.gapMs) || config.dialogue.gapMs < 0) {
+  throw new Error(`dialogue.gap_ms must be a non-negative number, got: ${configJson.dialogue?.gap_ms}`);
+}
 
 // ── Validate required paths ─────────────────────────────────────────────────
 

@@ -17,6 +17,8 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | Method | Path | Purpose |
 |--------|------|---------|
 | POST | `/v1/audio/speech` | OpenAI-compatible TTS |
+| POST | `/v1/speech/dialogue` | Multi-speaker MD-Blocks post → one audio file (per-turn synthesis) |
+| GET | `/v1/speech/dialogue/:id` | The manifest of a dialogue render (turns, chars, durations, cache) |
 | POST | `/v1/audio/speech/clone` | One-shot TTS from uploaded reference (no persistence) |
 | GET | `/v1/voices` | List voices on current (or `?engine=`) engine |
 | POST | `/v1/voices/clone` | Persist a cloned voice (multipart) |
@@ -28,7 +30,7 @@ STT runs in a dedicated local CPU worker (`venv/stt`): faster-whisper large-v3 i
 | GET | `/v1/admin/engines` | List engines with venv/loaded/type state |
 | GET | `/v1/admin/status` | Worker manager state |
 | GET | `/v1/admin/events` | Live event stream (SSE) — engine start/stop/error, history replay |
-| GET | `/v1/admin/cache` | Voice-cache state (per-engine counts/age) plus `renders` — persisted stitch renders (`entries`, `bytes`, `maxBytes`, `ttlHours`, `dir`) |
+| GET | `/v1/admin/cache` | Voice-cache state (per-engine counts/age) plus `renders` — persisted stitch renders (`entries`, `bytes`, `maxBytes`, `ttlHours`, `dir`) — and `dialogue_turns` (the same shape, for dialogue turn audio) |
 | POST | `/v1/admin/cache/refresh` | Rebuild the voice cache now (disk re-scan, cloud re-fetch, resident re-warm) |
 | POST | `/v1/audio/transcriptions` | Speech-to-text (local faster-whisper, CPU) |
 | POST | `/v1/audio/align` | Forced alignment, text-constrained (local MMS CTC, CPU) |
@@ -217,8 +219,130 @@ A stitch render is buffered by definition, so the finished PCM exists before the
 
 Raw audio bytes with `Content-Type` per format. Every streaming response carries `X-Stream-Mode: native` (real incremental) or `X-Stream-Mode: chunked` (complete file sliced — batch mode or non-streaming cloud providers). A stitch response also carries `X-Render-Cache: hit` (served from `.cache/renders/`), `miss` (rendered and persisted) or `off` (`extra_body.cache: false`).
 
-## Engine Capabilities
+## 1.1 Dialogue mode — `POST /v1/speech/dialogue`
 
+Renders a multi-speaker MD-Blocks post as **one audio file, one voice per speaker**. Each spoken turn is synthesized separately (reply prosody depends on the turn it answers), trimmed of edge silence, and concatenated with an explicit gap — there is no per-voice batch pass and no re-split step.
+
+**Division of labour.** The document carries **identity only**. Which engine, model and voice render that identity is generation-time configuration and lives outside the document, so a retrained clone or a cheap test render never edits the article.
+
+### Document format (MD-Blocks v1.8)
+
+```md
+<!-- mb:block preset=narration:david-a-renelt name="David" -->
+> I will carry this for weeks. …
+<!-- mb:/block -->
+
+<!-- pause: 1.5 -->
+
+<!-- mb:block preset=narration:kimi-k3 name="Kimi K3" -->
+*The story, once you had found it again, is real …*
+<!-- mb:/block -->
+```
+
+- `preset=narration:<speaker-id>` — the modifier is a speaker identifier. A bare `narration` (no speaker) is an error here: plain single-voice text belongs on `/v1/audio/speech`.
+- `name="…"` — optional display name, legal only on narration blocks. One id with two different names is an error (both lines are cited).
+- A **turn is one block body**, verbatim. The author controls granularity; the pipeline never merges or splits blocks. Content outside narration blocks is not spoken, and the body's Markdown (`>`, `*`, links) is stripped by the normal cleaning pass.
+- `<!-- pause: 1.5 -->` — an ordinary HTML comment to renderers, an exact inter-turn silence to nSpeech. It **replaces** the default gap for that junction rather than adding to it; before the first turn it is leading silence, after the last it is trailing.
+- `audio=URL` on a narration block is an **error** here: a recording exists for that turn, and re-rendering it silently would re-bill text the author already paid for.
+- N speakers, not two. Source order is delivery order.
+
+### Cast registry
+
+`dialogue-cast.json` at the project root binds speaker id → voice:
+
+```json
+{
+  "david-a-renelt": { "model": "eleven_v4", "voice_id": "<clone-id>", "settings": {} },
+  "kimi-k3":        { "model": "eleven_v4", "voice_id": "<voice-id>", "settings": {} }
+}
+```
+
+- `model` — addressable nSpeech model slug; or `engine` alone (e.g. `"minimax"`) to use that provider's default model.
+- `settings` — passed through as `extra_body`; `speed` is lifted to the top level. A `seed` in settings pins a render (nSpeech does not derive one automatically).
+- Resolution: request `cast` override → registry → **400 naming the unbound speaker**. There is no fallback voice and no default engine.
+- A cast entry that recasts a speaker onto a different engine/model does **not** inherit the registry's `settings` — those were dialled in for the old engine.
+- Server-side defaults (`/v1/defaults/:engine`) still fill anything a binding leaves unset, exactly as on `/v1/audio/speech`.
+
+### Request
+
+```json
+{
+  "source": { "markdown": "<full post>", "file": "the-drill.md" },
+  "cast": { "kimi-k3": { "engine": "minimax", "voice_id": "<minimax-voice>" } },
+  "gap_ms": 400,
+  "estimate_only": false,
+  "response_format": "mp3"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `source.markdown` | Required. The full MD-Blocks document. |
+| `source.file` | Optional. Name used in parse error messages. |
+| `cast` | Optional per-speaker binding overrides, shallow, may be partial (e.g. only `voice_id`). |
+| `gap_ms` | Inter-turn gap, default `400`. `pause` beats override it locally. |
+| `estimate_only` | `true` → no engine call, no worker spawn, no charge. Returns the turn manifest. |
+| `response_format` | `mp3` (default), `wav`, `pcm`, `opus`, `aac`. |
+
+`estimate_only` is free and is the intended first step before any paid render:
+
+```bash
+curl -X POST http://127.0.0.1:2233/v1/speech/dialogue \
+  -H "Content-Type: application/json" \
+  --data @body.json     # {"source":{"markdown":"..."},"estimate_only":true}
+```
+
+It reports `turns`, `speakers[]` (engine, model, voice, turns, chars, binding source), `engines[]` (chars per engine and per model) and `pauses`. Character counts are the billable unit — nSpeech models no provider pricing, so no cost figure is invented.
+
+### Response
+
+Audio bytes. Headers:
+
+| Header | Value |
+|---|---|
+| `X-Dialogue-Id` | 64-char hex job id — also the manifest filename, and present on failure |
+| `X-Dialogue-Turns` | Number of turns rendered |
+| `X-Dialogue-Cache` | `<hits>/<turns> hit` |
+
+The manifest is written to `.cache/dialogue/<id>.manifest.json` and served at `GET /v1/speech/dialogue/:id`: per turn `index`, `speaker`, `name`, `line`, `engine`, `model`, `voice`, `chars`, `duration_ms`, `cache`, plus `totals` (`turns`, `chars`, `cache_hits`, `audio_ms`, `bytes`). A failed job writes a `status: "failed"` manifest listing the turns that completed.
+
+### Turn cache
+
+Each turn is its own cache entry, keyed on everything that determines its audio: engine, model, voice, speed, instructions, tuning `extra_body` (including the context text), and the **cleaned** turn text. Consequences, by design:
+
+- Re-running an unchanged post costs nothing and resumes after a failure.
+- **A context-capable engine also invalidates the neighbours**: editing a turn changes the `previous_text`/`next_text` of the turns beside it, so an edited middle turn re-renders three turns, not one. This is the price of conversation-shaped prosody, and it is why the edited-turn cost is bounded by the neighbours rather than the document.
+- Recasting the whole cast (e.g. a MiniMax test pass) re-renders everything, because the binding is in the key.
+- Retention: TTL plus a byte cap, evicted least-recently-used. Defaults: 7 days, 2 GiB, `.cache/dialogue`. Configure via `dialogue.cache` in `config.json` (`dir`, `ttl_days`, `max_bytes`) or `NSPEECH_DIALOGUE_CACHE_DIR` / `NSPEECH_DIALOGUE_CACHE_TTL_DAYS` / `NSPEECH_DIALOGUE_CACHE_MAX_BYTES`. The default gap is `dialogue.gap_ms` / `NSPEECH_DIALOGUE_GAP_MS`.
+
+### Per-engine capabilities
+
+| Capability | Engines | Effect |
+|---|---|---|
+| Reply context (`previous_text` ≤500 chars, `next_text` ≤250) | ElevenLabs (its v3 family drops the fields itself) | Turns are rendered with the neighbouring text, so intonation answers the actual reply. |
+| No context | MiniMax, Gemini, xAI, Fish, local engines | Turns render standalone; gap and beats still apply. A warning is logged once per job. |
+
+A turn longer than the model's limit is chunked through the normal `chunking.js` path (stitch mode), inheriting voice, settings and context.
+
+### Dialogue errors
+
+| Code | Status | Cause |
+|---|---|---|
+| `missing_source` | 400 | `source.markdown` absent or empty |
+| `invalid_gap_ms` / `invalid_cast` | 400 | Malformed request field |
+| `md_blocks_syntax` | 400 | Spec violation with a line number (unknown kind/attribute, duplicate key, malformed value, nested/unclosed block, marker inside a block, `mb:/main`, stray `col`, …) |
+| `dialogue_no_turns` | 400 | No narration blocks — not a dialogue |
+| `dialogue_no_speaker` / `dialogue_preset_invalid` | 400 | Bare narration, or a third `preset` segment |
+| `dialogue_audio_recorded` | 400 | `audio=` on a narration block |
+| `dialogue_beat_in_turn` | 400 | `pause` beat inside a narration block |
+| `dialogue_speaker_conflict` | 400 | One speaker id, two display names |
+| `dialogue_speaker_unbound` | 400 | No cast binding for a speaker id (the id is named) |
+| `dialogue_binding_invalid` | 400 | Model and engine disagree in one binding |
+| `empty_audio` | 502 | An engine produced no audio, or silence, for a turn |
+
+Parse errors are raised **before** any engine work: a malformed document or an unbound speaker never costs a provider call.
+
+## Engine Capabilities
 The `model` field selects a provider. Each provider has different strengths, price points, and supported `extra_body` fields. Each cloud provider also exposes multiple **sub-models** — list them via `GET /v1/models` (or `listEngineModels` in the SDK) and select one by passing its slug as `model` (e.g. `"minimax_speech_2_8_hd"`).
 
 ### Choosing an engine
