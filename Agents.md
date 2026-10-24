@@ -52,6 +52,18 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-24 — MiniMax voice list: a cloned voice has no name, in any field
+
+**Asked:** the dashboard shows cloned voices as `moss_audio_<uuid>`; is the name stored somewhere else?
+
+**Answered from the provider, not from inference.** Live `POST /v1/get_voice` (2026-10-24, this account): 332 `system_voice`, 17 `voice_cloning`, `voice_generation: []`, `music_generation: []`, `voice_slots: null`. The official OpenAPI (`VoiceCloningInfo`) defines **`voice_id`, `description`, `created_time` — no name field**. The live payload also returns `voice_name: ""` for all 17; undocumented, always empty. `description` is documented as "the description provided during cloning", but the clone request has no such field (`file_id`, `voice_id`, `clone_prompt`, `text`, `model`, `language_boost`, `text_validation`, `accuracy`, `need_noise_reduction`, `need_volume_normalization`, `aigc_watermark`), and it comes back `[]`.
+
+So the mapping is correct as it stands — nSpeech shows `voice_id` because `voice_id` is all there is. Two id shapes identify the origin: caller-chosen ids from `POST /v1/voice_clone` (`Melon_DE`, `Simon_voice`, …) versus `moss_audio_<uuid>` assigned by the web console, whose typed name never reaches any documented endpoint. Voice management is Get + Delete — there is no rename. `pv_<epoch>` entries are quick-clone previews and are filtered.
+
+**Naming path:** a voice **preset** (`voice` = the `moss_audio…` id), which is the existing preset layer — not a second alias mechanism. Identification path: preview each one and listen; the date is the only other hint (`created_time`, already exposed as `created`).
+
+**Docs:** `docs/providers/minimax.md` §5 now states all of the above with the schema evidence.
+
 ### 2026-10-24 — Dialogue mode: multi-speaker posts as one audio file
 
 **Asked for (handover 2026-10-23, storage box `scratch/nspeech-dialogue-mode-handover.md`):** render a multi-speaker post — one voice per speaker, one audio file — with per-turn synthesis. First target `blog/drafts/the-drill.md` (2 speakers, already re-authored). Test engine MiniMax, production ElevenLabs clones.

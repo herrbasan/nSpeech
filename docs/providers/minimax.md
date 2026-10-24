@@ -385,6 +385,19 @@ nSpeech sanitizes user-entered names before sending (normalizes to `[a-zA-Z0-9_]
 
 `voice_type`: `system`, `voice_cloning`, `voice_generation`, or `all`.
 
+The live payload (verified 2026-10-24, this account) also carries `music_generation: []` and `voice_slots: null`; `voice_generation` was empty.
+
+#### Cloned voices have no display name — in any field
+
+The official schema (`VoiceCloningInfo`) defines exactly three properties: `voice_id`, `description`, `created_time`. There is **no name field**. The live response additionally returns `voice_name: ""` for every cloned voice — an undocumented extra that is always empty, never the name typed anywhere.
+
+- `description` is documented as "the description provided during cloning", but the clone request (`POST /v1/voice_clone`) has no such field: its properties are `file_id`, `voice_id`, `clone_prompt`, `text`, `model`, `language_boost`, `text_validation`, `accuracy`, `need_noise_reduction`, `need_volume_normalization`, `aigc_watermark`. It comes back `[]` for every clone observed.
+- **`voice_id` is the only label the API has.** Voices created through the API carry the caller-chosen id (`Melon_DE`, `Simon_voice`). Voices created in the MiniMax web console are assigned `moss_audio_<uuid>` and the name entered there is not exposed by any documented endpoint. Voice management is Get + Delete only — there is no rename.
+- Quick-clone preview voices appear as `pv_<epoch-ms>`; nSpeech filters them out of its listing (they are transient).
+- Cloned voices are inactive until used in at least one synthesis call, or they never appear in `get_voice` at all.
+
+nSpeech therefore shows the `voice_id` as the name for a cloned voice. To put a friendly name in front of it, use a **voice preset** (`POST /v1/voices/preset`, `voice: "<moss_audio id>"`) — the existing preset layer is the naming mechanism, not a second one.
+
 ### System voices overview
 
 332+ voices across 13 languages. Full list at [System Voice ID List](https://platform.minimax.io/docs/faq/system-voice-id). Key counts:
