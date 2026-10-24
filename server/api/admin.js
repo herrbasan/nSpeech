@@ -319,8 +319,11 @@ export function registerAdminRoutes(app) {
   // what `model: "nspeech"` resolves to. Nothing in the request path changes
   // it, so a cloud test can no longer take the default over.
   //
-  // Deliberately does NOT load the engine: the default is a pointer, and a
-  // local engine is started by the first request that needs it.
+  // Setting it is an explicit act, so it also converges residency: a local
+  // engine is loaded (unloading the previous GPU engine), a cloud default
+  // frees the GPU engine that is no longer needed. The pointer moves
+  // immediately; the load runs in the background so a checkbox does not hang
+  // on a ~30s cold start (progress arrives on /v1/admin/events).
 
   app.post('/v1/admin/default-engine', async (request, reply) => {
     const body = typeof request.body === 'object' && request.body !== null ? request.body : {};
@@ -330,8 +333,8 @@ export function registerAdminRoutes(app) {
       });
     }
     try {
-      const result = manager.setDefaultEngine(body.engine);
-      return { engine: result.engine, previous: result.previous, status: 'default_set' };
+      const result = manager.promoteDefaultEngine(body.engine);
+      return reply.code(202).send({ ...result, status: 'default_set' });
     } catch (err) {
       return reply.code(err.status || 400).send({
         error: { message: err.message, type: 'invalid_request_error', code: err.code || 'unknown' },

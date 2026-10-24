@@ -143,13 +143,62 @@ await checkAsync('selecting a cloud engine never unloads the resident local engi
 const app = Fastify();
 registerAdminRoutes(app);
 
-await checkAsync('POST /v1/admin/default-engine sets the client default', async () => {
+const waitFor = async (fn, ms = 1000) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (fn()) return true;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return fn();
+};
+
+await checkAsync('POST /v1/admin/default-engine moves the pointer and converges residency', async () => {
   const res = await app.inject({
     method: 'POST', url: '/v1/admin/default-engine', payload: { engine: 'fish' },
   });
-  eq(res.statusCode, 200, 'status');
-  eq(JSON.parse(res.body), { engine: 'fish', previous: 'f5tts', status: 'default_set' }, 'body');
-  eq(manager.defaultEngine, 'fish', 'in-memory default');
+  eq(res.statusCode, 202, 'status');
+  const body = JSON.parse(res.body);
+  eq(body.engine, 'fish', 'engine');
+  eq(body.previous, 'f5tts', 'previous');
+  eq(body.converging, true, 'converging flag');
+  eq(manager.defaultEngine, 'fish', 'in-memory default moved immediately');
+
+  // Cloud default: nothing to load, the GPU engine is freed.
+  eq(await waitFor(() => manager.currentEngine === 'fish'), true, 'dashboard context followed');
+});
+
+await checkAsync('promoting a cloud default unloads the resident GPU engine', async () => {
+  const calls = [];
+  const fakeWorker = {
+    inFlight: 0,
+    state: 'ready',
+    entry: { gpu: true },
+    getStatus() { return { state: 'ready' }; },
+    async stop() { calls.push('stop'); },
+  };
+  manager.workers.set('f5tts', fakeWorker);
+  manager.currentEngine = 'f5tts';
+  manager.defaultEngine = 'f5tts';
+
+  manager.promoteDefaultEngine('elevenlabs');
+  eq(await waitFor(() => calls.length === 1 && !manager.workers.has('f5tts')), true,
+    'GPU worker stopped and dropped');
+  eq(manager.defaultEngine, 'elevenlabs', 'default moved');
+});
+
+await checkAsync('promoting a local default delegates to the real switch', async () => {
+  const seen = [];
+  const original = manager.switchEngine;
+  manager.switchEngine = async (name) => { seen.push(name); return { engine: name, status: 'switched' }; };
+  try {
+    manager.promoteDefaultEngine('kokoro');
+    await waitFor(() => seen.length === 1);
+    eq(seen, ['kokoro'], 'switchEngine called with the promoted engine');
+    eq(manager.defaultEngine, 'kokoro', 'default moved');
+  } finally {
+    manager.switchEngine = original;
+  }
+  manager.defaultEngine = 'f5tts';
 });
 
 await checkAsync('POST /v1/admin/default-engine rejects unknown and missing engines', async () => {
@@ -165,9 +214,10 @@ await checkAsync('POST /v1/admin/default-engine rejects unknown and missing engi
 });
 
 await checkAsync('GET /v1/admin/default-engine reports both pointers', async () => {
+  manager.defaultEngine = 'f5tts';
   manager.currentEngine = 'minimax';
   const res = await app.inject({ method: 'GET', url: '/v1/admin/default-engine' });
-  eq(JSON.parse(res.body), { engine: 'fish', dashboard: 'minimax' }, 'body');
+  eq(JSON.parse(res.body), { engine: 'f5tts', dashboard: 'minimax' }, 'body');
   manager.currentEngine = 'f5tts';
 });
 

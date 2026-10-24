@@ -381,6 +381,43 @@ export class EngineManager {
   }
 
   /**
+   * Make an engine the client default AND converge residency onto it.
+   *
+   * The pointer moves immediately (clients get the new engine from the next
+   * request); the worker work runs in the background, because a cold GPU
+   * engine takes ~30s and a checkbox must not hang on it:
+   *
+   *   local engine  → a real switch: unload the previous GPU engine, spawn this one
+   *   cloud engine  → nothing to load; free any GPU engine that is no longer needed
+   *
+   * gpu:false residents (Kokoro) are never unloaded — they cost no VRAM.
+   *
+   * @param {string} engineName
+   * @returns {{engine: string, previous: string|null, converging: boolean}}
+   */
+  promoteDefaultEngine(engineName) {
+    const pointer = this.setDefaultEngine(engineName); // validates
+    const local = getEntry(engineName);
+
+    const converge = local
+      ? this.switchEngine(engineName)
+      : this._unloadOtherGpuEngines(null).then(() => this.setCurrentEngine(engineName));
+
+    converge.catch((err) => {
+      // The pointer stands; the engine simply is not warm. Say so loudly —
+      // the dashboard shows this on the event stream.
+      log.error('default engine residency convergence failed', {
+        engine: engineName, error: err.message, code: err.code ?? null,
+      });
+      emit('error', `Default set to ${engineName}, but loading it failed: ${err.message}`, {
+        engine: engineName, code: err.code ?? null,
+      });
+    });
+
+    return { ...pointer, converging: true };
+  }
+
+  /**
    * Unload all GPU engines except the specified one.
    */
   async _unloadOtherGpuEngines(keepEngine) {

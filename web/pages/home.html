@@ -7,9 +7,9 @@
     <section style="margin-bottom: var(--nui-space-double)">
         <h2 style="margin-top: 0">Engine Status</h2>
         <p style="margin-top: 0; font-size: 0.85em; color: var(--text-color-dim);">
-            <strong>★ client default</strong> — what <code>model: "nspeech"</code> (or no model) resolves to; set it here.
-            <strong>● active</strong> — what the dashboard is working with; for a local GPU engine that is also the resident one.
-            Browsing a cloud engine changes neither.
+            <strong>Client default</strong> (checkbox) — the engine <code>model: "nspeech"</code> (or no model) resolves to.
+            Checking it loads that engine and unloads the other GPU engine; a cloud default frees the GPU engine.
+            <strong>● active</strong> — what the dashboard is working with. Browsing a cloud engine changes neither.
         </p>
         <nui-card>
             <div id="engine-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--nui-space);">
@@ -73,21 +73,26 @@ function init(element, params, nui) {
                 <div style="font-size: 0.8em; color: ${stateColor};">
                     ${isCurrent ? '● active · ' : ''}${stateLabel}
                 </div>
-                <div style="margin-top: var(--nui-space-quarter); font-size: 0.8em; display: flex; justify-content: space-between; align-items: center; gap: var(--nui-space-half);">
-                    ${isDefault
-                        ? '<span style="color: var(--color-success);">★ client default</span><span></span>'
-                        : `<span></span><button type="button" data-set-default="${eng.name}"
-                               style="font-size: 1em; padding: 2px 8px; cursor: pointer; border-radius: var(--border-radius1); border: 1px solid var(--border-shade1); background: transparent; color: inherit;"
-                               title="Clients will get ${eng.name} for model &quot;nspeech&quot;">Set default</button>`}
+                <div style="margin-top: var(--nui-space-quarter); font-size: 0.8em;">
+                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: ${isDefault ? 'default' : 'pointer'};"
+                           title="${isDefault
+                               ? 'Clients get this engine for model &quot;nspeech&quot;.'
+                               : `Make ${eng.name} the client default${eng.type === 'cloud'
+                                     ? ' — frees the GPU engine (nothing to load)'
+                                     : eng.gpu
+                                         ? ' — loads it and unloads the other GPU engine'
+                                         : ' — loads it (costs no VRAM)'}`}">
+                        <input type="checkbox" data-set-default="${eng.name}" ${isDefault ? 'checked disabled' : ''}>
+                        <span${isDefault ? ' style="color: var(--color-success);"' : ''}>client default</span>
+                    </label>
                 </div>
             `;
             gridEl.appendChild(card);
         });
 
-        // The default is set from here, next to the engines it describes — the
-        // header switcher stays the DASHBOARD context control only.
-        gridEl.querySelectorAll('[data-set-default]').forEach((btn) => {
-            btn.addEventListener('click', () => setClientDefault(btn.dataset.setDefault, btn));
+        // The default is set from here, next to the engines it describes.
+        gridEl.querySelectorAll('[data-set-default]').forEach((box) => {
+            box.addEventListener('change', () => setClientDefault(box.dataset.setDefault, box));
         });
     }
 
@@ -104,10 +109,13 @@ function init(element, params, nui) {
 
     /**
      * Set the CLIENT default — the engine `model: "nspeech"` resolves to.
-     * Loads nothing: a local engine starts on the first request that needs it.
+     * The server converges residency too: a local engine is loaded (unloading
+     * the previous GPU engine), a cloud default frees the GPU engine. The
+     * pointer moves immediately; loading continues in the background and the
+     * grid refreshes from /v1/admin/events as workers come up.
      */
-    async function setClientDefault(engineName, btn) {
-        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+    async function setClientDefault(engineName, box) {
+        if (box) box.disabled = true;
         try {
             const res = await fetch('/v1/admin/default-engine', {
                 method: 'POST',
@@ -119,7 +127,7 @@ function init(element, params, nui) {
             loadEngineStatus();
         } catch (err) {
             alert(`Could not set the client default: ${err.message}`);
-            if (btn) { btn.disabled = false; btn.textContent = 'Set default'; }
+            loadEngineStatus();
         }
     }
 

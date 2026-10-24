@@ -488,9 +488,18 @@ local engine keeps its VRAM.
 Sets what `model: "nspeech"` (or an omitted model) resolves to, and what
 `GET /health` reports. Separate from the switch above on purpose: a cloud test
 in the dashboard must not silently become the default for every API client.
-Changing it loads nothing — the default is a pointer, and a local engine starts
-on the first request that needs it. Unknown engine → `404 engine_not_found`
-listing the valid names. `GET /v1/admin/default-engine` returns
+
+Setting it is an explicit act, so it also **converges residency**:
+
+- a **local** engine is loaded — the previous GPU engine is unloaded first;
+- a **cloud** default frees the GPU engine (there is nothing to load);
+- `gpu:false` residents (Kokoro) are never unloaded — they cost no VRAM.
+
+The pointer moves immediately (`202 {engine, previous, status:"default_set", converging:true}`)
+and the worker work continues in the background, so a ~30s cold start does not
+hang the caller. Progress and failures arrive on `/v1/admin/events`.
+Unknown engine → `404 engine_not_found` listing the valid names.
+`GET /v1/admin/default-engine` returns
 `{"engine":"<default>","dashboard":"<browsed>"}`.
 
 ### `GET /v1/models`
