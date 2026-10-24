@@ -44,3 +44,9 @@ desktop.ini
 logs/
 defaults.json
 tests/
+
+# Local voice presets that name this account's cloned voices (repo is public).
+# System-voice presets (gemini.json, xai.json) stay tracked.
+presets/minimax.json
+presets/elevenlabs.json
+presets/fish.json
