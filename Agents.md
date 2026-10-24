@@ -52,6 +52,26 @@ The dashboard is the **admin UI** — voice creation, preset management, engine 
 
 ## Activity Log
 
+### 2026-10-24 — Cloned-voice tempo measured; production cast goes to ElevenLabs
+
+**The question:** the MiniMax clone `Herrbasan_EN` read the drill noticeably slower than its dialogue partner. Hypothesis from David: the clone absorbed long pauses from its reference audio, i.e. confused cloning rather than slow speech. If the pauses were the whole story, a clone with a tighter reference would fix it and no ElevenLabs credits would be needed.
+
+**Measured, not argued.** Both clones of the same speaker were rendered on the same document (Kimi2 unchanged, 2 s gaps), then the audio was segmented per turn and split into articulation vs in-turn silence:
+
+| voice | turn time | in-turn silence | wpm | wpm of speech only |
+|---|---|---|---|---|
+| `Herrbasan_EN` | 393.2 s | 25 % | 134 | 179 |
+| `Herrbasan_DE` | 333.6 s | 23 % | 158 | 204 |
+| `Kimi2_voice` (both runs) | 459.1 s | 21 % | 157 | 199 |
+
+**Verdict:** the hypothesis explains a little, not most. The EN clone carries only 2 points more in-turn silence, while its actual articulation is 12 % slower (179 vs 204 wpm of speech). ~20 % in-turn silence is simply what MiniMax narration looks like in this material — the partner voice sits at 21 %. There is no MiniMax parameter that tightens pauses independently: `speed` changes both, and its steps are coarse (1.0→1.2 and 1.2→1.3 differ by less than run-to-run variance; 1.4 is the real step).
+
+**Casting:** `Herrbasan_DE` landed at 158 wpm against Kimi2's 157 — the match the EN clone never had. Proved the German clone reads the English document fine; the accent question is an ear call.
+
+**Decision (David, 2026-10-24):** the odd pauses stay odd, so the production cast is the **ElevenLabs clones** after all. MiniMax remains the cheap test engine — the pipeline is verified on it, and the dialogue turn cache means a recast costs only the turns whose voice changed (11/24 hits on the DE run).
+
+**Docs:** `docs/providers/minimax.md` gained the clone-tempo findings under Voice Cloning.
+
 ### 2026-10-24 — MiniMax voice list: a cloned voice has no name, in any field
 
 **Asked:** the dashboard shows cloned voices as `moss_audio_<uuid>`; is the name stored somewhere else?

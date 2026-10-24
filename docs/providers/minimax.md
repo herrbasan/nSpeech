@@ -358,6 +358,22 @@ nSpeech sanitizes user-entered names before sending (normalizes to `[a-zA-Z0-9_]
 - Cloned voices auto-delete after **7 days of inactivity**.
 - Must be used in at least one successful T2A call before appearing in `GET /v1/get_voice` with `voice_type=voice_cloning`.
 
+### Clone behaviour: tempo and pauses are inherited, and not separable
+
+A cloned voice speaks at the tempo of its reference recording. MiniMax exposes no pacing or pause parameter — `speed` scales the whole render, silence included, so quieter delivery cannot be tightened without also articulating faster.
+
+nSpeech measurement, 2026-10-24 — two clones of the same speaker, same document, same model (`speech-2.8-turbo`), turns segmented and split into articulation vs in-turn silence:
+
+| voice | turn time | in-turn silence | wpm | wpm of speech only |
+|---|---|---|---|---|
+| `Herrbasan_EN` | 393.2 s | 25 % | 134 | 179 |
+| `Herrbasan_DE` | 333.6 s | 23 % | 158 | 204 |
+| `Kimi2_voice` | 459.1 s | 21 % | 157 | 199 |
+
+What that says about clone quality: the slower clone was **12 % slower in articulation**, not merely more pause-laden (2 points more silence). So a slow clone is mostly a slow reference, and the fix that works is casting a clone whose native tempo already matches the other speakers — not compensating with `speed`.
+
+On `speed`, from the same measurement: `1.0 → 1.2` removed ~24 % of the duration and `1.4` ~36 %, but the step from `1.2` to `1.3` sat inside run-to-run variance — MiniMax has no seed, so consecutive renders of the same text differ. Treat `speed` as two or three coarse steps, not a dial.
+
 ---
 
 ## 5. Voice Management
