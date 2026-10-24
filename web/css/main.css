@@ -1,2 +1,28 @@
 /* nSpeech dashboard styles */
 
+/* Home → Engine Status. The grid is <nui-layout>, the tiles are <nui-card>,
+   states are <nui-badge>, the client-default toggle is <nui-checkbox>; this
+   only glues them together. */
+.engine-card-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--nui-space-half);
+    margin-bottom: var(--nui-space-half);
+}
+
+.engine-card-head strong {
+    font-family: var(--font-mono, monospace);
+    font-size: 0.95em;
+}
+
+/* Align the toggle to the bottom of every card, so a wrapped badge row does
+   not leave the checkboxes at different heights across a row. */
+nui-card .engine-card-toggle {
+    margin-top: auto;
+}
+
+.engine-status-legend {
+    margin: 0 0 var(--nui-space);
+}
+

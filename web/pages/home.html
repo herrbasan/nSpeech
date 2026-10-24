@@ -6,15 +6,12 @@
 
     <section style="margin-bottom: var(--nui-space-double)">
         <h2 style="margin-top: 0">Engine Status</h2>
-        <p style="margin-top: 0; font-size: 0.85em; color: var(--text-color-dim);">
-            <strong>Client default</strong> (checkbox) — the engine <code>model: "nspeech"</code> (or no model) resolves to.
-            Checking it loads that engine and unloads the other GPU engine; a cloud default frees the GPU engine.
-            <strong>● active</strong> — what the dashboard is working with. Browsing a cloud engine changes neither.
+        <p class="engine-status-legend">
+            The checked engine is the <strong>client default</strong> — what <code>model: "nspeech"</code> (or no model) resolves to.
+            Checking one loads it and unloads the other GPU engine; a cloud default frees the GPU engine.
+            <strong>active</strong> is what the dashboard is working with; browsing a cloud engine changes neither.
         </p>
-        <nui-card>
-            <div id="engine-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--nui-space);">
-            </div>
-        </nui-card>
+        <nui-layout id="engine-grid" columns="3" gap="var(--nui-space)"></nui-layout>
     </section>
 
     <section>
@@ -51,44 +48,46 @@ function init(element, params, nui) {
 
     function renderEngineGrid(engines, current, defaultEngine) {
         gridEl.innerHTML = '';
-        engines.forEach(eng => {
-            const card = document.createElement('div');
-            card.style.cssText = 'padding: var(--nui-space-half); border-radius: var(--border-radius1); border: 1px solid var(--border-shade1);';
-
+        for (const eng of engines) {
             const isCurrent = eng.name === current;
             const isDefault = eng.is_default ?? (eng.name === defaultEngine);
-            const stateColor = eng.is_loaded ? 'var(--color-success)' :
-                               (eng.venv_exists === false && !eng.type) ? 'var(--color-danger)' :
-                               'var(--text-color-dim)';
 
             const stateLabel = eng.type === 'cloud'
-                ? (eng.health === 'ready' ? 'cloud' : eng.health || 'cloud')
-                : (eng.is_loaded ? 'loaded' :
-                   (eng.venv_exists === false ? 'not installed' : 'idle'));
+                ? (eng.health === 'ready' ? 'ready' : eng.health || 'unknown')
+                : (eng.is_loaded ? 'loaded' : (eng.venv_exists === false ? 'not installed' : 'idle'));
+            const stateVariant = eng.type === 'cloud'
+                ? (eng.health === 'ready' ? 'success' : 'danger')
+                : eng.is_loaded ? 'success'
+                : eng.venv_exists === false ? 'danger' : '';
 
-            card.innerHTML = `
-                <div style="font-weight: ${isCurrent || isDefault ? 'bold' : 'normal'}; color: ${isCurrent ? 'var(--color-highlight)' : isDefault ? 'var(--color-success)' : 'var(--text-color)'};">
-                    ${eng.name}${eng.gpu ? ' 🎮' : ''}${eng.type === 'cloud' ? ' ☁' : ''}
-                </div>
-                <div style="font-size: 0.8em; color: ${stateColor};">
-                    ${isCurrent ? '● active · ' : ''}${stateLabel}
-                </div>
-                <div style="margin-top: var(--nui-space-quarter); font-size: 0.8em;">
-                    <label style="display: inline-flex; align-items: center; gap: 6px; cursor: ${isDefault ? 'default' : 'pointer'};"
-                           title="${isDefault
-                               ? 'Clients get this engine for model &quot;nspeech&quot;.'
-                               : `Make ${eng.name} the client default${eng.type === 'cloud'
-                                     ? ' — frees the GPU engine (nothing to load)'
-                                     : eng.gpu
-                                         ? ' — loads it and unloads the other GPU engine'
-                                         : ' — loads it (costs no VRAM)'}`}">
-                        <input type="checkbox" data-set-default="${eng.name}" ${isDefault ? 'checked disabled' : ''}>
-                        <span${isDefault ? ' style="color: var(--color-success);"' : ''}>client default</span>
-                    </label>
-                </div>
+            const card = document.createElement('nui-card');
+
+            const head = document.createElement('div');
+            head.className = 'engine-card-head';
+            head.innerHTML = `
+                <strong>${eng.name}</strong>
+                <nui-badge>${eng.type === 'cloud' ? 'cloud' : eng.gpu ? 'gpu' : 'cpu'}</nui-badge>
+                <nui-badge${stateVariant ? ` variant="${stateVariant}"` : ''}>${stateLabel}</nui-badge>
+                ${isCurrent ? '<nui-badge variant="primary">active</nui-badge>' : ''}
             `;
+
+            const toggle = document.createElement('nui-checkbox');
+            toggle.className = 'engine-card-toggle';
+            toggle.title = isDefault
+                ? 'Clients get this engine for model "nspeech".'
+                : `Make ${eng.name} the client default${eng.type === 'cloud'
+                    ? ' — frees the GPU engine (nothing to load)'
+                    : eng.gpu
+                        ? ' — loads it and unloads the other GPU engine'
+                        : ' — loads it (costs no VRAM)'}`;
+            toggle.innerHTML = `
+                <input type="checkbox" id="default-${eng.name}" data-set-default="${eng.name}" ${isDefault ? 'checked disabled' : ''}>
+                <label for="default-${eng.name}">client default</label>
+            `;
+
+            card.append(head, toggle);
             gridEl.appendChild(card);
-        });
+        }
 
         // The default is set from here, next to the engines it describes.
         gridEl.querySelectorAll('[data-set-default]').forEach((box) => {
