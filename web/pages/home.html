@@ -7,9 +7,9 @@
     <section style="margin-bottom: var(--nui-space-double)">
         <h2 style="margin-top: 0">Engine Status</h2>
         <p style="margin-top: 0; font-size: 0.85em; color: var(--text-color-dim);">
-            <strong>★ client default</strong> — what <code>model: "nspeech"</code> (or no model) resolves to.
+            <strong>★ client default</strong> — what <code>model: "nspeech"</code> (or no model) resolves to; set it here.
             <strong>● active</strong> — what the dashboard is working with; for a local GPU engine that is also the resident one.
-            They are separate settings: browsing a cloud engine does not change the client default.
+            Browsing a cloud engine changes neither.
         </p>
         <nui-card>
             <div id="engine-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--nui-space);">
@@ -73,9 +73,21 @@ function init(element, params, nui) {
                 <div style="font-size: 0.8em; color: ${stateColor};">
                     ${isCurrent ? '● active · ' : ''}${stateLabel}
                 </div>
-                ${isDefault ? '<div style="font-size: 0.8em; color: var(--color-success);">★ client default</div>' : ''}
+                <div style="margin-top: var(--nui-space-quarter); font-size: 0.8em; display: flex; justify-content: space-between; align-items: center; gap: var(--nui-space-half);">
+                    ${isDefault
+                        ? '<span style="color: var(--color-success);">★ client default</span><span></span>'
+                        : `<span></span><button type="button" data-set-default="${eng.name}"
+                               style="font-size: 1em; padding: 2px 8px; cursor: pointer; border-radius: var(--border-radius1); border: 1px solid var(--border-shade1); background: transparent; color: inherit;"
+                               title="Clients will get ${eng.name} for model &quot;nspeech&quot;">Set default</button>`}
+                </div>
             `;
             gridEl.appendChild(card);
+        });
+
+        // The default is set from here, next to the engines it describes — the
+        // header switcher stays the DASHBOARD context control only.
+        gridEl.querySelectorAll('[data-set-default]').forEach((btn) => {
+            btn.addEventListener('click', () => setClientDefault(btn.dataset.setDefault, btn));
         });
     }
 
@@ -88,6 +100,27 @@ function init(element, params, nui) {
             .catch(() => {
                 gridEl.innerHTML = '<p style="color: var(--color-danger)">Failed to load engine status.</p>';
             });
+    }
+
+    /**
+     * Set the CLIENT default — the engine `model: "nspeech"` resolves to.
+     * Loads nothing: a local engine starts on the first request that needs it.
+     */
+    async function setClientDefault(engineName, btn) {
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        try {
+            const res = await fetch('/v1/admin/default-engine', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ engine: engineName }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data?.error?.message || `HTTP ${res.status}`);
+            loadEngineStatus();
+        } catch (err) {
+            alert(`Could not set the client default: ${err.message}`);
+            if (btn) { btn.disabled = false; btn.textContent = 'Set default'; }
+        }
     }
 
     function appendEvent(event) {
