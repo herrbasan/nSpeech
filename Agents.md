@@ -62,6 +62,10 @@ So the mapping is correct as it stands — nSpeech shows `voice_id` because `voi
 
 **Naming path:** a voice **preset** (`voice` = the `moss_audio…` id), which is the existing preset layer — not a second alias mechanism. Identification path: preview each one and listen; the date is the only other hint (`created_time`, already exposed as `created`).
 
+**Done the same day:** the five web-console voices were identified by ear and bound as four presets in `presets/minimax.json` — `murtha`, `kimi-teen`, `herrbasan-de`, `herrbasan-en` (ids are the client-facing `voice` values; `name` carries the display label). One entry was a duplicate of `kimi-teen` and was deleted from the account via `DELETE /v1/voices/:id?engine=minimax`; the live listing confirmed 15 clones / 4 presets afterwards. The file is **not** committed — the repo is public and it carries this account's clone ids, the same reason `defaults.json` is ignored.
+
+**Caveat worth keeping:** MiniMax's own docs state a cloned voice must be used in at least one synthesis call before it appears in `get_voice`, and the Voice Clone page adds that an unused clone is deleted after 7 days. Voices in use since July are still there, so usage keeps them alive — but a preset pointing at a voice nobody speaks is not a keeper.
+
 **Docs:** `docs/providers/minimax.md` §5 now states all of the above with the schema evidence.
 
 ### 2026-10-24 — Dialogue mode: multi-speaker posts as one audio file
